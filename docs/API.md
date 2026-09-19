@@ -52,7 +52,7 @@
 | 项 | 值 |
 | --- | --- |
 | 用途 | 容器编排与负载均衡的存活探针（K8s `httpGet`、Docker `HEALTHCHECK`、compose `healthcheck`） |
-| 响应 | `{"code":0, "status":"UP", "service":"stringer-server", "version":"0.1.0"}` |
+| 响应 | `{"code":0, "status":"UP", "service":"stringer-server", "version":"v1.0-beta.1"}` |
 | 语义 | **只表示进程能对外服务**，不检查 ES / Redis / 模型服务 |
 
 进程存活与"依赖是否可用"是两件事：把依赖写进探针，会让刚部署、还没填配置的实例被判为不健康而反复重启；而已配置但依赖抖动时，重启进程也修不好依赖。依赖状态见启动横幅与管控台「存储配置」页。

@@ -1,5 +1,0 @@
-﻿JAVA_HOME=
-M2_HOME=D:\maven\apache-maven-3.9.9
-PATH has mvn: True
-D:\maven\apache-maven-3.9.9\bin\mvn.cmd
-

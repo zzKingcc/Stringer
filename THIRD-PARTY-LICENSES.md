@@ -20,7 +20,7 @@ mvn org.codehaus.mojo:license-maven-plugin:2.4.0:aggregate-add-third-party
 | Spring Boot / Spring Framework / Spring Data Redis | 3.5.7 | Apache-2.0 | 应用骨架、Web、SSE、数据访问 |
 | Apache Tomcat (spring-boot-starter-web 内嵌) | 随 Boot | Apache-2.0 | 内嵌 Servlet 容器 |
 | Project Reactor (reactor-core) | 随 Boot | Apache-2.0 | 流式（SSE）实现 |
-| LangChain4j（core / open-ai / reactor / easy-rag / elasticsearch） | 1.18.1 | Apache-2.0 | 模型调用、文档解析、向量存储适配 |
+| LangChain4j（core / open-ai / reactor / elasticsearch） | 1.18.1 | Apache-2.0 | 模型调用、文档解析、向量存储适配 |
 | LangGraph4j（core / langchain4j） | 1.8.17 | Apache-2.0（**待复核**） | 图编排与检查点 |
 | Elasticsearch Java Client / Low Level REST Client | 9.4.4 | Apache-2.0 | ES 检索与索引管理 |
 | Lettuce | 随 Boot | Apache-2.0 | Redis 客户端 |
@@ -32,12 +32,19 @@ mvn org.codehaus.mojo:license-maven-plugin:2.4.0:aggregate-add-third-party
 | Micrometer (observation / commons) | 随 Boot | Apache-2.0 | 仅作观测 API 传递依赖，未启用指标后端 |
 | Lombok | 随 Boot | MIT | 编译期代码生成（**不进入运行时**，编译期可选依赖） |
 
+## 刻意未引入的组件（评审时请勿按"漏列"处理）
+
+| 组件 | 未引入的原因 |
+| --- | --- |
+| `langchain4j-easy-rag`（及其传递依赖 Apache Tika 全家桶、`langchain4j-embeddings-bge-small-*`、onnxruntime、tokenizers、DJL、JNA） | 本项目未使用其任何类；引入会让 fat jar 从约 58MB 涨到约 249MB。文档解析走自研 `DocumentProcessStrategy`，向量化走远端 OpenAI 兼容 `EmbeddingModel`，均不需要 Tika 解析或本地 ONNX 模型 |
+
 ## 需要交付方注意的两点
 
 1. **Logback 是双许可（EPL-1.0 / LGPL-2.1）**：分发整包时按 EPL-1.0 履行即可，
    但若贵司政策排斥 LGPL 系许可，请在清单里明确选择 EPL-1.0 并保留其许可文本。
-2. **Lombok 是 `provided` 作用域**：它只参与编译，不打进交付物，通常无需列入分发许可，
-   但源码分发场景下仍需保留其 MIT 许可声明。
+2. **Lombok 是 `provided` 作用域且已被显式排除**：它只参与编译，不进入 fat jar
+   （`stringer-server` 的 spring-boot-maven-plugin 配了 `<excludes>`，因为 provided 作用域仍会被 Boot 打包），
+   通常无需列入分发许可，但源码分发场景下仍需保留其 MIT 许可声明。
 
 ## 本项目的许可
 

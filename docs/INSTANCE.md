@@ -17,7 +17,7 @@ Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对�
 
 starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-instance` 保留独立坐标，供只想当工具方的进程单独使用。
 
-> 环境要求：Java 21、Spring Boot 3.x。坐标均为 `com.zzkingcc`，版本 `0.1.0`（随 `stringer.version`）。
+> 环境要求：Java 21、Spring Boot 3.x。坐标均为 `com.zzkingcc`，版本 `v1.0-beta.1`（随 `stringer.version`）。
 
 ### 1.1 一个依赖跑起来
 
@@ -167,7 +167,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 <dependency>
     <groupId>com.zzkingcc</groupId>
     <artifactId>stringer-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>v1.0-beta.1</version>
 </dependency>
 ```
 
@@ -302,7 +302,7 @@ boolean triggered = agentService.stop(sessionId);
 <dependency>
     <groupId>com.zzkingcc</groupId>
     <artifactId>stringer-tool-instance</artifactId>
-    <version>0.1.0</version>
+    <version>v1.0-beta.1</version>
 </dependency>
 ```
 
@@ -517,7 +517,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 ## 7. 端到端最小跑通（参考 `stringer-example`）
 
-1. 起服务端：`java -jar stringer-0.1.0.jar`（默认 9527）。
+1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527）。
 2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@StringerTool` 声明）周期注册给服务端。
 3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `customer`、管理员 `admin`）演示域差异；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。

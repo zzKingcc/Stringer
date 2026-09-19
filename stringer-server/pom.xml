@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>0.1.0</version>
+        <version>v1.0-beta.1</version>
     </parent>
 
     <artifactId>stringer-server</artifactId>
@@ -78,11 +78,13 @@
             <artifactId>langchain4j-reactor</artifactId>
             <version>${langchain4j.beta.version}</version>
         </dependency>
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-easy-rag</artifactId>
-            <version>${langchain4j.beta.version}</version>
-        </dependency>
+        <!-- langchain4j-easy-rag 刻意不引：它只是"一站式本地 RAG"的便利封装，本项目一个类都没用到，
+             却会拖进近 180MB 传递依赖——
+               · langchain4j-document-parser-apache-tika → Tika 全家桶（poi / xmlbeans / pdfbox / fontbox…，约 35MB）
+               · langchain4j-embeddings-bge-small-en-v15-q → onnxruntime(93MB) + tokenizers(18.7MB) + djl + jna
+             本项目的文档解析走自己的 DocumentProcessStrategy（上传内容按 UTF-8 直接取文本），
+             向量化走 OpenAI 兼容的远端 EmbeddingModel，两者都不需要这些。
+             若将来确实要接 Tika 解析或本地 embedding，再按需单独引入对应模块即可。 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-elasticsearch</artifactId>
@@ -113,9 +115,11 @@
             <version>${elasticsearch.version}</version>
         </dependency>
 
+        <!-- Lombok 只在编译期生成代码，provided 不进 fat jar（否则会给交付物白白加约 2MB） -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -145,6 +149,14 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>com.zzkingcc.stringer.server.StringerServerApplication</mainClass>
+                    <!-- Lombok 是编译期注解处理器，provided 作用域仍会被 Boot 打进 fat jar（约 2MB 纯浪费），
+                         这里显式排除。它只在本模块编译时用得到，运行期与整个依赖树都无关。 -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
                 </configuration>
                 <executions>
                     <!-- 产出 META-INF/build-info.properties：版本号由构建信息提供，

@@ -82,14 +82,14 @@ sudo systemctl daemon-reload && sudo systemctl enable --now stringer
 
 ```bash
 mvn -o -pl stringer-server -am -DskipTests package          # 宿主先构建，不联网
-cp stringer-server/target/stringer-0.1.0.jar . # 放到与 Dockerfile 同目录（构建上下文根）
-docker build -t stringer-server:0.1.0 .
+cp stringer-server/target/stringer-v1.0-beta.1.jar . # 放到与 Dockerfile 同目录（构建上下文根）
+docker build -t stringer-server:v1.0-beta.1 .
 docker run -d --name stringer -p 9527:9527 \
   -v stringer-config:/var/lib/stringer/config \
-  stringer-server:0.1.0
+  stringer-server:v1.0-beta.1
 docker logs -f stringer
 ```
-# 若只拿到 jar（不在仓库根）：把 stringer-0.1.0.jar 与 Dockerfile 放同目录，直接 docker build 即可。
+# 若只拿到 jar（不在仓库根）：把 stringer-v1.0-beta.1.jar 与 Dockerfile 放同目录，直接 docker build 即可。
 
 - **配置目录必须挂卷**（用命名卷，别 bind mount 到宿主目录——uid 不匹配会写不进去）。
 - 日志默认走 stdout，`docker logs` 直接可用；要落盘再加

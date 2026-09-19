@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.0--beta.1-blue?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/license-Apache--2.0-yellow?style=flat-square" alt="license">
   <img src="https://img.shields.io/badge/Java-21-orange?style=flat-square&logo=openjdk&logoColor=white" alt="java">
   <img src="https://img.shields.io/badge/Spring%20Boot-3.5.7-6DB33F?style=flat-square&logo=springboot&logoColor=white" alt="spring-boot">
@@ -130,7 +130,7 @@ http://localhost:9527/admin.html      # 默认账号 stringer / stringer
 <dependency>
     <groupId>com.zzkingcc</groupId>
     <artifactId>stringer-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>v1.0-beta.1</version>
 </dependency>
 ```
 

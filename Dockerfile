@@ -1,12 +1,12 @@
 # Stringer 服务端镜像构建流程
 #
-# 1. 可执行 jar：stringer-server/target/stringer-0.1.0.jar
+# 1. 可执行 jar：stringer-server/target/stringer-v1.0-beta.1.jar
 # 2. 把该 jar 与本 Dockerfile 放在同一目录，构建镜像：
-#      docker build -t stringer-server:0.1.0 .
+#      docker build -t stringer-server:v1.0-beta.1 .
 # 3. 运行：
 #      docker run -d --name stringer -p 9527:9527 \
 #        -v stringer-config:/var/lib/stringer/config \
-#        stringer-server:0.1.0
+#        stringer-server:v1.0-beta.1
 #
 # 约定：
 #   1. 默认端口 9527，可用 SERVER_PORT 环境变量或 --server.port= 覆盖；
@@ -23,7 +23,7 @@ RUN groupadd -r stringer \
  && chown -R stringer:stringer /opt/stringer /var/lib/stringer /var/log/stringer
 
 WORKDIR /opt/stringer
-COPY --chown=stringer:stringer stringer-0.1.0.jar app.jar
+COPY --chown=stringer:stringer stringer-v1.0-beta.1.jar app.jar
 
 USER stringer
 EXPOSE 9527

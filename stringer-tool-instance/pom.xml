@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>0.1.0</version>
+        <version>v1.0-beta.1</version>
     </parent>
 
     <artifactId>stringer-tool-instance</artifactId>

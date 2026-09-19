@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>0.1.0</version>
+        <version>v1.0-beta.1</version>
     </parent>
 
     <artifactId>stringer-spring-boot-starter</artifactId>
@@ -51,9 +51,11 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- Lombok 只在编译期生成代码，provided 不进交付物 -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>

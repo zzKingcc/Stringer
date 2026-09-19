@@ -7,9 +7,11 @@
 
 ## 一、发布前（构建与产物）
 
-- [ ] `mvn -o clean test` 通过（当前 10 个用例；`-o` 离线可跑）
+- [ ] `mvn -o clean test` 通过（当前 25 个用例；`-o` 离线可跑）
 - [ ] `mvn -o -pl stringer-server -am -DskipTests package` 产出
-      `stringer-server/target/stringer-0.1.0.jar`
+      `stringer-server/target/stringer-v1.0-beta.1.jar`，**体积约 58MB**
+      （若明显变大，先看是不是又把 `langchain4j-easy-rag` 或 lombok 带进来了：
+      前者会经 Tika / onnxruntime 多出约 190MB，后者约 2MB）
 - [ ] 版本号已更新且**三处一致**：根 `pom.xml`、各模块 `<parent>` 版本、`CHANGELOG.md`
       （接口回报的版本来自构建信息，无需改代码）
 - [ ] `CHANGELOG.md` 写明本次变化与**升级注意事项**（是否要重建索引、配置是否兼容）
@@ -20,7 +22,7 @@
 
 ### 1 进程与探针（1 分钟）
 
-- [ ] `curl -s http://localhost:9527/health` → `{"code":0,"status":"UP",...,"version":"0.1.0"}`
+- [ ] `curl -s http://localhost:9527/health` → `{"code":0,"status":"UP",...,"version":"v1.0-beta.1"}`
       **不带任何凭证**（这是探针能工作的前提）
 - [ ] 启动横幅信息自检：端口、工具数、ES / Redis 状态、**日志文件状态与开启命令**、账号状态
 - [ ] K8s：`kubectl get pod` 的 READY 为 `1/1`；`replicas` 为 `1`

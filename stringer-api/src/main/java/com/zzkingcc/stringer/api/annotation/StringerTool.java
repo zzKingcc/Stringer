@@ -30,8 +30,11 @@ public @interface StringerTool {
      */
     String[] profiles() default {};
 
-    /** 远程注册时作为版本共存依据 */
-    String version() default "0.1.0";
+    /**
+     * 工具自身的语义化版本（如 {@code 1.0.0}），<b>与 SDK 发版号无关</b>：SDK 升级不改工具契约时不要动它。
+     * <p>当前注册表按工具名归并（同名＝同一工具的多副本），该字段仅登记展示，不参与归并或路由。
+     */
+    String version() default "1.0.0";
 
     /** 副作用等级；{@link SideEffect#READ} 可自由调用，写/破坏性操作应配 {@link ToolPolicy} 的审批 */
     SideEffect sideEffect() default SideEffect.READ;

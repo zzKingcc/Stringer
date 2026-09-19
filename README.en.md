@@ -62,11 +62,11 @@
 | Ops console | Built-in, 8 pages, plus a runtime metrics snapshot | Its own visual UI | None |
 | Storage | Namespace-isolated — **you can share one ES / Redis with your app** | Separate storage | Depends on your implementation |
 | Deployment cost | One extra server to run (ES / Redis can be shared with your app) | The platform plus its own dependencies | Nothing extra |
-| Best fit | Existing Java microservices, tools spread across services, human approval and operability required | No-code drag-and-drop app building | Calling a model API a handful of times |
+| Best fit | Existing Java apps — monolith or microservices — with human approval and operability required | No-code drag-and-drop app building | Calling a model API a handful of times |
 
 ## Who it's for / Who it isn't
 
-**For you if**: you already run Java microservices and do not want a second stack for AI; your tools are scattered across services and need one place to register and govern them; you have on-prem, data-residency or compliance constraints; high-risk operations (refunds, order edits, broadcasts) need human approval; ops needs to know which tools and instances are live.
+**For you if**: you already run a Java application — a monolith or a set of distributed services — and do not want a second stack for AI; whether your tools live in a single process or are scattered across services, they need one place to register and govern them; you have on-prem, data-residency or compliance constraints; high-risk operations (refunds, order edits, broadcasts) need human approval; ops needs to know which tools and instances are live.
 
 **Not for you if**: you want visual no-code building; you are a pure Python shop; or you need a one-off script that calls a model once.
 

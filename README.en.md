@@ -175,12 +175,12 @@ Set `stringer.tool-instance.enabled=true`, then declare on any Spring bean metho
 ```java
 // Read-only: visible in the customer profile; the parameter schema is derived from the signature
 @StringerTool(name = "queryOrder", description = "Look up an order by number. Call when the user asks about shipping or logistics",
-        profiles = {"customer"})
+        domains = {"customer"})
 public String queryOrder(@ToolParam(description = "Order number, e.g. FR2024001") String orderNo) { ... }
 
 // Write: side effect declared + interrupts for human approval before every call
 @StringerTool(name = "refundOrder", description = "Refund an order. Call only when the user explicitly asks for a refund",
-        profiles = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
+        domains = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
 @ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "Refunds need human sign-off"))
 public String refundOrder(@ToolParam(description = "Order number") String orderNo,
                           @ToolParam(description = "Refund amount, in CNY") BigDecimal amount) { ... }

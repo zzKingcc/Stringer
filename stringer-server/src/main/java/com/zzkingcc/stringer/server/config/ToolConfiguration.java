@@ -1,7 +1,9 @@
 package com.zzkingcc.stringer.server.config;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.StringerTool;
 import com.zzkingcc.stringer.api.tool.StringerToolProvider;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.AnnotatedToolScanner;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry.Registered;
@@ -85,8 +87,9 @@ public class ToolConfiguration {
             // "一个工具都还没提供"是合法初始态（服务端不再自带示例工具），按约定只做状态陈述，不用 WARN：
             // 它既不是故障也不影响启动，WARN 只会让每次冷启动都像是出了问题。
             log.info("[工具装配] 未注册任何工具 —— 在任意 Spring Bean 的方法上标注 @StringerTool 即可注册；"
-                    + "在此之前「域空间」会显示 0 / 未注册；因 knownProfiles 为空，acceptsProfile 对任何域返回 true"
-                    + "（即接受任意域、但可见工具集为空），不会被判为域不存在（10004）");
+                            + "此时可用的域只有兜底域 {}（工具声明留空、调用未指定域都落到它）；"
+                            + "其余域需由工具声明或在管控台创建，否则入口报 10004",
+                    Domains.DEFAULT);
         }
         return registry;
     }
@@ -115,11 +118,14 @@ public class ToolConfiguration {
     }
 
     /**
-     * 工具路由器（内核唯一的能力调用入口）
+     * 工具路由器（内核唯一的能力调用入口）。
+     *
+     * <p>注入域注册表：域有两个来源（注册表登记的内置/人工域、工具声明派生的域），
+     * 判定与展示都需要合并两者。</p>
      */
     @Bean
     @ConditionalOnMissingBean
-    public ToolRouter toolRouter(ToolRegistry toolRegistry) {
-        return new ToolRouter(toolRegistry);
+    public ToolRouter toolRouter(ToolRegistry toolRegistry, DomainRegistry domainRegistry) {
+        return new ToolRouter(toolRegistry, domainRegistry);
     }
 }

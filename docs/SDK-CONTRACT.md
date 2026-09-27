@@ -1,0 +1,193 @@
+# SDK 契约表（注解与门面的完整参数）
+
+> 用途：评审用。**这是设计稿，尚未实现** —— 现状对照见 §7。
+> 来源：`SDK-REDESIGN.md` §3 与 §8（收敛后的形态）。
+> 记法：**必填**列里标「是」的只有一个字段 —— 这轮收敛的目标就是"只有一个必填"。
+
+---
+
+## 1 `@Tool` —— 工具注册（写在方法上）
+
+| 字段 | 类型 | 默认 | 必填 | 说明 |
+| --- | --- | --- | --- | --- |
+| `desc` | `String` | — | **是** | 给模型的用途说明。写法建议：写清「何时调用 / 何时不要调用」，比参数描述更重要 |
+| `value` | `String` | `""` | 否 | 工具名。留空取方法名；**全局唯一**，重名注册直接失败 |
+| `domains` | `String[]` | `{}` | 否 | 可用域（**授权边界**）。留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用（须显式）。可继承类级 `@ToolDomains` |
+| `effect` | `Effect` | `READ` | 否 | `READ` / `WRITE` / `DESTRUCTIVE`。写与破坏性操作建议配 `approval` |
+| `approval` | `Approval` | `NONE` | 否 | `NONE` / `ALWAYS`。当前只有这两种真正生效 |
+| `approvalReason` | `String` | `""` | 否 | 展示给审批人的原因。`approval ≠ NONE` 时建议填写 |
+
+**从注解移出（改由默认值或平台配置）**
+
+| 原字段 | 处置 | 原因 |
+| --- | --- | --- |
+| `category` | 保留字段，默认 `"default"` | 只用于管理页分组，不影响运行 |
+| `version` | 保留字段，默认 `"1.0.0"` | 仅登记展示，不参与路由 |
+| `idempotent` | 保留字段，默认 `true` | 极少数场景才改 |
+| `toModel` | 保留字段，默认 `true` | 同上 |
+| `condition` / `approverRoles` / `timeoutSeconds` / `onTimeout` / `payloadFields` | **移出注解** | 当前**不生效**（源码注释写明"仅登记"）；等真正实现再加回 `@ToolAdvanced` 或平台配置 |
+
+---
+
+## 2 `@ToolParam` —— 参数说明（写在形参前 **或** 参数 DTO 的字段上）
+
+| 字段 | 类型 | 默认 | 必填 | 说明 |
+| --- | --- | --- | --- | --- |
+| `value` | `String` | `""` | 否（**强烈建议**） | 参数说明。不写能跑，但复杂参数（订单号、金额、日期）模型只能猜 |
+| `name` | `String` | `""` | 否 | 参数名。留空取形参名；标在字段上时取字段名 |
+| `required` | `boolean` | `true` | 否 | 是否必填。`Optional<T>` 自动视为非必填 |
+
+**移出到 `@ToolAdvanced`**
+
+| 原字段 | 处置 |
+| --- | --- |
+| `example` | → `@ToolAdvanced.example`（**按参数名对应，不按位置**） |
+| `allowValues` | → `@ToolAdvanced.allowValues` |
+| `sensitive` | → `@ToolAdvanced.sensitive` |
+
+> **两个载体、一个优先级**：形参注解 **>** 字段注解（就近覆盖）。
+> 1~2 个简单参数用形参；3+ 参数、被多个工具复用、或有嵌套结构 → 用 `record` DTO 的字段注解（只写一次）。
+> ⚠️ 字段载体在服务端本地 Bean 路径**尚未实现**（现状见 §7）。
+
+---
+
+## 3 `@ToolDomains` —— 类级默认域（写在类上）
+
+| 字段 | 类型 | 默认 | 必填 | 说明 |
+| --- | --- | --- | --- | --- |
+| `value` | `String[]` | `{}` | 否 | 该类里所有 `@Tool` 方法的默认可用域。方法级 `domains` 优先 |
+
+---
+
+## 4 `@ToolAdvanced` —— 高级可选（承接移出字段）
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `example` | `String[]` | `{}` | 参数示例，**按参数名对应**（`{"orderNo=FR2024001"}` 形式），不做位置对齐 |
+| `allowValues` | `String[]` | `{}` | 枚举白名单，按 `name=...` 形式给出 |
+| `sensitive` | `String[]` | `{}` | 需要脱敏的参数名清单（日志 / 事件 / 审批 payload） |
+
+> 这个注解存在的意义：**绝大多数工具不需要它**。放这里的字段都是"偶尔要写、但绝不能默认出现在每个工具上"的。
+
+---
+
+## 5 SDK 门面
+
+### 5.1 入口
+
+| 元素 | 签名 | 说明 |
+| --- | --- | --- |
+| `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 兜底域 `default`；返回的实例**可缓存复用**（线程安全） |
+
+> 删掉了现有的 `DomainAgentFactory`（并进这里）与 `@DomainBinding`（与 `forDomain` 语义重复）。
+
+### 5.2 `StringerAgent` 方法
+
+| 方法 | 参数 | 返回 | 说明 | 使用占比预估 |
+| --- | --- | --- | --- | --- |
+| `ask` | `String sessionId, String question` | `String` | 同步取最终答案。遇审批中断抛 `ApprovalRequiredException` | **~70%** |
+| `ask` | `String sessionId, String question, String tenantId, String userId` | `String` | 同上，并声明归属（多租户计量/审计） | — |
+| `stream` | `String sessionId, String question` | `Flux<String>` | 逐字输出（只含 TOKEN 内容） | ~25% |
+| `stream` | `String sessionId, String question, String tenantId, String userId` | `Flux<String>` | 同上，带归属 | — |
+| `events` | `String sessionId, String question` | `Flux<AgentEvent>` | 完整事件（工具调用、审批、错误、耗时） | ~5% |
+| `resume` | `String sessionId, boolean approved` | `Flux<AgentEvent>` | 审批恢复。**域须与中断时一致**，否则 30002 | — |
+| `stop` | `String sessionId` | `boolean` | 请求停止（幂等） | — |
+| `domainId` | — | `String` | 返回本实例绑定的域，**永不为空** | — |
+
+**约定**：`sessionId` 由调用方生成并保持稳定（同一会话复用同一个）；它是记忆与检查点的唯一键。
+
+### 5.3 `ApprovalRequiredException`（`ask` 与 `stream` 都会抛）
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sessionId` | `String` | 哪个会话被挂起 |
+| `domainId` | `String` | 挂起时所处的域（`resume` 必须带同一个） |
+| `tools` | `List<ToolCall>` | 待审批的工具调用清单：`name` / `arguments` / `requiresApproval` |
+| `traceId` | `String` | 排障用 |
+
+> 宿主拿到它就能直接弹确认框；用户点完 → `resume(sessionId, true/false)`。
+
+### 5.4 `AgentEvent`（只有 `events` / `resume` 用得到）
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | `AgentEventType` | `TOKEN` / `TOOL_CALL` / `TOOL_RESULT` / `INTERRUPT` / `STOPPED` / `ERROR` / `DONE` |
+| `sessionId` | `String` | 会话 |
+| `content` | `String` | 文本内容（`TOKEN` / 错误文案） |
+| `payload` | `String` | 结构化载荷（JSON 字符串；`INTERRUPT` 时是待审批工具清单） |
+| `code` / `codeName` | `Integer` / `String` | 仅 `ERROR`，前端应以 `codeName` 分支而非数字 |
+| `traceId` | `String` | 仅 `ERROR` |
+| `timestamp` | `long` | 事件生成时间 |
+
+---
+
+## 6 配置项（SDK 运行参数）
+
+| 键 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `stringer.server` | `String`（URL） | — | 服务端地址，一个 URL 取代 `host` + `port` |
+| `stringer.username` / `password` | `String` | — | 接入账号 |
+| `stringer.domains` | `String[]` | `{}` | 启动期校验这些域存在（替代 `@DomainBinding` 扫描） |
+| `stringer.tools` | `boolean` | `false` | 是否把本进程的 `@Tool` 方法注册给服务端 |
+| `stringer.tools.domains` | `String[]` | `{}` | 本应用所有工具的**默认可用域**（替代逐个注解写 `domains`） |
+
+**不要求填的（有默认值，只在需要时改）**：健康检查/连接/读取超时、实例 id（自动生成）、端点（自动推导）、心跳周期、退避上限、请求超时。
+
+---
+
+## 7 与现状的差异（哪些已有、哪些要新增）
+
+| 元素 | 现状 | 目标 |
+| --- | --- | --- |
+| `@StringerTool` | ✅ 已有，**8 个字段** | → `@Tool`，**1 个必填 + 5 个可选** |
+| `@ToolParam` | ⚠️ 已有（6 字段），**只读形参** | → 3 字段；**同时支持字段载体** |
+| `@ToolPolicy` + `@Approval` | ✅ 已有（7 字段，5 个不生效） | → 平铺进 `@Tool` 的 `approval` + `approvalReason` |
+| `@ToolDomains` | ❌ 无 | 新增（类级默认域） |
+| `@ToolAdvanced` | ❌ 无 | 新增（承接 `example` / `allowValues` / `sensitive`） |
+| `Effect` 枚举 | ✅ `StringerTool.SideEffect` | 更名为 `Effect`（值不变） |
+| `StringerAgent` | ❌ 无 | 新增门面（`ask` / `stream` / `events` / `resume` / `stop`） |
+| `StringerAgentFactory` | ⚠️ 有 `DomainAgentFactory` | 合并并更名 |
+| `@DomainBinding` | ✅ 已有（类/方法级） | **移除**（与 `forDomain` 重复） |
+| `ApprovalRequiredException` | ❌ 无（只能自己过滤 `INTERRUPT` 事件） | 新增 |
+| `AgentService` / `AgentRequest` / `CallerContext` | ✅ 已有 | 保留为内部实现；`AgentService.forDomain` 作为兼容入口 |
+
+---
+
+## 8 这份表里最该先确认的三件事
+
+| # | 问题 | 我的建议 |
+| --- | --- | --- |
+| 1 | `desc` 是唯一必填 —— 是否接受 | 接受。它是模型判断"何时调用"的唯一依据；缺了工具等于不可用 |
+| 2 | `@ToolParam` 的字段载体（DTO）是否本轮就支持 | 支持。但**必须先把两端扫描器统一**（服务端目前不支持，见 `SDK-REDESIGN.md` §9） |
+| 3 | 移出的 5 个审批字段 | 移出。它们在当前实现里**不生效**，留着等于向使用者承诺不存在的能力 |
+
+---
+
+## 9 实现进度（2026-09-27）
+
+### 9.1 已实现
+
+| 元素 | 状态 |
+| --- | --- |
+| `@Tool` | ✅ 新增（`desc` 唯一必填 + `value` / `domains` / `effect` / `approval` / `approvalReason`） |
+| `@ToolDomains` | ✅ 新增（类级默认域，方法级 `domains` 优先） |
+| `@ToolAdvanced` | ✅ 新增（`example` / `allowValues` / `sensitive`，按参数名对应） |
+| `@ToolParam` | ✅ 收敛：`value()` 为主，`description()` 降为弃用别名；`example` / `allowValues` / `sensitive` 标记弃用 |
+| `ToolDescriptor.Param` | ✅ 增加 `properties`（`type=object` 的子字段）；保留七参构造，既有调用点无需改动 |
+| `ParamSchemaResolver` | ✅ 新增（**放在 `stringer-api`**，两端共用）：DTO 递归展开、深度上限 5、循环引用检测、形参/字段两种载体、UUID/Temporal/Date 识别 |
+| 服务端扫描器 | ✅ 认 `@Tool` 与 `@StringerTool`；参数走共用解析器；**DTO 从"退化成 string"改为展开成 object** |
+| 工具实例扫描器 | ✅ 认 `@Tool`；`@ToolParam` 的 `value()` 生效；类级 `@ToolDomains` 生效 |
+| 测试 | ✅ 新增 `ToolAnnotationScanTest`（4 个用例）+ `DomainSemanticsTest`（7 个）；全量 36 个测试通过 |
+
+### 9.2 这次顺带修掉的一个真实缺陷
+
+旧实现里，服务端本地 Bean 的 **DTO / record 参数会被退化成 `type: string`** —— 模型看到的是一个字符串参数，产出的也是字符串，反序列化到 DTO 必然失败，**工具永远拿不到参数**。现在展开为嵌套 `object`。
+
+### 9.3 尚未实现
+
+| 元素 | 说明 |
+| --- | --- |
+| `StringerAgent` / `StringerAgentFactory` / `ApprovalRequiredException` | 门面层，下一步 |
+| 配置项扁平化（`server` URL 等） | 下一步 |
+| 启动自检清单 | 下一步 |
+| **两端 schema 生成的完全统一** | ⚠️ 仍在做：目前两端都认同一套注解、字段载体与域解析，但**参数 schema 的产出仍是两套代码**（服务端：`ParamSchemaResolver` → langchain4j Schema；工具实例：自有 `schema()` → 上报 JSON）。要彻底统一需重写工具实例侧的 schema 生成，属独立改动项 |

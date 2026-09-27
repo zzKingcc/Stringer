@@ -171,6 +171,124 @@
             </footer>
         </section>
 
+        <!-- ============ 模型档案：额外的模型端点 ============ -->
+        <section class="card" id="card-profiles">
+            <header class="card-head">
+                <span class="model-dot"></span>
+                <h2>模型档案</h2>
+                <span class="mbadge" id="profileBadge">—</span>
+                <span class="spacer"></span>
+                <span class="card-note">一个域一个模型 · 新档案不自动绑域</span>
+            </header>
+
+            <div class="hint" style="margin:0 0 14px;">
+                这里是「对话模型」之外的<b>额外端点</b>：上面那张卡是内置 <span class="mono">default</span>，
+                本卡可再加任意多个档案供不同域选用。规则三条 ——
+                ① <b>新建的档案不会自动绑定任何域</b>，绑定只在下方「域 → 模型绑定」里手工指定；
+                ② <b>一个域只绑一个模型</b>，再次设置即<b>覆盖</b>；
+                ③ <b>未绑定的域用上面「对话模型」那套</b>。向量模型不受本卡影响，全局只有一个。
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>别名</th>
+                        <th>模型</th>
+                        <th>服务商地址</th>
+                        <th>能力</th>
+                        <th>被哪些域使用</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody id="profileBody">
+                    <tr><td colspan="6" class="perm-none">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="row" style="margin-top:16px;">
+                <div class="field">
+                    <label>别名（唯一，保存即覆盖同名）</label>
+                    <input id="pfAlias" class="mono" placeholder="smart">
+                </div>
+                <div class="field">
+                    <label>服务商地址（OpenAI 兼容 baseUrl）</label>
+                    <input id="pfBaseUrl" class="mono" placeholder="https://api.example.com/v1">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>API Key（留空＝沿用该档案原值）</label>
+                    <input id="pfApiKey" type="password" class="mono" placeholder="留空表示不修改">
+                </div>
+                <div class="field">
+                    <label>模型名</label>
+                    <input id="pfModelName" class="mono" placeholder="gpt-4o">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>采样温度（可空）</label>
+                    <input id="pfTemperature" type="number" step="0.1" min="0" max="2" placeholder="0.3">
+                </div>
+                <div class="field">
+                    <label>单次最大 Token（可空）</label>
+                    <input id="pfMaxTokens" type="number" min="1" placeholder="4096">
+                </div>
+            </div>
+            <div class="field">
+                <label>能力声明（只用于告警，不做拦截）</label>
+                <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:13px;">
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="pfCapStreaming"> streaming</label>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="pfCapTools"> tools（<b>不声明则模型不会调用任何工具</b>）</label>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="pfCapVision"> vision</label>
+                </div>
+            </div>
+
+            <div id="profileResult" class="result"></div>
+
+            <footer class="card-foot">
+                <button class="sec" id="testProfileBtn">测试连接</button>
+                <button class="sec" id="resetProfileFormBtn">清空表单</button>
+                <button id="saveProfileBtn">保存档案</button>
+                <span class="hint">测试针对<b>已保存</b>的档案；保存后绑定它的域立即生效，无需重启。</span>
+            </footer>
+        </section>
+
+        <!-- ============ 域 → 模型绑定 ============ -->
+        <section class="card" id="card-bindings">
+            <header class="card-head">
+                <span class="model-dot"></span>
+                <h2>域 → 模型绑定</h2>
+                <span class="spacer"></span>
+                <span class="card-note">单值，后设覆盖</span>
+            </header>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>域</th>
+                        <th>当前绑定</th>
+                        <th>改为</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody id="bindingBody">
+                    <tr><td colspan="4" class="perm-none">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="hint">
+                域清单与「域空间」同源（内置 <span class="mono">default</span> + 人工创建 + 工具派生）。
+                「未绑定」的域使用默认别名 <span class="mono" id="defaultAliasHint">default</span>；
+                解绑后即回到该默认。
+            </div>
+        </section>
+
         <!-- ============ 说明与设置文件位置（只读，无操作） ============ -->
         <section class="card">
             <div class="hint" style="margin:0;">
@@ -623,7 +741,239 @@
 
     initCombo('chat');
     initCombo('embedding');
-    Console.ready(loadSettings);
+    /* ============ 模型档案与域绑定 ============
+       三条规则在这段代码里的体现：
+       ① 新档案只写进档案列表，**不碰任何域绑定**（绑定要人工点"设置"）；
+       ② 绑定是单值：PUT 一次即覆盖该域之前的别名；
+       ③ 内置 default 不参与编辑与删除，只是"未绑定域的落点"。 */
+    var PROFILES = [];
+    var BINDINGS = {};
+    var DOMAIN_NAMES = [];
+    var DEFAULT_ALIAS = 'default';
+
+    function pfEl(id) { return document.getElementById(id); }
+
+    function loadProfiles() {
+        return Console.request('/admin/model-profiles').then(function (r) {
+            PROFILES = (r && r.profiles) || [];
+            BINDINGS = (r && r.domainBindings) || {};
+            DEFAULT_ALIAS = (r && r.defaultAlias) || 'default';
+            pfEl('defaultAliasHint').textContent = DEFAULT_ALIAS;
+            pfEl('profileBadge').textContent = PROFILES.length + ' 个自建档案';
+            renderProfiles();
+            renderBindings();
+        }).catch(function (e) {
+            pfEl('profileBody').innerHTML = '<tr><td colspan="6" style="color:var(--red);">'
+                + '加载失败：' + Console.escapeHtml(e.message) + '</td></tr>';
+        });
+    }
+
+    function loadDomains() {
+        return Console.request('/admin/domains').then(function (r) {
+            DOMAIN_NAMES = ((r && r.domains) || []).map(function (d) { return d.name; });
+            renderBindings();
+        }).catch(function () { /* 绑定区自己会给兜底文案 */ });
+    }
+
+    function capText(list) {
+        if (!list || !list.length) {
+            return '<span style="color:var(--amber);">未声明</span>';
+        }
+        var hasTools = list.some(function (c) { return String(c).toLowerCase() === 'tools'; });
+        return Console.escapeHtml(list.join(' / '))
+            + (hasTools ? '' : ' <span style="color:var(--amber);">缺 tools</span>');
+    }
+
+    function renderProfiles() {
+        var tbody = pfEl('profileBody');
+        // 内置 default 单独占一行只读：避免"我的 default 档案去哪了"的疑问
+        var rows = '<tr>'
+            + '<td><b class="mono">default</b> <span class="tag public">内置</span></td>'
+            + '<td colspan="4" class="muted">即上方「对话模型」那张卡 —— 未绑定模型的域都走它</td>'
+            + '<td class="muted">—</td>'
+            + '</tr>';
+
+        if (!PROFILES.length) {
+            rows += '<tr><td colspan="6" class="perm-none">'
+                + '还没有自建档案 —— 在下方表单填写后保存即可（新档案不会自动绑定任何域）。</td></tr>';
+        }
+        PROFILES.forEach(function (p) {
+            var used = (p.usedByDomains || []).length
+                ? p.usedByDomains.map(function (d) {
+                    return '<span class="tag perm">' + Console.escapeHtml(d) + '</span>';
+                  }).join('')
+                : '<span class="perm-none">未绑定</span>';
+            rows += '<tr>'
+                + '<td><b class="mono">' + Console.escapeHtml(p.alias) + '</b></td>'
+                + '<td>' + Console.escapeHtml(p.modelName || '-') + '</td>'
+                + '<td class="mono muted">' + Console.escapeHtml(p.baseUrl || '-') + '</td>'
+                + '<td>' + capText(p.capabilities) + '</td>'
+                + '<td>' + used + '</td>'
+                + '<td>'
+                +   '<button class="ghost" data-edit="' + Console.escapeHtml(p.alias) + '">编辑</button> '
+                +   '<button class="ghost" data-test="' + Console.escapeHtml(p.alias) + '">测试</button> '
+                +   '<button class="ghost" data-del="' + Console.escapeHtml(p.alias) + '">删除</button>'
+                + '</td>'
+                + '</tr>';
+        });
+        tbody.innerHTML = rows;
+
+        tbody.querySelectorAll('button[data-edit]').forEach(function (b) {
+            b.addEventListener('click', function () { fillProfileForm(b.getAttribute('data-edit')); });
+        });
+        tbody.querySelectorAll('button[data-test]').forEach(function (b) {
+            b.addEventListener('click', function () { testProfile(b.getAttribute('data-test')); });
+        });
+        tbody.querySelectorAll('button[data-del]').forEach(function (b) {
+            b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
+        });
+    }
+
+    function renderBindings() {
+        var tbody = pfEl('bindingBody');
+        if (!DOMAIN_NAMES.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="perm-none">'
+                + '还没有任何域 —— 可先去「域空间」创建（正常装配下至少有内置 default）。</td></tr>';
+            return;
+        }
+        var options = '<option value="">未绑定（走默认 ' + Console.escapeHtml(DEFAULT_ALIAS) + '）</option>'
+            + '<option value="default">default（上方对话模型卡）</option>'
+            + PROFILES.map(function (p) {
+                return '<option value="' + Console.escapeHtml(p.alias) + '">'
+                    + Console.escapeHtml(p.alias) + '</option>';
+              }).join('');
+
+        tbody.innerHTML = DOMAIN_NAMES.map(function (name) {
+            var bound = BINDINGS[name];
+            var current = bound
+                ? '<span class="tag perm mono">' + Console.escapeHtml(bound) + '</span>'
+                : '<span class="perm-none">未绑定 → ' + Console.escapeHtml(DEFAULT_ALIAS) + '</span>';
+            return '<tr>'
+                + '<td><b class="mono">' + Console.escapeHtml(name) + '</b></td>'
+                + '<td>' + current + '</td>'
+                + '<td><select data-bind-select="' + Console.escapeHtml(name) + '"'
+                +   ' style="min-width:180px;">' + options + '</select></td>'
+                + '<td><button class="ghost" data-bind-apply="' + Console.escapeHtml(name) + '">设置</button></td>'
+                + '</tr>';
+        }).join('');
+
+        // 回填当前绑定：空值＝未绑定（走默认）
+        tbody.querySelectorAll('select[data-bind-select]').forEach(function (sel) {
+            sel.value = BINDINGS[sel.getAttribute('data-bind-select')] || '';
+        });
+        tbody.querySelectorAll('button[data-bind-apply]').forEach(function (b) {
+            b.addEventListener('click', function () {
+                var name = b.getAttribute('data-bind-apply');
+                var sel = tbody.querySelector('select[data-bind-select="' + name + '"]');
+                applyBinding(name, sel ? sel.value : '');
+            });
+        });
+    }
+
+    function applyBinding(domain, alias) {
+        Console.jsonRequest('/admin/model-bindings/' + encodeURIComponent(domain), 'PUT', { alias: alias })
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '设置失败'); }
+                showProfileResult(true, '域 ' + domain + ' 已'
+                    + (alias ? '绑定到 ' + alias + '（原绑定被覆盖）' : '解绑，回到默认 ' + DEFAULT_ALIAS));
+                loadProfiles();
+            })
+            .catch(function (e) { showProfileResult(false, '设置失败：' + e.message); });
+    }
+
+    function fillProfileForm(alias) {
+        var p = PROFILES.filter(function (x) { return x.alias === alias; })[0];
+        if (!p) { return; }
+        pfEl('pfAlias').value = p.alias || '';
+        pfEl('pfBaseUrl').value = p.baseUrl || '';
+        pfEl('pfApiKey').value = '';                 // 只回填脱敏值，留空即沿用原 Key
+        pfEl('pfModelName').value = p.modelName || '';
+        pfEl('pfTemperature').value = (p.temperature == null ? '' : p.temperature);
+        pfEl('pfMaxTokens').value = (p.maxTokens == null ? '' : p.maxTokens);
+        var caps = (p.capabilities || []).map(function (c) { return String(c).toLowerCase(); });
+        pfEl('pfCapStreaming').checked = caps.indexOf('streaming') >= 0;
+        pfEl('pfCapTools').checked = caps.indexOf('tools') >= 0;
+        pfEl('pfCapVision').checked = caps.indexOf('vision') >= 0;
+        showProfileResult(true, '已载入档案 ' + alias + '（API Key 留空表示沿用原值）');
+    }
+
+    function saveProfile() {
+        var body = {
+            alias: pfEl('pfAlias').value.trim(),
+            baseUrl: pfEl('pfBaseUrl').value.trim(),
+            apiKey: pfEl('pfApiKey').value,
+            modelName: pfEl('pfModelName').value.trim(),
+            temperature: pfEl('pfTemperature').value === '' ? null : Number(pfEl('pfTemperature').value),
+            maxTokens: pfEl('pfMaxTokens').value === '' ? null : Number(pfEl('pfMaxTokens').value),
+            capabilities: collectCaps()
+        };
+        if (!body.alias) { showProfileResult(false, '请先填写别名'); return; }
+        Console.jsonRequest('/admin/model-profiles', 'POST', body)
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '保存失败'); }
+                pfEl('pfApiKey').value = '';
+                showProfileResult(true, '档案 ' + body.alias + ' 已保存并生效'
+                    + '（已绑定它的域下一个请求即用新配置；新档案不会自动绑任何域）');
+                loadProfiles();
+            })
+            .catch(function (e) { showProfileResult(false, '保存失败：' + e.message); });
+    }
+
+    function testProfile(alias) {
+        showProfileResult(true, '正在测试 ' + alias + ' …');
+        Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias) + '/test', 'POST')
+            .then(function (r) {
+                showProfileResult(true, '档案 ' + alias + ' 连接正常，模型回复：' + (r.reply || '(空)'));
+            })
+            .catch(function (e) { showProfileResult(false, '档案 ' + alias + ' 连接失败：' + e.message); });
+    }
+
+    function deleteProfile(alias) {
+        if (!confirm('确认删除档案 ' + alias + '？\n\n若仍有域绑定它，服务端会拒绝删除并列出那些域。')) { return; }
+        Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias), 'DELETE')
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '删除失败'); }
+                showProfileResult(true, '档案 ' + alias + ' 已删除');
+                loadProfiles();
+            })
+            .catch(function (e) { showProfileResult(false, '删除失败：' + e.message); });
+    }
+
+    function collectCaps() {
+        var caps = [];
+        if (pfEl('pfCapStreaming').checked) { caps.push('streaming'); }
+        if (pfEl('pfCapTools').checked) { caps.push('tools'); }
+        if (pfEl('pfCapVision').checked) { caps.push('vision'); }
+        return caps;
+    }
+
+    function showProfileResult(ok, message) {
+        var el = pfEl('profileResult');
+        el.className = 'result';
+        el.style.color = ok ? '' : 'var(--red)';
+        el.textContent = message;
+    }
+
+    document.getElementById('saveProfileBtn').addEventListener('click', saveProfile);
+    document.getElementById('testProfileBtn').addEventListener('click', function () {
+        var alias = pfEl('pfAlias').value.trim();
+        if (!alias) { showProfileResult(false, '请先填写或从上方选择一个别名'); return; }
+        testProfile(alias);
+    });
+    document.getElementById('resetProfileFormBtn').addEventListener('click', function () {
+        ['pfAlias', 'pfBaseUrl', 'pfApiKey', 'pfModelName', 'pfTemperature', 'pfMaxTokens']
+            .forEach(function (id) { pfEl(id).value = ''; });
+        pfEl('pfCapStreaming').checked = false;
+        pfEl('pfCapTools').checked = false;
+        pfEl('pfCapVision').checked = false;
+        pfEl('profileResult').textContent = '';
+    });
+
+    Console.ready(function () {
+        loadSettings();
+        loadProfiles();
+        loadDomains();
+    });
 </script>
 </body>
 </html>

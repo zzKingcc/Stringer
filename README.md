@@ -175,12 +175,12 @@ public class MyService {
 ```java
 // 只读工具：客服域可见，参数 schema 由方法签名推导
 @StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问发货/物流时调用",
-        profiles = {"customer"})
+        domains = {"customer"})
 public String queryOrder(@ToolParam(description = "订单号，如 FR2024001") String orderNo) { ... }
 
 // 写操作：声明副作用等级 + 调用前中断等人工确认
 @StringerTool(name = "refundOrder", description = "按订单号退款。仅在用户明确要求退款时调用",
-        profiles = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
+        domains = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
 @ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "退款需人工确认"))
 public String refundOrder(@ToolParam(description = "订单号") String orderNo,
                           @ToolParam(description = "退款金额，单位：元") BigDecimal amount) { ... }
@@ -188,7 +188,9 @@ public String refundOrder(@ToolParam(description = "订单号") String orderNo,
 
 方法签名即参数 schema、注解即治理策略、方法体即执行逻辑——三件事写在同一个地方。工具清单需要在启动期动态拼装时，改用 `ToolInstanceContributor` 编程式注册（重名以编程式为准），见[实例文档 §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用)。
 
-> 域由工具声明即创建，不需要预先注册；它也是**调用方自行声明、平台信任**的治理机制（防止模型误用工具、防止提示词与工具集错位），**不是安全边界**——用哪个域由客户端决定，平台无法验证真伪。终端用户的身份与授权属于宿主自己的 IAM。
+> 域有**三个来源**：管控台**人工创建**（可删，落盘 `config/domains.json`）、**工具声明派生**（写下 `domains` 即创建）、以及内置兜底域 **`default`**（工具声明留空、调用未指定域都落到它，不可删）。声明留空＝**只属于 `default`**；要全域可用须显式写 `{"*"}`。
+>
+> 它也是**调用方自行声明、平台信任**的治理机制（防止模型误用工具、防止提示词与工具集错位），**不是安全边界**——用哪个域由客户端决定，平台无法验证真伪。终端用户的身份与授权属于宿主自己的 IAM。
 
 ### 联调示例
 

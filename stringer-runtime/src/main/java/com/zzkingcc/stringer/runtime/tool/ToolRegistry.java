@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.runtime.tool;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.service.tool.ToolExecutor;
@@ -349,6 +350,11 @@ public class ToolRegistry {
         for (Registered r : tools.values()) {
             addProfiles(all, r.descriptor().profiles());
         }
+        // 通配不是域，不能混进域集合（否则会出现一个叫 "*" 的域）
+        all.remove(Domains.ANY);
+        // 兜底域恒可用：服务端启动即预置 default，工具声明留空与调用未指定域都落到它。
+        // 它必须在 knownProfiles 里，否则"回落 default"会被入口判成域不存在（10004）。
+        all.add(Domains.DEFAULT);
         return Set.copyOf(all);
     }
 
@@ -376,8 +382,10 @@ public class ToolRegistry {
     }
 
     /**
-     * 该域是否可以被使用（入口层 fail-fast 的判据）。空集合表示"还没见过任何域"，
-     * 此时放行任意域；见过之后只放行被声明过的域——哪怕它此刻名下已经没有工具。
+     * 该域是否可以被使用（入口层 fail-fast 的判据）。
+     *
+     * <p>因 {@link #knownProfiles()} 恒含兜底域 {@code default}，正常链路下 {@code known} 不会为空；
+     * 空集合分支保留，用于兼容"完全没有域概念"的历史部署。</p>
      */
     public boolean acceptsProfile(String profile) {
         Set<String> known = knownProfiles();

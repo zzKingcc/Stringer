@@ -63,14 +63,15 @@
             tools.textContent = toolCount;
             tools.className = 'v' + (toolCount ? ' ok' : ' warn');
             document.getElementById('statToolsNote').textContent = toolCount
-                ? ('其中 ' + (s.globalToolCount || 0) + ' 个全域可见')
+                ? ('其中 ' + (s.globalToolCount || 0) + ' 个声明了通配 *')
                 : '未注册：没有扫描到任何工具提供者';
 
             domains.textContent = domainCount;
             domains.className = 'v' + (domainCount ? ' ok' : ' warn');
             document.getElementById('statDomainsNote').textContent = domainCount
-                ? ('分布在 ' + domainCount + ' 个域上')
-                : '未注册：没有工具声明 profiles';
+                ? ('内置 ' + (s.builtinCount || 0) + ' · 人工 ' + (s.manualCount || 0)
+                   + ' · 派生 ' + (s.derivedCount || 0))
+                : '未注册：没有任何域';
         }).catch(function (e) {
             tools.textContent = '—';
             tools.className = 'v err';

@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.api.tool;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.StringerTool;
 
 import java.util.List;
@@ -16,7 +17,8 @@ import java.util.List;
  * @param idempotent  是否幂等（决定能否自动重试）
  * @param toModel     结果是否回填 LLM
  * @param params      参数列表（结构 + 语义，用于校验与生成 schema）
- * @param profiles    本工具所属的域（留空 = 所有域可见）
+ * @param profiles    本工具的可用域（<b>授权边界</b>）：留空 = 只属于兜底域 default；
+ *                    含 {@code "*"} = 任何域可用（须显式声明）
  * @param approval    二次确认策略
  * @param source      来源标识，如 {@code com.foo.Bean#method}，用于排障与审计
  */
@@ -34,25 +36,39 @@ public record ToolDescriptor(
         String source) {
 
     /**
-     * 本工具是否对指定域可见。
+     * 本工具是否对指定域可见 —— <b>授权判定</b>，不是过滤偏好。
+     *
+     * <p>规则（顺序即优先级）：</p>
+     * <ol>
+     *   <li>声明中含通配 {@link Domains#ANY} → 任何域可见（必须显式写出）；</li>
+     *   <li>声明留空 → <b>只属于兜底域</b> {@link Domains#DEFAULT}（不再视为全域可见）；</li>
+     *   <li>其余 → 声明列表须命中该域（域为空时归一化为兜底域）。</li>
+     * </ol>
      */
     public boolean visibleIn(String profile) {
-        if (profiles == null || profiles.isEmpty()) {
+        if (profiles != null && profiles.contains(Domains.ANY)) {
             return true;
         }
-        return profile != null && !profile.isBlank() && profiles.contains(profile);
+        String domain = Domains.normalize(profile);
+        if (profiles == null || profiles.isEmpty()) {
+            return Domains.DEFAULT.equals(domain);
+        }
+        return profiles.contains(domain);
     }
 
     /**
      * 参数描述
      *
      * @param name        参数名
-     * @param type        类型名：string / integer / number / boolean / enum / array
+     * @param type        类型名：string / integer / number / boolean / enum / array / object
      * @param description 语义说明
      * @param required    是否必填
      * @param allowValues 枚举白名单（{@code type=enum} 时有效）
      * @param example     示例值
      * @param sensitive   是否敏感（日志 / 事件 / 审批 payload 中脱敏）
+     * @param properties  <b>{@code type=object} 时的子字段</b>；简单类型为空列表。
+     *                    这就是 DTO / record 参数被展开后的嵌套结构 —— 没有它，
+     *                    模型只会看到一个"字符串"，无法构造出对象。
      */
     public record Param(
             String name,
@@ -61,7 +77,14 @@ public record ToolDescriptor(
             boolean required,
             List<String> allowValues,
             String example,
-            boolean sensitive) {
+            boolean sensitive,
+            List<Param> properties) {
+
+        /** 简单类型：没有子字段。保留七参形态，既有调用点无需改动 */
+        public Param(String name, String type, String description, boolean required,
+                     List<String> allowValues, String example, boolean sensitive) {
+            this(name, type, description, required, allowValues, example, sensitive, List.of());
+        }
     }
 
     /**

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zzkingcc.stringer.api.agent.AgentRequest;
 import com.zzkingcc.stringer.api.agent.AgentService;
 import com.zzkingcc.stringer.api.agent.CallerContext;
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.event.AgentEvent;
 import com.zzkingcc.stringer.api.model.ToolCall;
@@ -12,6 +13,7 @@ import com.zzkingcc.stringer.api.support.TraceId;
 import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.domain.memory.DualConstraintChatMemory;
 import com.zzkingcc.stringer.runtime.cancellation.CancellationRegistry;
+import com.zzkingcc.stringer.runtime.model.ModelResolver;
 import com.zzkingcc.stringer.runtime.prompt.SystemPromptResolver;
 import com.zzkingcc.stringer.runtime.stream.StreamContext;
 import com.zzkingcc.stringer.runtime.stream.StreamSinkRegistry;
@@ -98,10 +100,18 @@ public class AgentOrchestrationService implements AgentService {
     private final Executor executor;
 
     /**
+     * 按域解析对话模型；为 {@code null} 时全部使用构造期注入的那个模型（行为与"全局一个模型"一致）。
+     */
+    private final ModelResolver modelResolver;
+
+    /**
      * 会话 → 中断时所用的域。
      */
     private final Map<String, String> interruptedProfiles = new ConcurrentHashMap<>();
 
+    /**
+     * 单模型构造（兼容入口）：所有域共用同一个模型。
+     */
     public AgentOrchestrationService(
             StreamingChatModel streamingChatModel,
             ChatMemoryProvider chatMemoryProvider,
@@ -111,6 +121,20 @@ public class AgentOrchestrationService implements AgentService {
             ObjectStreamStateSerializer<MessagesState<ChatMessage>> stateSerializer,
             CancellationRegistry cancellationRegistry,
             Executor executor) {
+        this(streamingChatModel, chatMemoryProvider, toolRouter, promptResolver, checkpointSaver,
+                stateSerializer, cancellationRegistry, executor, null);
+    }
+
+    public AgentOrchestrationService(
+            StreamingChatModel streamingChatModel,
+            ChatMemoryProvider chatMemoryProvider,
+            ToolRouter toolRouter,
+            SystemPromptResolver promptResolver,
+            BaseCheckpointSaver checkpointSaver,
+            ObjectStreamStateSerializer<MessagesState<ChatMessage>> stateSerializer,
+            CancellationRegistry cancellationRegistry,
+            Executor executor,
+            ModelResolver modelResolver) {
 
         this.streamingChatModel = streamingChatModel;
         this.chatMemoryProvider = chatMemoryProvider;
@@ -120,6 +144,7 @@ public class AgentOrchestrationService implements AgentService {
         this.toolRouter = toolRouter;
         this.streamSinks = new StreamSinkRegistry();
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.modelResolver = modelResolver;
 
         // 工具规格不在构造期固化：域是按请求变化的，工具集必须在 agent 节点运行时
         // 用 toolRouter.getToolSpecifications(profile) 按本轮所处的域过滤。
@@ -209,6 +234,9 @@ public class AgentOrchestrationService implements AgentService {
         List<dev.langchain4j.agent.tool.ToolSpecification> visibleTools =
                 toolRouter.getToolSpecifications(profile);
 
+        // 本轮使用哪个模型：按域解析（执行单元内取一次，与"域、提示词"同一条冻结规则）
+        StreamingChatModel model = resolveModel(profile);
+
         try {
             var parameters = ChatRequestParameters.builder()
                     .toolSpecifications(visibleTools)
@@ -220,8 +248,7 @@ public class AgentOrchestrationService implements AgentService {
 
             CompletableFuture<AiMessage> future = new CompletableFuture<>();
 
-            streamingChatModel.chat(request, new StreamingChatResponseHandler() {
-                @Override
+            model.chat(request, new StreamingChatResponseHandler() {                @Override
                 public void onPartialResponse(String partialResponse) {
                     // 停止检查:用户请求停止后,完成 future 抛 CancellationException,终止流
                     if (cancellationRegistry.isCancelled(sessionId)) {
@@ -257,6 +284,26 @@ public class AgentOrchestrationService implements AgentService {
         } finally {
             // 失败路径也要统计：模型已经开始产 token 就产生了用量，只记成功路径会漏
             TokenUsageRecorder.addLlmOutputTokens(llmOutputTokens.get());
+        }
+    }
+
+    /**
+     * 解析本轮使用的对话模型。
+     *
+     * <p>没有解析器（未装配模型档案的部署、单元测试）或解析不到时，退回构造期注入的模型 ——
+     * 于是"不配置多模型"与升级前的行为完全一致。</p>
+     */
+    private StreamingChatModel resolveModel(String profile) {
+        if (modelResolver == null) {
+            return streamingChatModel;
+        }
+        try {
+            StreamingChatModel resolved = modelResolver.streamingChat(profile);
+            return resolved == null ? streamingChatModel : resolved;
+        } catch (Exception e) {
+            // 解析失败不该让整轮对话失败：退回默认模型，并把原因留在日志里
+            log.warn("[Agent编排] 会话模型解析失败（域={}），已回落默认模型: {}", profile, e.getMessage());
+            return streamingChatModel;
         }
     }
 
@@ -391,17 +438,17 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /**
-     * 校验本轮调用方身份与域：缺身份、缺域、域不存在都拒绝。
+     * 校验本轮调用方身份与域：缺身份拒绝；<b>域为空回落到兜底域</b>；域不存在报错。
      */
     private ProfileCheck checkProfile(CallerContext caller) {
         if (caller == null) {
             return ProfileCheck.fail(ErrorCode.CALLER_CONTEXT_REQUIRED,
                     "缺少调用方身份（CallerContext 必填：tenantId / userId / profile）");
         }
-        String profile = caller.normalizedProfile();
-        if (profile == null) {
-            return ProfileCheck.fail(ErrorCode.PROFILE_REQUIRED, "缺少 profile：请显式指定本轮所处的域");
-        }
+        // 域为空 → 落到兜底域 default（服务端已预置），不再当作入参错误。
+        // 注意：兜底不等于放宽 —— default 之外的域仍须被声明过，否则照旧 10004，
+        // 与之配合的是"工具声明留空即只属于 default"的授权语义。
+        String profile = Domains.normalize(caller.normalizedProfile());
         if (!toolRouter.acceptsProfile(profile)) {
             return ProfileCheck.fail(ErrorCode.PROFILE_NOT_FOUND,
                     "域不存在: " + profile + "（已注册的域: " + toolRouter.getKnownProfiles() + "）");

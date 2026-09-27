@@ -26,8 +26,25 @@ public @interface StringerTool {
     String category() default "default";
 
     /**
-     * 声明 tool 属于哪些域，自动创建域。
+     * 本工具<b>允许被哪些域使用</b> —— 授权边界，不是展示标签。
+     *
+     * <p>三种写法：</p>
+     * <ul>
+     *   <li>显式域名：只在这些域下可用，如 {@code {"customer", "admin"}}；</li>
+     *   <li>留空：<b>只属于兜底域 {@code default}</b>（不再视为全域可见）；</li>
+     *   <li>通配 {@code {"*"}}：任何域都可用 —— 必须显式写出来，让"全域"是一个决定而不是漏写。</li>
+     * </ul>
+     *
+     * <p>域侧只能在声明的范围内决定用不用、怎么用，<b>不能</b>把工具拉进未授权的域
+     * （越界引用会在发布校验时失败，不静默放行）。</p>
      */
+    String[] domains() default {};
+
+    /**
+     * @deprecated 更名为 {@link #domains()}（语义从"可见性"升级为"授权边界"）。
+     *             保留为别名：仅当 {@code domains} 留空时回落读取，计划两个版本周期后移除。
+     */
+    @Deprecated(since = "1.0")
     String[] profiles() default {};
 
     /**

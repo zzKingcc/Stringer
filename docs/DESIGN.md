@@ -82,13 +82,13 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 定义 | 域＝一次对话的场景，同时绑定【工具集 + 系统提示词】 |
-| 创建与销毁 | 由工具注解 `@StringerTool.profiles()` 派生，**不可手工新建或删除**；一经某个工具声明过，域就常驻（工具被断开时域仍在，只是该域下暂无工具），因此不受实例熔断 / 判死影响 |
-| 可见性判定 | 工具的 `profiles` 留空＝全域可见；否则仅声明了本轮 `profile` 的工具进入模型视野 |
+| 创建与销毁 | **三个来源**：内置兜底域 `default`（启动即预置、**不可删除**）、管控台**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具声明派生**（由注解 `@StringerTool.domains()` 产生，一经声明即常驻，工具被断开时域仍在，只是该域下暂无工具，因此不受实例熔断 / 判死影响） |
+| 可见性判定 | 工具的 `domains` 留空＝<b>只属于兜底域 `default`</b>；含 `*`＝任何域可用（须显式写出）；否则仅声明了本轮域的工具进入模型视野 |
 | 维度数量 | 域是工具可见性的 **唯一维度**，不叠加第二个权限维度 |
 | `profile` 缺失 | 请求未带 `profile` 报错；`profile` 为空字符串报错 |
 | 域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具**；判据是"该域是否被声明过"，与"此刻有没有工具"无关 |
 | 同源性约束 | 模型可见工具集与需审批工具集必须来自同一判定（`ToolRegistry.toolSpecifications` 与 `toolsRequiringApproval` 同源）；拒绝文案分两种：域外 `10001`、工具已下线 `80001` |
-| 已知域集合为空 | 当所有工具均为全域可见（无任何工具声明过域）时，接受任意域，不报 `10004` |
+| 已知域集合恒非空 | `knownProfiles` <b>恒含内置兜底域 `default`</b>，故"已知域集合为空"实际不再发生；域不存在一律 `10004`，不降级为全量工具 |
 | 工具视图不取快照 | 每轮实时读注册表；不缓存工具集快照 |
 
 ---
@@ -102,7 +102,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `@StringerTool` | METHOD | `name` | `""`（留空取方法名；全局唯一，重名注册失败） |
 | | | `description` | 必填 |
 | | | `category` | `"default"`（仅管理页分类，不参与过滤） |
-| | | `profiles` | `{}`（留空＝全域可见） |
+| | | `domains` | `{}`（留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用） |
 | | | `version` | `"1.0.0"` |
 | | | `sideEffect` | `SideEffect.READ`（`READ`/`WRITE`/`DESTRUCTIVE`） |
 | | | `idempotent` | `true` |

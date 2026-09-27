@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.server.config;
 
 import com.zzkingcc.stringer.api.agent.AgentService;
 import com.zzkingcc.stringer.runtime.cancellation.CancellationRegistry;
+import com.zzkingcc.stringer.runtime.model.ModelResolver;
 import com.zzkingcc.stringer.runtime.orchestration.AgentOrchestrationService;
 import com.zzkingcc.stringer.runtime.prompt.SystemPromptResolver;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
@@ -82,15 +83,18 @@ public class GraphConfiguration {
             RedisCheckpointSaver checkpointSaver,
             ObjectStreamStateSerializer<MessagesState<ChatMessage>> graphStateSerializer,
             CancellationRegistry cancellationRegistry,
-            @Qualifier("agentExecutor") ExecutorService agentExecutor) {
+            @Qualifier("agentExecutor") ExecutorService agentExecutor,
+            ModelResolver modelResolver) {
 
-        log.info("[Agent编排配置] 创建 AgentOrchestrationService，模型={}，会话记忆=Redis持久化，"
-                        + "检查点=Redis(支持 interrupt/resume)，系统提示词解析器={}",
+        log.info("[Agent编排配置] 创建 AgentOrchestrationService，默认模型={}，会话记忆=Redis持久化，"
+                        + "检查点=Redis(支持 interrupt/resume)，系统提示词解析器={}，模型解析器={}",
                 streamingChatModel == null ? "unknown" : streamingChatModel.getClass().getSimpleName(),
-                promptResolver.getClass().getSimpleName());
+                promptResolver.getClass().getSimpleName(),
+                modelResolver.getClass().getSimpleName());
 
         return new AgentOrchestrationService(streamingChatModel, chatMemoryProvider, toolRouter,
-                promptResolver, checkpointSaver, graphStateSerializer, cancellationRegistry, agentExecutor);
+                promptResolver, checkpointSaver, graphStateSerializer, cancellationRegistry, agentExecutor,
+                modelResolver);
     }
 
     /**

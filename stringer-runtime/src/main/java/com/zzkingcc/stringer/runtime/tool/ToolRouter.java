@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.runtime.tool;
 
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.metrics.MetricsRegistry;
 import com.zzkingcc.stringer.runtime.usage.TokenUsageRecorder;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -10,6 +11,7 @@ import dev.langchain4j.service.tool.ToolExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -23,9 +25,17 @@ public class ToolRouter {
     private static final Logger log = LoggerFactory.getLogger(ToolRouter.class);
 
     private final ToolRegistry registry;
+    /** 域注册表：内置与人工创建的域在这里；工具声明派生的域在 registry 里 */
+    private final DomainRegistry domainRegistry;
 
+    /** 只接工具注册表时，域注册表用缺省实例（仅含兜底域）—— 供单元测试与最小装配使用 */
     public ToolRouter(ToolRegistry registry) {
+        this(registry, new DomainRegistry());
+    }
+
+    public ToolRouter(ToolRegistry registry, DomainRegistry domainRegistry) {
         this.registry = registry;
+        this.domainRegistry = domainRegistry == null ? new DomainRegistry() : domainRegistry;
         log.info("[工具路由] 初始化完成，注册表内共 {} 个工具，其中 {} 个需人工授权: {}",
                 registry.size(), registry.toolsRequiringApproval().size(),
                 registry.toolsRequiringApproval());
@@ -65,25 +75,29 @@ public class ToolRouter {
     }
 
     /**
-     * 注册表里出现过的全部域 —— 含"被声明过、此刻已无工具"的域（见
-     * {@link ToolRegistry#knownProfiles()}）；域不随工具断开而消失，仍无独立的增删改入口。
+     * 全部已知域 —— 注册表登记的内置与人工域 ∪ 工具声明派生的域（含"被声明过、此刻已无工具"的域）。
      */
     public Set<String> getKnownProfiles() {
-        return registry.knownProfiles();
+        Set<String> all = new LinkedHashSet<>(domainRegistry.ids());
+        all.addAll(registry.knownProfiles());
+        return Set.copyOf(all);
     }
 
     /**
-     * 该域是否被至少一个工具声明过（字面含义，供管控台展示与排障）。
+     * 该域是否已知（任一处存在即为真）。
      */
     public boolean hasProfile(String profile) {
-        return registry.hasProfile(profile);
+        return domainRegistry.contains(profile) || registry.hasProfile(profile);
     }
 
     /**
-     * 该域是否可以被使用 —— 入口层 fail-fast 的判据。
+     * 域是否可以被使用（入口层 fail-fast 的判据）。
+     *
+     * <p>域可来自两处：注册表里内置或人工登记的域，或工具声明派生的域。任一处存在即放行 ——
+     * 因此"先把域建出来、再让应用启动"与"工具声明即产生域"两种用法都成立。</p>
      */
     public boolean acceptsProfile(String profile) {
-        return registry.acceptsProfile(profile);
+        return domainRegistry.contains(profile) || registry.acceptsProfile(profile);
     }
 
     /**

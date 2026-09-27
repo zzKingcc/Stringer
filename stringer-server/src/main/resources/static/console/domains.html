@@ -103,7 +103,9 @@
             <h2>域空间</h2>
             <p>
                 按<b>域</b>查看注册表里实际注册到的内容：这个域能用到哪些工具、分别由谁提供、
-                哪些需要人工确认、有没有配提示词。<b>只读呈现</b>——编辑提示词请到「提示词设定」。
+                哪些需要人工确认、有没有配提示词。域有三种来源：<b>内置</b>（兜底域 <span class="mono">default</span>，
+                声明留空与未指定域的调用都落到它，不可删除）、<b>人工创建</b>（可删除）、
+                <b>工具派生</b>（由工具的域声明产生）。提示词编辑在「提示词设定」。
             </p>
         </div>
 
@@ -111,17 +113,17 @@
             <div class="stat">
                 <div class="k">域数量</div>
                 <div class="v" id="statDomains">—</div>
-                <div class="note" id="noteDomains">由工具声明派生，非预定义</div>
+                <div class="note" id="noteDomains">内置 + 人工创建 + 工具派生</div>
             </div>
             <div class="stat">
                 <div class="k">已注册工具</div>
                 <div class="v" id="statTools">—</div>
-                <div class="note" id="noteTools">含全域可见工具</div>
+                <div class="note" id="noteTools">含通配声明的工具</div>
             </div>
             <div class="stat">
                 <div class="k">全域可见工具</div>
                 <div class="v" id="statGlobal">—</div>
-                <div class="note">未声明 profiles，每个域都能用</div>
+                <div class="note">显式声明了通配 "*"，每个域都能用</div>
             </div>
             <div class="stat">
                 <div class="k">需人工确认</div>
@@ -145,6 +147,10 @@
                 </select>
                 <input type="search" id="query" placeholder="搜索工具名 / 描述">
                 <span class="spacer"></span>
+                <span class="tb-label">新建域</span>
+                <input type="text" id="newDomain" placeholder="域标识，如 customer-service"
+                       style="width:210px; font-family:ui-monospace,Consolas,monospace;">
+                <button class="ghost" id="createDomainBtn">创建</button>
                 <select id="pageSize" title="每页条数">
                     <option value="8" selected>每页 8 条</option>
                     <option value="16">每页 16 条</option>
@@ -152,6 +158,11 @@
                     <option value="0">全部</option>
                 </select>
                 <button class="ghost" id="refreshBtn">重新读取</button>
+            </div>
+            <div class="hint" style="margin-top:10px;">
+                人工创建的域会落盘 <span class="mono" id="domainFileHint">config/domains.json</span>，重启仍在；
+                它<b>不必等工具声明</b>——先建域、再让应用绑定它启动，这正是调用侧启动校验能通过的前提。
+                内置域与派生域不可删除（前者是兜底，后者归工具）。
             </div>
         </div>
 
@@ -184,9 +195,9 @@
             </div>
             <div class="pager below" id="toolsPager" style="display:none;"></div>
             <div class="hint">
-                「所属域」写法：<span class="tag public">全域</span> ＝ 该工具<b>未声明 profiles</b>，对每个域都可见；
-                其余为工具显式声明的域（同名域在多个工具上声明即合并，平台不预定义域）。
-                域<b>写下即存在</b>：之后就算声明它的工具被断开，域也不会消失，只是该域下暂时没有工具。
+                「所属域」写法：<span class="tag public">全域</span> ＝ 该工具<b>显式声明了通配 "*"</b>，对每个域都可见；
+                显式域名 ＝ 只在这些域可用；<b>留空 ＝ 只属于兜底域 <span class="mono">default</span></b>（不再等于全域可见）。
+                域是<b>授权边界</b>：域侧只能在声明范围内决定用不用，不能把工具拉进未授权的域。
             </div>
         </div>
 
@@ -202,6 +213,7 @@
                     <thead>
                     <tr>
                         <th>域</th>
+                        <th>来源</th>
                         <th>工具</th>
                         <th>专属</th>
                         <th>提供者</th>
@@ -212,14 +224,15 @@
                     </tr>
                     </thead>
                     <tbody id="domainBody">
-                    <tr><td colspan="8" class="perm-none">加载中…</td></tr>
+                    <tr><td colspan="9" class="perm-none">加载中…</td></tr>
                     </tbody>
                 </table>
             </div>
             <div class="pager below" id="domainsPager" style="display:none;"></div>
             <div class="hint">
-                「工具」＝该域真实可见的工具集（含全域可见工具），故<b>通常大于</b>「专属」数。
-                点「查看」或从上方「选择域」菜单选中某个域，可看它注册内容的完整明细。
+                「工具」＝该域真实可见的工具集（含通配声明的工具），故<b>通常大于</b>「专属」数。
+                点「查看」或从上方「选择域」菜单选中某个域，可看它注册内容的完整明细；
+                「删除」只对<b>人工创建</b>的域开放（内置是兜底、派生域归工具）。
             </div>
         </div>
 
@@ -264,9 +277,22 @@
         return domains.map(function (d) { return '<span class="tag perm">' + esc(d) + '</span>'; }).join('');
     }
 
+    /* 域来源标签：内置（兜底，不可删）/ 人工创建（可删）/ 工具派生（归工具） */
+    function sourceTag(d) {
+        var s = String((d && d.source) || '').toUpperCase();
+        if (s === 'BUILTIN') {
+            return '<span class="tag approval" title="内置兜底域：声明留空与未指定域的调用都落到它，不可删除">内置</span>';
+        }
+        if (s === 'MANUAL') {
+            return '<span class="tag perm" title="人工创建，落盘保存，可删除">人工创建</span>';
+        }
+        return '<span class="tag" title="由工具的域声明派生：声明它的工具被断开后，域仍在，只是暂时没有工具">工具派生</span>';
+    }
+
     /* ===== 合并工具总表 =====
-       数据全部来自服务端：域名清单来自 domains[].tools（服务端按 ToolRegistry 的同一过滤条件算出来的），
-       哪些是"全域可见"由 globalTools 判定。前端**不自己按 profiles 重算可见性**——
+       数据全部来自服务端：域名清单来自 domains[].tools（服务端按授权域判定的同一口径算出来的），
+       哪些是"全域可见"由 globalTools 判定（＝显式声明了通配 "*" 的工具）。
+       前端**不自己按域声明重算可见性**——
        那样就多了一个判据副本，一旦不一致就会出现"页面显示的可见工具 ≠ 模型实际拿到的工具"。 */
     function buildTools() {
         var globalNames = {};
@@ -311,12 +337,12 @@
 
         set('statDomains', domainCount, domainCount ? 'ok' : 'warn');
         document.getElementById('noteDomains').textContent = domainCount
-            ? '由工具声明派生，非预定义'
-            : '未注册：没有工具声明 profiles';
+            ? '内置 ' + num(s.builtinCount) + ' · 人工 ' + num(s.manualCount) + ' · 派生 ' + num(s.derivedCount)
+            : '未注册：没有任何域';
 
         set('statTools', toolCount, toolCount ? 'ok' : 'warn');
         document.getElementById('noteTools').textContent = toolCount
-            ? '含全域可见工具'
+            ? '含通配声明的工具'
             : '未注册：没有扫描到任何工具提供者';
 
         set('statGlobal', num(s.globalToolCount), '');
@@ -385,8 +411,8 @@
         if (!rows.length) {
             tbody.innerHTML = '<tr><td colspan="7" class="perm-none">'
                 + (QUERY ? '没有工具匹配当前关键词。'
-                         : '<b>无</b> —— 未注册任何工具（实现 StringerToolProvider 并标注 @StringerTool，'
-                           + '服务端启动扫描后即出现在这里；工具不落盘，注册只发生在启动那一刻）')
+                         : '<b>无</b> —— 未注册任何工具（任意 Spring Bean 的方法上标注 @StringerTool 即可；'
+                           + '服务端启动扫描后出现在这里。工具注册不落盘，只发生在启动那一刻）')
                 + '</td></tr>';
             renderPager('toolsPager', 'tools', 0, 1);
             return;
@@ -426,10 +452,11 @@
         document.getElementById('domainsNote').textContent = rows.length + ' 个域';
 
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="perm-none">'
+            tbody.innerHTML = '<tr><td colspan="9" class="perm-none">'
                 + (QUERY ? '没有域匹配当前关键词。'
-                         : '<b>无</b> —— 未注册任何域（没有任何工具声明 profiles；'
-                           + '域由工具注解声明即创建，不预定义、不落盘）')
+                         : '<b>无</b> —— 当前没有任何域。域有三个来源：内置兜底域 '
+                           + '<span class="mono">default</span>（正常装配时必定存在）、管控台人工创建、'
+                           + '工具声明派生；连 default 都没有说明服务端未正常装配域注册表')
                 + '</td></tr>';
             renderPager('domainsPager', 'domains', 0, 1);
             return;
@@ -447,6 +474,7 @@
                 : '<span class="tag write">缺提示词</span>';
             return '<tr>'
                 + '<td><b class="mono">' + esc(d.name) + '</b></td>'
+                + '<td>' + sourceTag(d) + '</td>'
                 + '<td>' + num(d.toolCount) + '</td>'
                 + '<td>' + num(d.exclusiveToolCount) + '</td>'
                 + '<td>' + num(d.providerCount) + '</td>'
@@ -455,13 +483,20 @@
                     : '<span class="perm-none">-</span>') + '</td>'
                 + '<td class="muted">' + (side.join(' / ') || '-') + '</td>'
                 + '<td>' + prompt + '</td>'
-                + '<td><button class="ghost" data-open="' + esc(d.name) + '">查看</button></td>'
+                + '<td><button class="ghost" data-open="' + esc(d.name) + '">查看</button>'
+                + (d.deletable
+                    ? ' <button class="ghost" data-del="' + esc(d.name) + '">删除</button>'
+                    : '')
+                + '</td>'
                 + '</tr>';
         }).join('');
 
         renderPager('domainsPager', 'domains', rows.length, paged.pages);
         tbody.querySelectorAll('button[data-open]').forEach(function (b) {
             b.addEventListener('click', function () { openDomain(b.getAttribute('data-open')); });
+        });
+        tbody.querySelectorAll('button[data-del]').forEach(function (b) {
+            b.addEventListener('click', function () { deleteDomain(b.getAttribute('data-del')); });
         });
     }
 
@@ -473,9 +508,9 @@
         var d = (DATA.domains || []).filter(function (x) { return x.name === MODE; })[0];
         if (!d) {
             wrap.innerHTML = '<div class="card"><div class="empty">'
-                + '当前没有任何工具声明域 <b class="mono">' + esc(MODE) + '</b>'
-                + '（域本身仍存在，可能提供它的工具正被断开）。'
-                + '请从上方「选择域」菜单重新选择。</div></div>';
+                + '域 <b class="mono">' + esc(MODE) + '</b> 不在当前域清单中'
+                + '（可能刚被删除，或列表尚未刷新）。请点「重新读取」，或从上方「选择域」菜单重选。'
+                + '</div></div>';
             return;
         }
 
@@ -511,7 +546,11 @@
             + '<div class="card-head">'
             +   DOM_ICON
             +   '<h2>' + esc(d.name) + '</h2>'
+            +   sourceTag(d)
             +   '<span class="spacer"></span>'
+            +   (d.deletable
+                    ? '<button class="ghost" id="delDomainBtn" style="margin-right:10px;">删除该域</button>'
+                    : '')
             +   '<span class="chips">'
             +     '<span class="chip">工具 <b>' + num(d.toolCount) + '</b></span>'
             +     '<span class="chip">专属 <b>' + num(d.exclusiveToolCount) + '</b></span>'
@@ -563,9 +602,9 @@
             // 一个工具都没有 = 注册表未注册，不是"筛选筛没了"，所以单独说一句
             if (!toolCount) {
                 el.className = 'view-note dim';
-                el.innerHTML = '当前视图：<b>全部域</b> —— <b>注册表未注册</b>：'
-                    + '没有扫描到任何 <code>@StringerTool</code> 工具提供者，因此也没有派生任何域。'
-                    + '工具注册与域都<b>不落盘</b>（启动时扫描注解得到），所以这里没有"清空"动作可做。';
+                el.innerHTML = '当前视图：<b>全部域</b> —— <b>没有工具</b>：'
+                    + '没有扫描到任何 <code>@StringerTool</code> 方法，因此也没有派生任何域。'
+                    + '工具注册<b>不落盘</b>（启动时扫描注解得到）；域仍可由管控台人工创建。';
                 return;
             }
             el.className = 'view-note';
@@ -573,7 +612,7 @@
                 + ' —— 上方为工具总表，下方为域清单。';
         } else if (MODE === GLOBAL) {
             el.className = 'view-note';
-            el.innerHTML = '当前视图：<b>全域可见</b>（未声明 profiles 的工具）'
+            el.innerHTML = '当前视图：<b>全域可见</b>（显式声明了通配 "*" 的工具）'
                 + ' —— 这些工具在每个域里都可见，不属于任何具体域。';
         } else {
             el.className = 'view-note';
@@ -610,6 +649,49 @@
         renderDomainsCard();
         renderDetail();
         bindPager();
+        bindDomainActions();
+    }
+
+    /* 域详情里的删除按钮（只对可删域渲染出来，故存在即绑定） */
+    function bindDomainActions() {
+        var btn = document.getElementById('delDomainBtn');
+        if (btn) {
+            btn.addEventListener('click', function () { deleteDomain(MODE); });
+        }
+    }
+
+    /* ===== 域的创建与删除 =====
+       内置域与派生域的服务端会拒绝删除，因此这里只在 deletable 时给出按钮，
+       不做"前端判断 + 后端再拦一次"的双份逻辑。 */
+    function createDomain() {
+        var input = document.getElementById('newDomain');
+        var id = (input.value || '').trim();
+        if (!id) {
+            alert('请先填写域标识');
+            input.focus();
+            return;
+        }
+        Console.jsonRequest('/admin/domains', 'POST', { id: id })
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '创建失败'); }
+                input.value = '';
+                load();
+            })
+            .catch(function (e) { alert('创建失败：' + e.message); });
+    }
+
+    function deleteDomain(id) {
+        var ok = confirm('确认删除域 ' + id + '？\n\n'
+            + '· 绑定该域的调用方会在启动校验或首次调用时报「域不存在」\n'
+            + '· 该域的提示词配置不会被自动清理（会变成「孤儿提示词」）');
+        if (!ok) { return; }
+        Console.jsonRequest('/admin/domains/' + encodeURIComponent(id), 'DELETE')
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '删除失败'); }
+                if (MODE === id) { MODE = ''; }
+                load();
+            })
+            .catch(function (e) { alert('删除失败：' + e.message); });
     }
 
     function bindPager() {
@@ -650,7 +732,8 @@
             if (orphans.length) {
                 box.style.display = 'block';
                 box.innerHTML = '<b>孤儿提示词条目：</b>' + orphans.map(esc).join('、')
-                    + '<br>这些域从未被任何工具声明过，配置留着但不会生效，也不会被自动清理。';
+                    + '<br>这些域当前不存在（既不是工具派生的，也不是人工创建的），配置留着但不会生效，'
+                    + '也不会被自动清理。';
             } else {
                 box.style.display = 'none';
             }
@@ -688,6 +771,11 @@
     });
 
     document.getElementById('refreshBtn').addEventListener('click', load);
+
+    document.getElementById('createDomainBtn').addEventListener('click', createDomain);
+    document.getElementById('newDomain').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { createDomain(); }
+    });
 
     Console.renderSidebar('domains');
     /* 走 Console.ready：先确认登录态再加载，未登录直接跳登录页，

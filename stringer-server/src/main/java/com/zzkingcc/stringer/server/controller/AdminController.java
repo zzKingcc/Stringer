@@ -1,7 +1,9 @@
 package com.zzkingcc.stringer.server.controller;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.InstanceLifecycle;
 import com.zzkingcc.stringer.runtime.tool.InstanceRegistry;
 import com.zzkingcc.stringer.runtime.tool.InstanceSession;
@@ -83,6 +85,8 @@ public class AdminController {
     private final ProfileSettingsStore profileSettingsStore;
     private final PromptProperties promptProperties;
     private final ToolRegistry toolRegistry;
+    /** 域注册表：内置域与人工创建的域在这里；工具声明派生的域在 ToolRegistry 里 */
+    private final DomainRegistry domainRegistry;
     private final InstanceRegistry instanceRegistry;
     private final InstanceLifecycle instanceLifecycle;
     private final KnowledgeBaseService knowledgeBaseService;
@@ -104,7 +108,8 @@ public class AdminController {
                            ToolRegistry toolRegistry,
                            InstanceRegistry instanceRegistry,
                            InstanceLifecycle instanceLifecycle,
-                           KnowledgeBaseService knowledgeBaseService) {
+                           KnowledgeBaseService knowledgeBaseService,
+                           DomainRegistry domainRegistry) {
         this.toolRouter = toolRouter;
         this.retrievalConfiguration = retrievalConfiguration;
         this.esClient = esClient;
@@ -123,6 +128,7 @@ public class AdminController {
         this.instanceRegistry = instanceRegistry;
         this.instanceLifecycle = instanceLifecycle;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.domainRegistry = domainRegistry;
     }
 
     /**
@@ -517,9 +523,10 @@ public class AdminController {
         ProfileSystemPromptResolver resolver =
                 new ProfileSystemPromptResolver(profileSettingsStore, promptProperties);
 
-        // 未声明 profiles = 全域可见，它们在每个域里都会出现，单独统计出来才看得出"域的实际增量"
+        /* 全域可见＝显式声明了通配 "*" 的工具（它们在每个域里都会出现）。
+           注意与「未声明域」区分：未声明＝只属于兜底域 default，不再等于全域可见。 */
         List<ToolDescriptor> globalTools = all.stream()
-                .filter(d -> d.profiles() == null || d.profiles().isEmpty())
+                .filter(d -> d.profiles() != null && d.profiles().contains(Domains.ANY))
                 .toList();
 
         int approvalTotal = 0;
@@ -561,6 +568,11 @@ public class AdminController {
 
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("name", domain);
+            // 来源决定这个域能不能删：内置是兜底、派生归工具，只有人工创建的域可删
+            String source = domainSource(domain);
+            d.put("source", source);
+            d.put("sourceLabel", sourceLabel(source));
+            d.put("deletable", DomainRegistry.Source.MANUAL.name().equals(source));
             d.put("toolCount", tools.size());
             d.put("exclusiveToolCount", tools.stream()
                     .filter(t -> Boolean.TRUE.equals(t.get("exclusive"))).count());
@@ -580,6 +592,11 @@ public class AdminController {
 
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("domainCount", known.size());
+        stats.put("builtinCount", known.stream().filter(domainRegistry::isBuiltin).count());
+        stats.put("manualCount", known.stream()
+                .filter(domain -> DomainRegistry.Source.MANUAL.name().equals(domainSource(domain))).count());
+        stats.put("derivedCount", known.stream()
+                .filter(domain -> "DERIVED".equals(domainSource(domain))).count());
         stats.put("toolCount", all.size());
         stats.put("globalToolCount", globalTools.size());
         stats.put("approvalToolCount", approvalTotal);
@@ -600,6 +617,30 @@ public class AdminController {
         body.put("orphanPrompts", orphans);
         body.put("settingsFile", profileSettingsStore.filePath());
         return body;
+    }
+
+    /**
+     * 域来源：内置（兜底域）/ 人工创建 / 工具声明派生。
+     *
+     * <p>两处来源合并判断：{@code DomainRegistry} 管内置与人工，派生域归 {@code ToolRegistry}。</p>
+     */
+    private String domainSource(String domain) {
+        if (domainRegistry.isBuiltin(domain)) {
+            return DomainRegistry.Source.BUILTIN.name();
+        }
+        if (domainRegistry.contains(domain)) {
+            return DomainRegistry.Source.MANUAL.name();
+        }
+        return "DERIVED";
+    }
+
+    /** 来源的中文标签（给管控台直接用，避免前端各写一份映射） */
+    private static String sourceLabel(String source) {
+        return switch (source) {
+            case "BUILTIN" -> "内置";
+            case "MANUAL" -> "人工创建";
+            default -> "工具派生";
+        };
     }
 
     /**
@@ -1043,7 +1084,8 @@ public class AdminController {
     // ===== 提示词设定 =====
     //
     // 提示词 = 公共基线 + 域差异，落盘 config/profiles.json（控制台 > yaml）。
-    // 域的【存在性】不在这里维护——它由工具注解的 profiles 声明派生，ToolRegistry 是唯一事实来源。
+    // 域的【存在性】有两个来源：DomainRegistry（内置 default 与人工创建的域）与工具声明的派生域
+    // （ToolRegistry）；本页只读不改域本身，增删域在「域空间」。
 
     /**
      * 读取提示词设定（公共基线 + 各域差异）。

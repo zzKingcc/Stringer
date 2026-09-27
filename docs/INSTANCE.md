@@ -389,13 +389,13 @@ public class OrderTools implements ToolInstanceContributor {
     @Override
     public void contribute(ToolRegistrar registrar) {
         registrar
-            // ① 全域可见：不写 withProfiles
+            // ① 全域可用：显式声明通配 "*"（不声明 ＝ 只属于兜底域 default）
             .register(
                 ToolSpec.of("queryWeather", "查询某城市天气，用户问天气时调用",
                         ToolSpec.schema(
                             Map.of("city", Map.of("type","string","description","城市名，如 杭州")),
                             "city"))
-                    .withCategory("通用").withSideEffect("READ"),
+                    .withCategory("通用").withSideEffect("READ").withDomains("*"),
                 this::queryWeather)
 
             // ② 域专属 + 有副作用 ⇒ 需人工二次确认
@@ -405,7 +405,7 @@ public class OrderTools implements ToolInstanceContributor {
                             Map.of("orderNo", Map.of("type","string","description","订单号"),
                                    "reason",  Map.of("type","string","description","关闭原因")),
                             "orderNo", "reason"))
-                    .withCategory("订单").withProfiles("admin")
+                    .withCategory("订单").withDomains("admin")
                     .withSideEffect("WRITE")
                     .withApproval("ALWAYS", "关单不可逆，需人工确认"),
                 this::closeOrder);
@@ -431,7 +431,7 @@ public class OrderTools implements ToolInstanceContributor {
 | `description` | `of(name, desc)` | 给 LLM 的用途说明（写清「何时调用/何时不要调用」比参数描述更重要） |
 | `category` | `withCategory` | 管理页分类，**不参与任何过滤** |
 | `version` | 默认 `1.0.0` | 语义化版本 |
-| `profiles` | `withProfiles(..)` | 所属域。**留空＝所有域可见** |
+| `domains` | `withDomains(..)` | 可用域（授权边界）。**留空＝只属于兜底域 `default`**；`"*"`＝任何域可用。旧名 `withProfiles` 已废弃 |
 | `sideEffect` | `withSideEffect` | `READ` / `WRITE` / `DESTRUCTIVE` |
 | `idempotent` | 默认 `true` | 是否幂等（当前只登记展示，不参与重试判定） |
 | `toModel` | 默认 `true` | 结果是否回填 LLM（当前只登记展示） |
@@ -475,7 +475,7 @@ public class LocalTools {                                  // 任意 Spring Bean
     @StringerTool(
         name = "queryOrder",
         description = "按订单号查询订单状态",
-        profiles = {"customer"},                 // 域；留空＝全域可见
+        domains = {"customer"},                  // 可用域；留空＝只属于兜底域 default
         sideEffect = SideEffect.READ)
     public String queryOrder(@ToolParam(name="orderNo", description="订单号", required=true) String orderNo) {
         return "...";
@@ -493,7 +493,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 | `@StringerTool.name` | 工具名，留空取方法名，全局唯一 |
 | `@StringerTool.description` | 给 LLM 的用途说明（必填） |
 | `@StringerTool.category` | 管理页分类（不参与过滤） |
-| `@StringerTool.profiles` | 所属域，留空＝全域可见 |
+| `@StringerTool.domains` | 可用域（授权边界），留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用。旧名 `profiles` 仍兼容但已废弃 |
 | `@StringerTool.sideEffect` | `READ`/`WRITE`/`DESTRUCTIVE` |
 | `@StringerTool.idempotent` | 是否幂等（默认 `true`） |
 | `@StringerTool.toModel` | 结果是否回填 LLM（默认 `true`） |
@@ -508,7 +508,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 域是「一次对话的场景」，同时绑定**工具集 + 提示词**。
 
-- 工具可见性**唯一维度**就是域：`@StringerTool.profiles` 或 `ToolSpec.withProfiles` 声明了才会出现在该域的模型视野里。
+- 工具可见性**唯一维度**就是域：`@StringerTool.domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里（旧名 `profiles` / `withProfiles` 仍兼容但已废弃）。
 - 域由工具声明**派生**：写下 `profiles="customer"` 即创建了 `customer` 域，不用先去管控台建域。工具全下线后域会消失（配置里可能留下孤儿条目，不自动清理）。
 - `profile` 在每次请求**必须显式传入**且**必须真实存在**（有工具声明它），否则报 `10004`——绝不静默回退成全量工具。
 - 越权判断（角色→域映射）在宿主侧：平台信任调用方声明的域，只校验「域是否存在」。

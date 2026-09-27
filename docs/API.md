@@ -81,7 +81,7 @@
 | --- | --- | --- | --- |
 | `sessionId` | String | 是 | 会话唯一键 |
 | `message` | String | 是 | 用户消息 |
-| `profile` | String | 是 | 域；为空或该域不存在会被拒绝 |
+| `profile` | String | 否 | 域；**为空时回落兜底域 `default`**；该域不存在（10004）会被拒绝 |
 | `tenantId` | String | 否 | 审计字段，写入日志；不承担隔离职责 |
 | `userId` | String | 否 | 同上 |
 | `attributes` | Map | 否 | 附加属性 |
@@ -96,7 +96,7 @@
 | --- | --- | --- | --- |
 | `sessionId` | query | 是 | 会话键 |
 | `approved` | query | 是 | boolean，是否批准待执行动作 |
-| — | body | 是 | `CallerContext`，至少含 `profile`（必填）；可选 `tenantId`、`userId` |
+| — | body | 是 | `CallerContext`，建议显式携带 `profile`；为空按兜底域 `default` 处理（与中断域不一致会被拒 30002）；可选 `tenantId`、`userId` |
 
 约束：`profile` 必须与中断时一致，否则拒绝。响应同为 `text/event-stream`。
 
@@ -210,7 +210,7 @@
 | GET | `/admin/profiles` | — | `base`、`profiles`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
 | POST | `/admin/profiles` | body `ProfileSettings`（可空） | `success`、`message`、`settingsFile` |
 
-`domains` 与 `profiles` 是同一事实的两个视图：域由工具声明派生，接口不提供创建/删除域的操作。域一经被某个工具声明过就不再消失（工具被断开时域仍在，只是该域下暂时没有工具）；`10004` 只在"从未被声明过的域"上出现。
+`domains` 与 `profiles` 是同一事实的两个视图。域有**三个来源**：**内置**（兜底域 `default`，启动即存在、不可删除）、**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具派生**（由工具的域声明产生，生命周期归工具）。因此「先建域、再让应用绑定它启动」是成立的；`10004` 只在「既非内置、又非人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable`。
 
 ### 4.4 在线实例
 
@@ -275,7 +275,7 @@
 | 10006 | `AUTH_ALREADY_INITIALIZED` | 账号已存在，初始化入口已关闭 | 否 | 409 |
 | 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取 | 否 | 503 |
 | 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份 | 否 | 400 |
-| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域 | 否 | 400 |
+| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域。**当前实现中域为空会回落兜底域 `default`**，该码仅在兜底域缺失时出现（受保护的 `default` 不会缺失，故实际不触发；保留为理论码） | 否 | 400 |
 | 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | 是 | 429 |
 | 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试 | 是 | 429 |
 | 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试 | 是 | 503 |
@@ -315,7 +315,7 @@
 | 90004 | `STORAGE_UNAVAILABLE` | 存储服务不可用 | 是 | 503 |
 | 90005 | `DEPENDENCY_NOT_CONFIGURED` | 服务依赖尚未配置 | 否 | 503 |
 
-区分要点：`90004`＝已配置但连不上（ERROR，可重试）；`90005`＝尚未配置（WARN，不可重试，提示去管控台补填）。`10008`/`10009`/`10004` 分别表示缺整份身份、缺域字段、域不存在，处置不同，不可合并。
+区分要点：`90004`＝已配置但连不上（ERROR，可重试）；`90005`＝尚未配置（WARN，不可重试，提示去管控台补填）。`10008`/`10009`/`10004` 分别表示缺整份身份、缺域字段（**已由兜底域 `default` 兜住，实际不触发**）、域不存在 —— 处置不同，不可合并。
 
 ---
 

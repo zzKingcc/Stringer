@@ -50,8 +50,8 @@
             <h2>提示词设定</h2>
             <p>
                 系统提示词 = <b>公共基线 + 域差异</b>。域差异可以留空（留空就只用基线）。
-                域本身<b>由工具声明派生</b>，本页只能编辑提示词，<b>不提供"新建域"</b>；
-                想先看每个域实际注册了什么，去<a href="domains.html">域空间</a>。
+                域有三种来源：内置兜底域 <span class="mono">default</span>、管控台<b>人工创建</b>、工具声明派生；
+                本页只编辑提示词，新建与删除域在<a href="domains.html">域空间</a>。
             </p>
         </div>
 
@@ -94,7 +94,8 @@
                 </table>
             </div>
             <div class="hint">
-                可见工具 = 该域真实能用的工具集（未声明 profiles 的工具对所有域可见，故也会出现在这里）。
+                可见工具 = 该域真实能用的工具集（显式声明通配 <span class="mono">*</span> 的工具对所有域可见；
+                <b>声明留空的工具只属于兜底域 <span class="mono">default</span></b>，不会出现在其他域里）。
                 <b>提示词不决定工具可见性</b>：就算某个域一个字都没配，它对工具的限制照样生效，缺提示词只是体验降级。
             </div>
         </div>
@@ -191,7 +192,8 @@
         var tbody = document.getElementById('domainBody');
         if (!domains.length) {
             tbody.innerHTML = '<tr><td colspan="6" class="perm-none">'
-                + '注册表里没有任何域：所有工具都未声明 profiles（等于全域可见）。</td></tr>';
+                + '当前没有任何域。域来自三处：内置兜底域 default（正常装配时必定存在）、'
+                + '管控台人工创建、工具声明派生；若连 default 都没有，说明服务端未正常装配域注册表。</td></tr>';
             return;
         }
         tbody.innerHTML = domains.map(function (d) {

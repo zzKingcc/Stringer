@@ -141,7 +141,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 | `stringer.memory.ttl` | `72h` | 记忆过期；比 `checkpoint-ttl` 长一档 |
 | `stringer.memory.checkpoint-ttl` | `24h` | 断点（待审批会话）保留时长 |
 | `stringer.agent.core-pool-size` / `max-pool-size` / `queue-capacity` | `8` / `32` / `200` | 编排线程池（阻塞式执行，不可复用公共池） |
-| `stringer.instance.timeout-seconds` | `30` | 实例心跳判死窗（≈心跳周期×3） |
+| `stringer.instance.timeout-seconds` | `35` | 实例心跳判死窗（≈心跳周期×7） |
 | `stringer.instance.invoke-timeout-ms` | `30000` | 单次远程工具调用超时 |
 | `stringer.instance.invoke-max-attempts` | `2` | 单次调用最多试几个副本（仅传输层失败时换副本） |
 | `stringer.retrieval.*` | — | 混合检索（向量+关键词权重、top-n 等） |

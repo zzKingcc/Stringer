@@ -246,7 +246,7 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 
 **解除熔断的巧思**：restore 时把 digest 换成哨兵值 `resync:{nanoTime}`，与任何真实摘要都不相等 → 下次心跳必然走慢路径，用**实例自己带来的** manifest 重建副本。**服务端因此不需要缓存任何 manifest。**
 
-**判死由定时器驱动，不做惰性探活** —— 惰性探活会让"没人调用"的实例永远不被摘除。心跳 10s、判死 30s（≈心跳×3），单次丢包不摘实例；扫描间隔 5s，与流量解耦。
+**判死由定时器驱动，不做惰性探活** —— 惰性探活会让"没人调用"的实例永远不被摘除。心跳 5s、判死 35s（≈心跳×7），单次丢包不摘实例；扫描间隔 5s，与流量解耦，最晚约 40s 发现掉线。
 
 **状态标记与副本清理必须在同一把实例锁内一次完成**；**清理失败要回滚在线状态** —— 冻结在 `DRAINING` 的实例会被"只扫 ONLINE"的扫描器永久忽略，等于清理被静默放弃。
 
@@ -934,7 +934,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 `newFixedThreadPool` 队列无界、`newCachedThreadPool` 线程无界，都是 OOM 路径，且拒绝策略不可控。统一显式 `ThreadPoolExecutor` + 有界队列 + `AbortPolicy`，并把"拒绝"翻译成明确业务语义（`SYSTEM_BUSY 20002` / 知识库 `KNOWLEDGE_UPLOAD_REJECTED`）。
 
 **Q9：工具实例掉线后模型还能看到它的工具吗？**
-不能。判死扫描（5s 一次，30s 超时）摘除副本；`isToolVisible` 是 fail-closed，工具不在注册表就不可见；`exists()` 区分"域外"（`10001`）与"已下线"（`80001`）。实例下线**不截断会话** —— 已在跑的那一轮里，那个工具表现为"工具不存在"文案，而不是会话失败。
+不能。判死扫描（5s 一次，35s 超时）摘除副本；`isToolVisible` 是 fail-closed，工具不在注册表就不可见；`exists()` 区分"域外"（`10001`）与"已下线"（`80001`）。实例下线**不截断会话** —— 已在跑的那一轮里，那个工具表现为"工具不存在"文案，而不是会话失败。
 
 **Q10：怎么做到"改密码即让所有旧凭证失效"？**
 签名密钥不是固定主密钥，而是 `HMAC(主密钥, passwordHash)`。密码一变，`passwordHash` 变，派生密钥变，所有旧签名的 HMAC 都对不上。不需要维护吊销列表，也不需要给凭证加 TTL。

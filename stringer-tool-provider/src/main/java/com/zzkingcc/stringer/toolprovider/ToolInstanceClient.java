@@ -210,7 +210,7 @@ public class ToolInstanceClient implements ToolRegistrar {
         Set<String> accepted = new TreeSet<>();
         parsed.path("toolNames").forEach(node -> accepted.add(node.asText("")));
         if (!accepted.equals(lastAccepted)) {
-            // 只在"受理结果变化"时打 INFO：心跳每 10 秒一次，每次都打会把日志刷成噪音
+            // 只在"受理结果变化"时打 INFO：心跳每 5 秒一次，每次都打会把日志刷成噪音
             log.info("[工具实例] {} 注册结果：服务端受理 {} 个工具 {}", config.instanceId(), accepted.size(), accepted);
             lastAccepted = accepted;
         } else {

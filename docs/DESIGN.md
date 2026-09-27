@@ -163,8 +163,8 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 | 参数 | 默认值 | 行为 |
 | --- | --- | --- |
-| 心跳周期 | 10s | 实例侧定时整包上报 |
-| `stringer.instance.timeout-seconds` | 30 | 超过该时长未收到心跳即判死 |
+| 心跳周期 | 5s | 实例侧定时整包上报 |
+| `stringer.instance.timeout-seconds` | 35 | 超过该时长未收到心跳即判死（≈心跳×7） |
 | `stringer.instance.scan-interval-ms` | 5000 | 服务端定时扫描判死，与流量解耦 |
 | `stringer.instance.force-offline-retention-seconds` | 3600 | 强制下线标记保留时长 |
 | `stringer.instance.invoke-timeout-ms` | 30000 | 单次反向调用超时 |
@@ -400,7 +400,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.memory.ttl` | Duration | 72h |
 | `stringer.memory.checkpoint-ttl` | Duration | 24h |
 | `stringer.agent.core-pool-size` / `max-pool-size` / `queue-capacity` / `keep-alive-seconds` | int / long | 8 / 32 / 200 / 60 |
-| `stringer.instance.timeout-seconds` | long | 30 |
+| `stringer.instance.timeout-seconds` | long | 35 |
 | `stringer.instance.force-offline-retention-seconds` | long | 3600 |
 | `stringer.instance.scan-interval-ms` | long | 5000 |
 | `stringer.instance.invoke-timeout-ms` | int | 30000 |

@@ -32,7 +32,7 @@ public class InstanceConfiguration {
     /**
      * 实例生命周期：超时摘除 + 强制下线。
      *
-     * @param timeoutSeconds               超时窗（秒），默认 30 = 心跳周期 10s × 3
+     * @param timeoutSeconds               超时窗（秒），默认 35 = 心跳周期 5s × 7
      * @param forceOfflineRetentionSeconds 强制下线拒绝标记的保留时长（秒），默认 1h
      */
     @Bean
@@ -40,7 +40,7 @@ public class InstanceConfiguration {
     public InstanceLifecycle instanceLifecycle(
             InstanceRegistry instanceRegistry,
             ToolRegistry toolRegistry,
-            @Value("${stringer.instance.timeout-seconds:30}") long timeoutSeconds,
+            @Value("${stringer.instance.timeout-seconds:35}") long timeoutSeconds,
             @Value("${stringer.instance.force-offline-retention-seconds:3600}") long forceOfflineRetentionSeconds) {
         log.info("[工具实例] 判死超时窗 {}s，强制下线拒绝标记保留 {}s，扫描间隔见 stringer.instance.scan-interval-ms",
                 timeoutSeconds, forceOfflineRetentionSeconds);

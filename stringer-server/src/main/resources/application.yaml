@@ -68,8 +68,8 @@ stringer:
 
   # 工具实例（动态注册 / 保活）
   instance:
-    # 超时窗（秒）
-    timeout-seconds: 30
+    # 超时窗（秒）：超过 35s 未收到心跳即判死；配合 5s 扫描间隔，最晚约 40s 发现实例掉线
+    timeout-seconds: 35
     # 强制下线拒绝标记的保留时长（秒）
     force-offline-retention-seconds: 3600
     # 超时扫描间隔（毫秒）

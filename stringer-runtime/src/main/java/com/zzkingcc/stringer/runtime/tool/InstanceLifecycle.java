@@ -16,7 +16,7 @@ public class InstanceLifecycle {
     private final InstanceRegistry instances;
     private final ToolRegistry tools;
 
-    /** 超时窗（毫秒）：超过它没收到心跳即判死。默认 30s = 心跳周期 10s × 3 */
+    /** 超时窗（毫秒）：超过它没收到心跳即判死。默认 35s = 心跳周期 5s × 7 */
     private final long timeoutMillis;
 
     /** 强制下线标记的保留时长（毫秒）：过期后移除表项，实例可重新注册（默认 1h） */

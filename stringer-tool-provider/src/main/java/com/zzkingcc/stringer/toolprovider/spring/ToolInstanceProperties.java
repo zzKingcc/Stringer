@@ -33,7 +33,7 @@ public class ToolInstanceProperties {
      */
     private String endpoint;
 
-    /** 心跳周期（秒）。服务端判死窗默认是它的 3 倍 */
+    /** 心跳周期（秒）。服务端判死窗默认 35s = 它的 7 倍 */
     private int heartbeatIntervalSeconds = ToolInstanceConfig.DEFAULT_HEARTBEAT_SECONDS;
 
     /** 心跳连续失败时的退避上限（秒） */

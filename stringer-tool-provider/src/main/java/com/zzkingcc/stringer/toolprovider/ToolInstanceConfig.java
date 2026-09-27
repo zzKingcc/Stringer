@@ -11,8 +11,9 @@ package com.zzkingcc.stringer.toolprovider;
  * @param instanceId              实例标识；<b>重连必须沿用同一个</b>，否则会留下一个摘不掉的旧副本
  * @param endpoint                本实例的<b>工具调用回流地址</b>（服务端 POST 到它来执行工具），
  *                                必须是服务端能访问到的地址；由配置层解析（显式配置优先，留空则按本进程端口推导）
- * @param heartbeatIntervalSeconds 心跳周期（秒）。服务端判死窗默认是它的 3 倍
- * @param maxBackoffSeconds       心跳连续失败时的退避上限（秒）
+ * @param heartbeatIntervalSeconds 心跳周期（秒）。服务端判死窗默认 35s = 它的 7 倍
+ * @param maxBackoffSeconds       心跳连续失败时的退避上限（秒）。默认 20s，<b>必须小于判死窗</b>
+ *                                （否则实例在被判死前都来不及重连）
  * @param requestTimeoutMillis    单次 HTTP 超时（毫秒）
  */
 public record ToolInstanceConfig(String serverHost,
@@ -25,8 +26,8 @@ public record ToolInstanceConfig(String serverHost,
                                  int maxBackoffSeconds,
                                  int requestTimeoutMillis) {
 
-    public static final int DEFAULT_HEARTBEAT_SECONDS = 10;
-    public static final int DEFAULT_MAX_BACKOFF_SECONDS = 60;
+    public static final int DEFAULT_HEARTBEAT_SECONDS = 5;
+    public static final int DEFAULT_MAX_BACKOFF_SECONDS = 20;
     public static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 10000;
 
     public ToolInstanceConfig {

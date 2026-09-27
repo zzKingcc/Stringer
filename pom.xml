@@ -24,8 +24,9 @@
         <module>stringer-domain</module>
         <module>stringer-infrastructure</module>
         <module>stringer-runtime</module>
-        <module>stringer-spring-boot-starter</module>
-        <module>stringer-tool-instance</module>
+        <module>stringer-sdk-core</module>
+        <module>stringer-agent-client</module>
+        <module>stringer-tool-provider</module>
         <module>stringer-server</module>
         <module>stringer-example</module>
     </modules>
@@ -101,12 +102,17 @@
             </dependency>
             <dependency>
                 <groupId>com.zzkingcc</groupId>
-                <artifactId>stringer-spring-boot-starter</artifactId>
+                <artifactId>stringer-sdk-core</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.zzkingcc</groupId>
-                <artifactId>stringer-tool-instance</artifactId>
+                <artifactId>stringer-agent-client</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-tool-provider</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>

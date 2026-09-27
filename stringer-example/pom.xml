@@ -25,9 +25,16 @@
 
 
     <dependencies>
+        <!-- 对话 SDK：远程调用 chat / resume / stop -->
         <dependency>
             <groupId>com.zzkingcc</groupId>
-            <artifactId>stringer-spring-boot-starter</artifactId>
+            <artifactId>stringer-agent-client</artifactId>
+            <version>${stringer.version}</version>
+        </dependency>
+        <!-- 工具 SDK：把本示例进程的方法注册为工具并提供回调端点 -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-tool-provider</artifactId>
             <version>${stringer.version}</version>
         </dependency>
 

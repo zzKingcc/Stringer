@@ -31,8 +31,8 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 | 交付物 | 模块 | 部署位置 |
 | --- | --- | --- |
 | 服务端（独立进程） | `stringer-server` | 自部署，默认端口 9527 |
-| 消费侧 starter | `stringer-spring-boot-starter` | 引入业务应用，提供 `AgentService` / `KnowledgeBaseClient`，并传递工具实例 SDK（工具能力默认关闭） |
-| 工具实例 SDK | `stringer-tool-instance` | 工具提供方应用，把本地方法注册到服务端 |
+| 消费侧 starter | `stringer-agent-client` | 引入业务应用，提供 `AgentService` / `KnowledgeBaseClient`，并传递工具实例 SDK（工具能力默认关闭） |
+| 工具实例 SDK | `stringer-tool-provider` | 工具提供方应用，把本地方法注册到服务端 |
 
 ### 1.3 模块划分与依赖方向
 
@@ -44,8 +44,8 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 - `stringer-infrastructure`：外部依赖适配（ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化）
 - `stringer-runtime`：运行时内核（编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消）
 - `stringer-server`：服务端装配（配置、管控接口、鉴权、设置存储、异常出口、静态管控台）
-- `stringer-spring-boot-starter`：消费侧客户端（凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测）
-- `stringer-tool-instance`：工具实例 SDK（注解扫描、注册心跳、反向调用端点）
+- `stringer-agent-client`：消费侧客户端（凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测）
+- `stringer-tool-provider`：工具实例 SDK（注解扫描、注册心跳、反向调用端点）
 - `stringer-example`：接入示例（含 6 个演示工具与 4 篇示例语料）
 
 依赖方向（文字描述的分层图）：
@@ -53,8 +53,8 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 ```
 api  →  common  →  domain  →  infrastructure  →  runtime  →  server
                                     ↑
-                        starter / tool-instance 独立于该链
-                        tool-instance 不依赖任何 Stringer 模块，与服务端只通过 HTTP 报文耦合
+                        starter / tool-provider 独立于该链
+                        tool-provider 不依赖任何 Stringer 模块，与服务端只通过 HTTP 报文耦合
 ```
 
 **面试点：为什么这么切？**
@@ -65,8 +65,8 @@ api  →  common  →  domain  →  infrastructure  →  runtime  →  server
 
 **消费侧依赖边界的两个硬约束（很值得讲）：**
 
-1. **starter 是唯一接入坐标**，聚合 `api` + `common` + `tool-instance`。聚合成本为零：`common` 只依赖 `api`；`tool-instance` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全在 starter 既有依赖树内。
-2. **Web 容器始终归宿主**：starter 与 tool-instance 都只用 `spring-web` 的注解模型 + 出站 `WebClient`，**不引任何容器**。原因：Spring Boot 判定 Web 应用类型时，Reactive 分支要求「`DispatcherHandler` 在且 `DispatcherServlet` 不在」；SDK 一旦带上 `spring-boot-starter-web`，纯 WebFlux 宿主会被误判成 SERVLET，`DispatcherHandler` 相关装配随之失效。
+1. **starter 是唯一接入坐标**，聚合 `api` + `common` + `tool-provider`。聚合成本为零：`common` 只依赖 `api`；`tool-provider` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全在 starter 既有依赖树内。
+2. **Web 容器始终归宿主**：starter 与 tool-provider 都只用 `spring-web` 的注解模型 + 出站 `WebClient`，**不引任何容器**。原因：Spring Boot 判定 Web 应用类型时，Reactive 分支要求「`DispatcherHandler` 在且 `DispatcherServlet` 不在」；SDK 一旦带上 `spring-boot-starter-web`，纯 WebFlux 宿主会被误判成 SERVLET，`DispatcherHandler` 相关装配随之失效。
 
 ### 1.4 运行时调用链路（文字流程）
 
@@ -187,7 +187,7 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 - 调用时按参数名从模型给的 JSON 里取值并转成声明类型；取不到必填参数 → 抛"缺少必填参数: xxx"，由 SDK 包装成工具失败原因回喂模型。
 - 返回值：`CharSequence` 原样回喂，其余序列化成 JSON。
 - 模型偶尔吐出非法 JSON → 按空参数处理，让业务方法自己在缺参上给结果。
-- 声明为 `DESTRUCTIVE` 却没配审批 → 启动期打 WARN 劝告补 `@ToolPolicy`。
+- 声明为 `DESTRUCTIVE` 却没配审批 → 启动期打 WARN 劝告补 `@Tool`（配 `approval`）。
 
 **工具执行的正确性细节**：
 
@@ -823,7 +823,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 `stringer.server.*`（客户端与工具实例**共用同一份**）：`host`=`localhost`、`port`=`9527`、`username`=`stringer`、`password`=`stringer`。
 `stringer.client.*`：`health-check-timeout`=5s、`connect-timeout`=5s、`read-timeout`=10m（SSE 长连接）。
-`stringer.tool-instance.*`：`enabled`=false、`scan-annotated`=true、`instance-id`、`endpoint`（留空按本进程端口推导）、`heartbeat-interval-seconds`=10、`max-backoff-seconds`=60、`request-timeout-millis`=10000。
+`stringer.tool-instance.*`：`enabled`=false、`scan-annotated`=true、`instance-id`、`endpoint`（留空按本进程端口推导）、`heartbeat-interval-seconds`=5、`max-backoff-seconds`=20、`request-timeout-millis`=10000。
 
 **starter 自动配置注册的 Bean**：`stringerWebClient`（`WebClient`）、`stringerClientCredential`、`agentService`、`stringerKnowledgeBaseClient`、`stringerConnectivityCheck`（`SmartInitializingSingleton`，失败即中断启动）。
 

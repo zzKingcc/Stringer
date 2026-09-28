@@ -129,12 +129,12 @@ Enter the chat and embedding models under "Models", and the ES / Redis connectio
 ```xml
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-spring-boot-starter</artifactId>
+    <artifactId>stringer-agent-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
-> **One dependency is enough.** `stringer-spring-boot-starter` brings three things at once: calling the agent (`AgentService`), handing your own methods to the agent as tools (tool instance SDK, **off by default** — set `stringer.tool-instance.enabled` to turn it on), and the shared exception / input-sanitization support. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. Tool-provider-only deployments (tool microservices, non-Java apps) can depend on `stringer-tool-instance` alone. See [instance doc §1.1](docs/INSTANCE.md#11-一个依赖跑起来).
+> **One dependency is enough.** `stringer-agent-client` brings three things at once: calling the agent (`AgentService`), handing your own methods to the agent as tools (tool instance SDK, **off by default** — set `stringer.tool-instance.enabled` to turn it on), and the shared exception / input-sanitization support. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. Tool-provider-only deployments (tool microservices, non-Java apps) can depend on `stringer-tool-provider` alone. See [instance doc §1.1](docs/INSTANCE.md#11-一个依赖跑起来).
 
 ```yaml
 stringer:
@@ -192,7 +192,7 @@ The signature is the parameter schema, the annotation is the governance policy, 
 
 ### Demo
 
-The repository includes `stringer-example` (a client integration demo on port 8080, shipping six demo tools — all declared with `@StringerTool` — registered as a tool instance):
+The repository includes `stringer-example` (a client integration demo on port 8080, shipping six demo tools — all declared with `@Tool` (the older `@StringerTool` still works) — registered as a tool instance):
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -213,7 +213,7 @@ stringer-server
    └─ console http://localhost:9527/admin.html
    ▲
    │  register + heartbeat
-Tool provider (tool-instance SDK, or your own HTTP implementation)
+Tool provider (tool-provider SDK, or your own HTTP implementation)
 ```
 
 ## Modules
@@ -226,8 +226,8 @@ Tool provider (tool-instance SDK, or your own HTTP implementation)
 | `stringer-infrastructure` | Infrastructure: ES retrieval and index management / document ingestion and splitting / Redis / embedding |
 | `stringer-runtime` | Agent runtime core: graph orchestration / tool registry and routing / instance registry / streaming / prompts |
 | `stringer-server` | **Server**: standalone deployable, hosts all heavy logic and the console |
-| `stringer-spring-boot-starter` | **Consumer-side single coordinate**: remote calls + tool instance SDK + shared exceptions and input security |
-| `stringer-tool-instance` | **Tool instance SDK**: registration and heartbeat keep-alive plus the invocation endpoint; depends only on the contract module `stringer-api`, no internal implementation (delivered transitively by the starter) |
+| `stringer-agent-client` | **Consumer-side single coordinate**: remote calls + tool instance SDK + shared exceptions and input security |
+| `stringer-tool-provider` | **Tool instance SDK**: registration and heartbeat keep-alive plus the invocation endpoint; depends only on the contract module `stringer-api`, no internal implementation (delivered transitively by the starter) |
 | `stringer-example` | Integration demo |
 
 ## API

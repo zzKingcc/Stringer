@@ -12,16 +12,16 @@ Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对�
 | 交付物 | 模块 | 角色 | 你做什么 |
 |---|---|---|---|
 | 服务端 jar | `stringer-server` | 承载编排 / 工具注册表 / 知识库 / ES·Redis·LLM 连接，暴露 HTTP+SSE | 自部署，通过管控台配置 |
-| 客户端 starter | `stringer-spring-boot-starter` | 极薄，只把调用转发到服务端 | 注入 `AgentService` 调 AI |
-| 工具实例 SDK | `stringer-tool-instance` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@StringerTool`（或实现 `ToolInstanceContributor`）声明工具 |
+| 客户端 starter | `stringer-agent-client` | 极薄，只把调用转发到服务端 | 注入 `AgentService` 调 AI |
+| 工具实例 SDK | `stringer-tool-provider` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@Tool`（或旧 `@StringerTool`，两者都被识别；或实现 `ToolInstanceContributor`）声明工具 |
 
-starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-instance` 保留独立坐标，供只想当工具方的进程单独使用。
+starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-provider` 保留独立坐标，供只想当工具方的进程单独使用。
 
 > 环境要求：Java 21、Spring Boot 3.x。坐标均为 `com.zzkingcc`，版本 `v1.0-beta.1`（随 `stringer.version`）。
 
 ### 1.1 一个依赖跑起来
 
-消费侧只需一个坐标 `stringer-spring-boot-starter`，它一次给出三件事：
+消费侧只需一个坐标 `stringer-agent-client`，它一次给出三件事：
 
 | 得到的能力 | 怎么用 |
 |---|---|
@@ -32,7 +32,7 @@ starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter
 - **工具能力默认关闭**：`stringer.tool-instance.enabled` 默认 `false`。未打开时不注册回调端点、不启动心跳、不建任何工具实例 Bean，只想调 AI 的应用不受影响。
 - **Web 容器自备**：starter 只用 Spring Web 的注解模型（`@RestController` / `@RequestBody`）与出站 `WebClient`，**不含任何容器**——自带 `spring-boot-starter-webflux` 仅服务于 SSE 出站调用。宿主原有的 Web 栈保持不变；要让服务端回调进来，宿主本来就需要一个可被访问的 Web 栈。
 - 因此不要把 Web 容器声明进 SDK：Spring Boot 判定 Web 应用类型时，Reactive 分支要求「`DispatcherHandler` 在且 `DispatcherServlet` 不在」；SDK 一旦带上 `spring-boot-starter-web`，纯 WebFlux 宿主就会被判成 SERVLET，`DispatcherHandler` 相关装配随之失效。
-- **只想当工具方**（工具微服务、非 Java 应用）不必引 starter：`stringer-tool-instance` 保留独立坐标，且不依赖任何 Stringer 模块，也可照 HTTP 协议自实现。
+- **只想当工具方**（工具微服务、非 Java 应用）不必引 starter：`stringer-tool-provider` 保留独立坐标，且不依赖任何 Stringer 模块，也可照 HTTP 协议自实现。
 
 ---
 
@@ -166,7 +166,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 ```xml
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-spring-boot-starter</artifactId>
+    <artifactId>stringer-agent-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
@@ -293,7 +293,7 @@ boolean triggered = agentService.stop(sessionId);
 
 工具即「给一段参数 JSON，还一段结果文本」的无状态能力。两种方式任选：
 
-- **远程（推荐，接入方用）**：在本进程用 `stringer-tool-instance` SDK 周期注册，服务端回调你暴露的 `/stringer/invoke` 执行。
+- **远程（推荐，接入方用）**：在本进程用 `stringer-tool-provider` SDK 周期注册，服务端回调你暴露的 `/stringer/invoke` 执行。
 - **本地（服务端自带）**：工具随服务端进程部署，用 `@StringerTool` 注解声明、由 `AnnotatedToolScanner` 扫描。见 §5。
 
 ### 4.1 引入依赖
@@ -301,12 +301,12 @@ boolean triggered = agentService.stop(sessionId);
 ```xml
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-tool-instance</artifactId>
+    <artifactId>stringer-tool-provider</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
-该坐标**已由 `stringer-spring-boot-starter` 传递**（见 §1.1）；单独引入适用于只想当工具方、不调 AI 的进程。两条路径都必须打开 `stringer.tool-instance.enabled`——引了 jar 不等于要当工具提供方。
+该坐标**已由 `stringer-agent-client` 传递**（见 §1.1）；单独引入适用于只想当工具方、不调 AI 的进程。两条路径都必须打开 `stringer.tool-instance.enabled`——引了 jar 不等于要当工具提供方。
 
 本 SDK 不自带 Spring 容器，也刻意不引 Web 容器：它只要求宿主进程里存在一个能被服务端访问到的 Web 栈（Spring MVC 或 WebFlux 均可）。
 
@@ -324,7 +324,7 @@ stringer:
     instance-id: ${STRINGER_INSTANCE_ID:order-svc-01}   # 重连必须沿用同一个
     # endpoint 留空即自动推导（见下），跨机部署必须显式写服务端可达的地址
     # endpoint: ${STRINGER_INSTANCE_ENDPOINT:http://10.0.0.5:8081/stringer/invoke}
-    heartbeat-interval-seconds: 10
+    heartbeat-interval-seconds: 5
 ```
 
 | 参数 | 默认 | 作用 |
@@ -518,7 +518,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 ## 7. 端到端最小跑通（参考 `stringer-example`）
 
 1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527）。
-2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@StringerTool` 声明）周期注册给服务端。
+2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool`（旧 `@StringerTool` 仍兼容）声明，两者都被识别）周期注册给服务端。
 3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `customer`、管理员 `admin`）演示域差异；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
 5. 想顺手验证知识库：`stringer-example/src/main/resources/ragDatabase/` 下有 4 篇「鲜果时光」语料（公司简介与配送范围 / 退款与售后政策 / 会员与订阅规则 / 常见问题 FAQ），在管控台「知识库」页上传即可检索。**它们不参与示例启动**，只是联调用的现成语料。

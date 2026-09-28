@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 AgentService 就能调 AI，方法上加 @StringerTool 就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
+  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 AgentService 就能调 AI，方法上加 @Tool（旧 @StringerTool 仍兼容）就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@
 | --- |---------------------------------------| --- | --- |
 | 形态 | **独立服务端 + 薄 starter**                 | 独立平台（容器部署） | 库，随业务进程 |
 | 技术栈 | Java 21 / Spring Boot                 | Python 为主 | Java |
-| 工具怎么写 | 你现有的 Spring Bean：方法上加 `@StringerTool` | 平台内配置 / 插件市场 | 写代码，自己接路由 |
+| 工具怎么写 | 你现有的 Spring Bean：方法上加 `@Tool`（旧 `@StringerTool` 仍兼容） | 平台内配置 / 插件市场 | 写代码，自己接路由 |
 | 工具在哪跑 | **你的进程内**，复用事务、权限与 `@Service`         | 平台进程，跨系统 HTTP 调用 | 你的进程内 |
 | 业务代码改动 | 注入 `AgentService` 调 AI 即可，零改动         | 另起进程，走 REST / iframe | 编排与状态代码写进业务工程 |
 | 编排与状态 | 图编排 + Redis 检查点，**中断后可跨实例恢复**         | 可视化工作流 | 需自行实现 |
@@ -129,12 +129,12 @@ http://localhost:9527/admin.html      # 默认账号 stringer / stringer
 ```xml
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-spring-boot-starter</artifactId>
+    <artifactId>stringer-agent-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
-> **一个依赖就够。** `stringer-spring-boot-starter` 同时带来三件事：调 AI（`AgentService`）、把本进程的方法作为工具交给 Agent（工具实例 SDK，**默认关闭**，需要时打开 `stringer.tool-instance.enabled`）、公共异常与输入安全。Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。只想当工具方（工具微服务、非 Java 应用）可只引 `stringer-tool-instance`。详见[实例文档 §1.1](docs/INSTANCE.md#11-一个依赖跑起来)。
+> **一个依赖就够。** `stringer-agent-client` 同时带来三件事：调 AI（`AgentService`）、把本进程的方法作为工具交给 Agent（工具实例 SDK，**默认关闭**，需要时打开 `stringer.tool-instance.enabled`）、公共异常与输入安全。Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。只想当工具方（工具微服务、非 Java 应用）可只引 `stringer-tool-provider`。详见[实例文档 §1.1](docs/INSTANCE.md#11-一个依赖跑起来)。
 
 ```yaml
 stringer:
@@ -174,19 +174,24 @@ public class MyService {
 
 ```java
 // 只读工具：客服域可见，参数 schema 由方法签名推导
-@StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问发货/物流时调用",
-        domains = {"customer"})
-public String queryOrder(@ToolParam(description = "订单号，如 FR2024001") String orderNo) { ... }
+@Tool(desc = "按订单号查询订单状态。用户追问发货/物流时调用",
+        value = "queryOrder", domains = {"customer"})
+public String queryOrder(@ToolParam("订单号，如 FR2024001") String orderNo) { ... }
 
 // 写操作：声明副作用等级 + 调用前中断等人工确认
-@StringerTool(name = "refundOrder", description = "按订单号退款。仅在用户明确要求退款时调用",
-        domains = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
-@ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "退款需人工确认"))
-public String refundOrder(@ToolParam(description = "订单号") String orderNo,
-                          @ToolParam(description = "退款金额，单位：元") BigDecimal amount) { ... }
+@Tool(desc = "按订单号退款。仅在用户明确要求退款时调用",
+        value = "refundOrder", domains = {"admin"},
+        effect = Tool.Effect.WRITE,
+        approval = Tool.Approval.ALWAYS, approvalReason = "退款会真实出金，需人工确认")
+public String refundOrder(@ToolParam("订单号") String orderNo,
+                          @ToolParam("退款金额，单位：元，须 ≤ 订单实付") BigDecimal amount) { ... }
 ```
 
-方法签名即参数 schema、注解即治理策略、方法体即执行逻辑——三件事写在同一个地方。工具清单需要在启动期动态拼装时，改用 `ToolInstanceContributor` 编程式注册（重名以编程式为准），见[实例文档 §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用)。
+方法签名即参数 schema、注解即治理策略、方法体即执行逻辑——三件事写在同一个地方。更多注解与对话 SDK 的完整示例（参数 DTO、`@ToolDomains`、`@ToolAdvanced`、审批恢复、SSE 裸调）见 [SDK 使用手册](docs/SDK-USAGE.md)。
+
+> `@StringerTool` 与 `@ToolPolicy` 仍被扫描器识别（向后兼容），新代码推荐用上面的 `@Tool` 全家桶（`desc` 唯一必填）。
+
+工具清单需要在启动期动态拼装时，改用 `ToolInstanceContributor` 编程式注册（重名以编程式为准），见[实例文档 §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用)。
 
 > 域有**三个来源**：管控台**人工创建**（可删，落盘 `config/domains.json`）、**工具声明派生**（写下 `domains` 即创建）、以及内置兜底域 **`default`**（工具声明留空、调用未指定域都落到它，不可删）。声明留空＝**只属于 `default`**；要全域可用须显式写 `{"*"}`。
 >
@@ -194,7 +199,7 @@ public String refundOrder(@ToolParam(description = "订单号") String orderNo,
 
 ### 联调示例
 
-仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@StringerTool` 声明——并以"工具实例"身份注册给服务端）：
+仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@Tool`（旧 `@StringerTool` 仍兼容）声明——并以"工具实例"身份注册给服务端）：
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -215,7 +220,7 @@ stringer-server
    └─ 管控台 http://localhost:9527/admin.html
    ▲
    │  注册 + 心跳
-工具提供方（tool-instance SDK，或按 HTTP 协议自实现）
+工具提供方（tool-provider SDK，或按 HTTP 协议自实现）
 ```
 
 ## 模块结构
@@ -228,8 +233,8 @@ stringer-server
 | `stringer-infrastructure` | 基础设施：ES 检索与索引管理 / 文档摄取切片 / Redis / 向量化 |
 | `stringer-runtime` | Agent 运行时内核：图编排 / 工具注册表与路由 / 实例注册表 / 流式 / 提示词 |
 | `stringer-server` | **服务端**：可独立部署，承载全部重逻辑与管控台 |
-| `stringer-spring-boot-starter` | **消费侧唯一坐标**：远程调用 + 工具实例 SDK + 公共异常与输入安全 |
-| `stringer-tool-instance` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
+| `stringer-agent-client` | **消费侧唯一坐标**：远程调用 + 工具实例 SDK + 公共异常与输入安全 |
+| `stringer-tool-provider` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
 | `stringer-example` | 接入示例与联调 |
 
 ## 接口
@@ -252,6 +257,7 @@ stringer-server
 - [设计文档](docs/DESIGN.md) —— 形态与模块、域与工具可见性、工具体系、存储与模型配置、并发模型、配置项总表
 - [API 文档](docs/API.md) —— 全部 HTTP 端点、SSE 事件契约、错误码总表、starter 与工具实例 SDK
 - [实例文档](docs/INSTANCE.md) —— 配置与接入实操：服务端配置、客户端 starter 接入、工具实例 SDK、本地 Bean 工具、域机制、端到端跑通
+- [SDK 使用手册](docs/SDK-USAGE.md) —— 注解与对话 SDK 的可复制示例：最小工具、`@ToolParam`/`@ToolDomains`/`@ToolAdvanced`、审批恢复、事件流、SSE 裸调、旧注解迁移
 
 ## License
 

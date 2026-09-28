@@ -369,7 +369,12 @@
 
 ### 7.1 注解
 
-`@StringerTool`（METHOD）字段见 `DESIGN.md` §5.1。两种生效场景：
+工具实例侧支持两套注解，扫描器均会识别：
+
+- **`@Tool` 全家桶（推荐，新）**：`desc` 为唯一必填，配套 `@ToolParam` / `@ToolDomains` / `@ToolAdvanced`，审批收敛为 `@Tool(approval=..., approvalReason=...)`。字段与示例见 [`SDK-USAGE.md`](SDK-USAGE.md) 与 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
+- **`@StringerTool` + `@ToolPolicy`（向后兼容，旧）**：字段见 `DESIGN.md` §5.1。新代码建议改用 `@Tool`。
+
+两种生效场景：
 
 - **工具实例侧（本 SDK）**：方法所在类注册为 Spring Bean 即可，由 `AnnotatedToolScanner` 在装配期扫描注册；参数 schema 由方法签名推导，`@ToolParam` 补语义，`@ToolPolicy` 定审批。
 - **服务端进程内**：任意 Spring Bean 即可（见 `INSTANCE.md` §5）。`StringerToolProvider` 为可选标记，实现了照样被扫到。
@@ -388,8 +393,8 @@
 | `scan-annotated` | true | 是否扫描 `@StringerTool` 注解方法并自动注册；关闭后只认 `ToolInstanceContributor` 编程式注册 |
 | `instance-id` | — | 实例标识 |
 | `endpoint` | 推导 | 本实例对外可达地址，服务端反向调用用；留空按 `http://localhost:{本进程端口}/stringer/invoke` 推导，跨机部署必须显式填写 |
-| `heartbeat-interval-seconds` | 10 | 心跳周期 |
-| `max-backoff-seconds` | 60 | 连续失败退避上限 |
+| `heartbeat-interval-seconds` | 5 | 心跳周期 |
+| `max-backoff-seconds` | 20 | 连续失败退避上限 |
 | `request-timeout-millis` | 10000 | 出站请求超时 |
 
 ### 7.3 核心类型

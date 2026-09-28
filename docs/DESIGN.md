@@ -11,8 +11,9 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | 交付物 | 模块 | 部署位置 |
 | --- | --- | --- |
 | 服务端（独立进程） | `stringer-server` | 客户自部署，端口 `9527`（`server.port` / `STRINGER_SERVER_PORT`） |
-| 消费侧 starter | `stringer-spring-boot-starter` | 引入调用方业务应用，提供 `AgentService` 与 `KnowledgeBaseClient` Bean，并传递 `common` 与工具实例 SDK（工具能力默认关闭） |
-| 工具实例 SDK | `stringer-tool-instance` | 引入工具提供方应用，把本地方法注册到服务端 |
+| 消费侧 SDK | `stringer-agent-client` | 引入调用方业务应用，提供 `AgentService` 与 `KnowledgeBaseClient` Bean，并传递 `sdk-core` 与工具实例 SDK（工具能力默认关闭） |
+| 工具实例 SDK | `stringer-tool-provider` | 引入工具提供方应用，把本地方法注册到服务端；也可单独引入（只当工具方、不调 AI） |
+| 共享契约层 | `stringer-sdk-core` | 被 `agent-client` 与 `tool-provider` 共同依赖，承载 `ServerProperties`（`stringer.server.*`）等共用配置 |
 
 形态约束：
 
@@ -28,19 +29,20 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 
 | 模块 | 职责 | 主要包 |
 | --- | --- | --- |
-| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService` 接口 | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
+| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService` 接口、`Domains`、`ModelResolver` | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
 | `stringer-common` | 异常基类与通用工具 | `common.exception` `common.util` |
-| `stringer-domain` | 领域能力：知识检索、混合检索与融合排序、会话记忆约束 | `domain.capability.knowledge` `domain.rag` `domain.memory` |
+| `stringer-domain` | 领域能力：知识检索、混合检索与融合排序、会话记忆约束、域注册表 | `domain.capability.knowledge` `domain.rag` `domain.memory` `domain` |
 | `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |
-| `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` |
-| `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` |
-| `stringer-spring-boot-starter` | 接入方客户端：凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测 | `starter.client` |
-| `stringer-tool-instance` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolinstance` |
+| `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消、模型解析 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` `runtime.model` `runtime.domain` |
+| `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台、模型档案与域管理 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` `server.model` |
+| `stringer-sdk-core` | 共享契约层：被两个 SDK 共同依赖，承载 `ServerProperties`（`stringer.server.*`）、`ClientProperties` 等共用配置 | `sdkcore` |
+| `stringer-agent-client` | 消费侧 SDK：凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测 | `agentclient` |
+| `stringer-tool-provider` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolprovider` |
 | `stringer-example` | 接入示例（含示例知识文档与示例工具），不随服务端交付 | `example` |
 
-依赖方向：`api → common → domain → infrastructure → runtime → server`；`starter` 与 `tool-instance` 独立于上述链，`tool-instance` 不依赖任何 Stringer 模块（与服务端只通过 HTTP 报文耦合）。
+依赖方向：`api → common → domain → infrastructure → runtime → server`；`sdk-core` 依赖 `api`+`common`；`agent-client` 与 `tool-provider` 都依赖 `sdk-core`（两者互不依赖，可单独或同时引入）；`tool-provider` 不依赖任何其它 Stringer 模块（与服务端只通过 HTTP 报文耦合）。
 
-消费侧依赖边界：`stringer-spring-boot-starter` 是唯一接入坐标，聚合 `stringer-api`（契约）、`stringer-common`（异常与输入安全）、`stringer-tool-instance`（工具实例 SDK），引入即同时具备「调 AI」与「提供工具」两种能力；工具能力默认关闭——`tool-instance` 的自动装配整体受 `stringer.tool-instance.enabled=true` 约束，未开启时不注册回调端点、不启动心跳。聚合的依赖成本为零：`common` 只依赖 `api`，`tool-instance` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全部已在 starter 既有依赖树内。`stringer-tool-instance` 仍保留独立坐标供纯工具方（工具微服务、非 Java 应用）使用，其「不依赖任何 Stringer 模块」的契约不变。**Web 容器始终归宿主**：starter 与 `tool-instance` 都只用 `spring-web` 的注解模型，不引容器；宿主已有 Servlet 栈时两者共存仍判定为 SERVLET，若把容器写进 SDK，纯 WebFlux 宿主会被判成 SERVLET 而失去 `DispatcherHandler` 装配。
+消费侧依赖边界：`stringer-agent-client` 是接入坐标，聚合 `stringer-api`（契约）、`stringer-common`（异常与输入安全）、`stringer-sdk-core`（共用配置）与 `stringer-tool-provider`（工具实例 SDK），引入即同时具备「调 AI」与「提供工具」两种能力；工具能力默认关闭——`tool-provider` 的自动装配整体受 `stringer.tool-instance.enabled=true` 约束，未开启时不注册回调端点、不启动心跳。聚合的依赖成本为零：`common`/`sdk-core` 只依赖 `api`，`tool-provider` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全部已在 agent-client 既有依赖树内。`stringer-tool-provider` 仍保留独立坐标供纯工具方（工具微服务、非 Java 应用）使用，其「不依赖任何 Stringer 模块」的契约不变。**Web 容器始终归宿主**：agent-client 与 `tool-provider` 都只用 `spring-web` 的注解模型，不引容器；宿主已有 Servlet 栈时两者共存仍判定为 SERVLET，若把容器写进 SDK，纯 WebFlux 宿主会被判成 SERVLET 而失去 `DispatcherHandler` 装配。
 
 ---
 
@@ -82,11 +84,11 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 定义 | 域＝一次对话的场景，同时绑定【工具集 + 系统提示词】 |
-| 创建与销毁 | **三个来源**：内置兜底域 `default`（启动即预置、**不可删除**）、管控台**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具声明派生**（由注解 `@StringerTool.domains()` 产生，一经声明即常驻，工具被断开时域仍在，只是该域下暂无工具，因此不受实例熔断 / 判死影响） |
+| 创建与销毁 | **三个来源**：内置兜底域 `default`（启动即预置、**不可删除**）、管控台**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具声明派生**（由注解 `@Tool(domains=)` 产生，一经声明即常驻，工具被断开时域仍在，只是该域下暂无工具，因此不受实例熔断 / 判死影响；旧 `@StringerTool.domains()` 同义） |
 | 可见性判定 | 工具的 `domains` 留空＝<b>只属于兜底域 `default`</b>；含 `*`＝任何域可用（须显式写出）；否则仅声明了本轮域的工具进入模型视野 |
 | 维度数量 | 域是工具可见性的 **唯一维度**，不叠加第二个权限维度 |
-| `profile` 缺失 | 请求未带 `profile` 报错；`profile` 为空字符串报错 |
-| 域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具**；判据是"该域是否被声明过"，与"此刻有没有工具"无关 |
+| `profile` 缺失 / 空 | 回落兜底域 `default`（恒存在、不可删），不报错；`default` 下无工具时仅用基线提示词 |
+| `profile` 非空但域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具**；判据是"该域是否被声明过"，与"此刻有没有工具"无关 |
 | 同源性约束 | 模型可见工具集与需审批工具集必须来自同一判定（`ToolRegistry.toolSpecifications` 与 `toolsRequiringApproval` 同源）；拒绝文案分两种：域外 `10001`、工具已下线 `80001` |
 | 已知域集合恒非空 | `knownProfiles` <b>恒含内置兜底域 `default`</b>，故"已知域集合为空"实际不再发生；域不存在一律 `10004`，不降级为全量工具 |
 | 工具视图不取快照 | 每轮实时读注册表；不缓存工具集快照 |
@@ -97,37 +99,34 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ### 5.1 注解契约（`stringer-api/annotation`）
 
+工具注解已收敛：**新 `@Tool` 全家桶（推荐）** 取代旧的 `@StringerTool` + `@ToolPolicy` 组合。旧注解**仍被扫描器识别（向后兼容，计划两个版本周期后移除）**，但新代码一律用 `@Tool`。
+
 | 注解 | 目标 | 字段 | 默认值 |
 | --- | --- | --- | --- |
-| `@StringerTool` | METHOD | `name` | `""`（留空取方法名；全局唯一，重名注册失败） |
-| | | `description` | 必填 |
-| | | `category` | `"default"`（仅管理页分类，不参与过滤） |
+| `@Tool` | METHOD | `desc` | **必填**（唯一必填；给模型的用途说明） |
+| | | `value` | `""`（工具名，留空取方法名；全局唯一，重名注册失败） |
 | | | `domains` | `{}`（留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用） |
-| | | `version` | `"1.0.0"` |
-| | | `sideEffect` | `SideEffect.READ`（`READ`/`WRITE`/`DESTRUCTIVE`） |
-| | | `idempotent` | `true` |
-| | | `toModel` | `true` |
-| `@ToolParam` | PARAMETER / FIELD / RECORD_COMPONENT | `name` | `""`（留空取形参名） |
-| | | `description` | 必填 |
-| | | `required` | `true` |
-| | | `example` | `""` |
-| | | `allowValues` | `{}` |
-| | | `sensitive` | `false` |
-| `@ToolPolicy` | METHOD | `approval` | `@Approval` |
-| `@Approval` | 嵌套 | `mode` | `Mode.NONE`（`NONE`/`ALWAYS`/`CONDITIONAL`/`ONCE_PER_SESSION`） |
-| | | `condition` | `""` |
-| | | `reason` | `""` |
-| | | `approverRoles` | `{"tenant:admin"}` |
-| | | `timeoutSeconds` | `300` |
-| | | `onTimeout` | `OnTimeout.REJECT`（`REJECT`/`ABORT`） |
-| | | `payloadFields` | `{}` |
+| | | `effect` | `Effect.READ`（`READ`/`WRITE`/`DESTRUCTIVE`） |
+| | | `approval` | `Approval.NONE`（`NONE`/`ALWAYS`，当前仅此两态生效） |
+| | | `approvalReason` | `""`（`approval != NONE` 时建议填写，展示给审批人） |
+| `@ToolParam` | PARAMETER / FIELD / RECORD_COMPONENT | `value` | `""`（参数说明，推荐写法） |
+| | | `name` | `""`（留空取形参名 / 字段名） |
+| | | `required` | `true`（`Optional<T>` 自动判为可选） |
+| | | `description` / `example` / `allowValues` / `sensitive` | 已废弃：说明改 `@ToolParam(value=)`，后三项迁移到 `@ToolAdvanced` |
+| `@ToolDomains` | TYPE | `value` | `{}`（类级默认域；方法级 `domains` 就近覆盖） |
+| `@ToolAdvanced` | METHOD | `example` | `{}`（按 `参数名=示例值` 给出） |
+| | | `allowValues` | `{}`（按 `参数名=值1\|值2` 给出枚举白名单） |
+| | | `sensitive` | `{}`（需脱敏的参数名清单，日志 / 事件 / 审批 payload 掩码） |
+| `@StringerTool`（旧·兼容） | METHOD | `name` / `description`(必填) / `category` / `domains` / `profiles`(已废弃，别名 `domains`) / `version` / `sideEffect` / `idempotent` / `toModel` | `description` 对应新 `desc`，`sideEffect` 对应新 `effect` |
+| `@ToolPolicy`（旧·兼容） | METHOD | `approval` → `@Approval`（`mode` / `condition` / `reason` / `approverRoles` / `timeoutSeconds` / `onTimeout` / `payloadFields`） | 对应新 `approval` + `approvalReason`；`mode` 仅 `NONE`/`ALWAYS` 生效 |
 
 实际生效范围（当前实现）：
 
-- 生效范围：任意 Spring Bean 的方法上有 `@StringerTool` 即被 `AnnotatedToolScanner` 扫描（服务端进程内与工具实例 SDK 两侧规则一致）。`StringerToolProvider` 退化为可选标记：实现了照样被扫到，不再是使用前提。
-- 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`），注解只补语义。
-- 审批判定只看 `Approval.mode` 是否非 `NONE`；`CONDITIONAL` 与 `ONCE_PER_SESSION` 当前与 `ALWAYS` 等价。
-- 仅登记、不参与运行行为：`idempotent`、`toModel`、`sensitive`、`condition`、`approverRoles`、`timeoutSeconds`、`onTimeout`、`payloadFields`。
+- 扫描：`AnnotatedToolScanner` 同时识别 `@Tool` 与 `@StringerTool`（服务端进程内与工具实例 SDK 两侧规则一致）。任一都足以让方法被注册；`StringerToolProvider` 接口已退化为可选标记。
+- 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`）；`@ToolParam` 只补语义，`@ToolAdvanced` 补示例 / 白名单 / 脱敏。
+- 审批判定只看 `approval`（新）或 `Approval.mode`（旧）是否非 `NONE`；旧 `CONDITIONAL` / `ONCE_PER_SESSION` 当前与 `ALWAYS` 等价。
+- 仅登记、不参与运行行为：`idempotent`、`toModel`、旧 `@ToolParam` 的 `example`/`allowValues`/`sensitive`（已迁移到 `@ToolAdvanced`）、旧 `@Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`/`onTimeout`/`payloadFields`。
+- 域归属合并：`@Tool(domains=)` 与 `@ToolDomains`（类级默认）合并判定，方法级优先；旧 `@StringerTool.domains()` 与废弃的 `profiles()` 同义。
 
 ### 5.2 工具来源
 
@@ -251,6 +250,26 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ## 9 模型配置
 
+模型接入分两层：**内置 `default`**（管控台「模型设置」页那一套，单文本模型＋单向量模型）与**多 LLM 模型档案**（域可绑定到不同 OpenAI 兼容端点的档案）。未绑定任何档案的域统一走内置 `default`，行为与升级前完全一致。
+
+### 9.1 模型档案（多 LLM，`config/models.json`）
+
+| 项 | 规定 |
+| --- | --- |
+| 单元 | `ModelProfile`：一个 OpenAI 兼容端点的<b>一份</b>配置（别名 `alias` 唯一；同一模型可配多份档案，域绑的是档案而非模型名） |
+| 字段 | `alias`、`baseUrl`、`apiKey`、`modelName`、`temperature`(可空)、`maxTokens`(可空)、`capabilities`(streaming / tools / vision)、`fallbacks`(降级链，M3 暂只存不生效) |
+| 必填 | `baseUrl` / `apiKey` / `modelName` 三者齐备才 `isUsable()`；缺失则拒绝保存 |
+| 能力声明 | `capabilities` 由使用者显式写出；未声明 `tools` → 该域模型<b>不会调用任何工具</b>（只告警不拒绝）；缺失能力时 `capabilityHint()` 提示 |
+| 绑定规则 | <b>档案不自动绑定域</b>：新档案默认"未绑定"；绑定只能由管控台显式写；<b>一个域只绑一个档案</b>（单值，再次绑定即覆盖）；<b>未绑定域走 `defaultAlias`</b>（默认 `default`＝内置那套） |
+| 解析顺序 | `ModelProfileRegistry#resolveAlias(domain)`：域绑定 → `defaultAlias` → 内置 `default`（`Domains.DEFAULT`），命中即止 |
+| 内置 `default` | 别名 `default` 为保留字，不存入档案表，由 `LlmModelHolder` 承载；档案不存在 / 不可用 → `DefaultModelResolver` 回落内置 `default` 并告警（可用性优先，问题走日志） |
+| 域绑定 | `bind(domain, alias)`：`alias` 空白＝解绑（该域改走默认别名）；绑到不存在的档案被拒（可绑内置 `default` 或先建档案） |
+| 删除 | 档案仍被域绑定时<b>拒绝删除</b>（返回引用它的域清单）；内置 `default` 不可删 |
+| 客户端缓存 | `ModelClientFactory` 按<b>档案指纹</b>（含 `baseUrl + modelName + 温度 + maxTokens + SHA-256(apiKey)` 的 SHA-256 前 16 位）缓存；轮换 Key / 端点 → 指纹变 → 自然换实例，旧实例被回收 |
+| 落盘 | `ModelProfileStore` → `config/models.json`；先改内存再整体落盘，落盘失败抛异常（调用方必须感知）；文件缺失 / 解析失败按空配置（所有域走内置 `default`） |
+
+### 9.2 内置 default（模型设置，`config/llm-settings.json`）
+
 | 项 | 规定 |
 | --- | --- |
 | 配置来源 | `config/llm-settings.json`（运行时，高） > yaml `stringer.ai.*`（低） |
@@ -260,9 +279,9 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 空值语义 | 留空＝保持原值不变 |
 | 状态三态 | `未配置`（必填项有空） / `已配置·未验证`（填齐未测或已改动） / `已连接` |
 | 指纹 | `baseUrl + modelName + SHA-256(apiKey)`，文本与向量各存一份 |
-| 装配方式 | `LlmModelHolder` 委托代理：`openAiChatModel`、`openAiStreamingChatModel`、`openAiEmbeddingModel`；替换为原子替换，注入点不变 |
+| 装配方式 | `LlmModelHolder` 委托代理：`openAiChatModel`、`openAiStreamingChatModel`、`openAiEmbeddingModel`；热替换为原子替换，注入点不变；模型档案解析到内置 `default` 时复用此代理，故「模型设置」页改了立即生效 |
 
-### 向量维度契约
+### 9.3 向量维度契约
 
 维度取值的**唯一入口**是 `LlmModelHolder#effectiveEmbeddingDimension()`，以下三处必须同源：
 
@@ -426,8 +445,9 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.tool-instance.enabled` | boolean | false |
 | `stringer.tool-instance.instance-id` | String | — |
 | `stringer.tool-instance.endpoint` | String | 留空按本进程端口推导 |
-| `stringer.tool-instance.heartbeat-interval-seconds` | int | 10 |
-| `stringer.tool-instance.max-backoff-seconds` | int | 60 |
+| `stringer.tool-instance.scan-annotated` | boolean | true |
+| `stringer.tool-instance.heartbeat-interval-seconds` | int | 5 |
+| `stringer.tool-instance.max-backoff-seconds` | int | 20 |
 | `stringer.tool-instance.request-timeout-millis` | int | 10000 |
 
 ---
@@ -438,12 +458,14 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- | --- |
 | `config/accounts.json` | `AccountStore` | `username`、`passwordHash`、`signingKey`、`createdAt`、`lastLoginAt`、`lastLoginFrom` |
 | `config/llm-settings.json` | `LlmSettingsStore` | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions` |
+| `config/models.json` | `ModelProfileStore` | `defaultAlias`、`domainBindings`（域→别名）、`chatProfiles`（别名→ `ProfileData{baseUrl, apiKey, modelName, temperature, maxTokens, capabilities, fallbacks}`） |
 | `config/infra-settings.json` | `InfraSettingsStore` | `es{host,port,scheme,username,password,connectTimeout,socketTimeout}`、`redis{host,port,password,database}` |
 | `config/profiles.json` | `ProfileSettingsStore` | `base`、`profiles`（域名 → 提示词） |
+| `config/domains.json` | `DomainStore` | `manualDomains`（人工创建的域标识清单） |
 
 - 目录由 `stringer.settings.path` 指定，默认 `/var/lib/stringer/config`（服务器绝对路径）；容器化把该目录挂成卷。
 - 落盘内容为"用户填写的那一份"，不是合并后的生效值。
-- 工具注册与域不落盘。
+- 工具注册表与内置 / 派生域不落盘；**人工创建的域**（`config/domains.json`）与**模型档案**（`config/models.json`）落盘。
 
 ---
 

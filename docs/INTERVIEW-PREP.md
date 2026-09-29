@@ -724,7 +724,7 @@ metadata: object(enabled=true)
 - `multi_match` + `BestFields`，`text^1.0`、`metadata.section_title^2.0`（**标题命中权重加倍**）
 - 底层是 ES 的 BM25
 
-**融合算法**（`CompositeRetriever`）：
+**融合算法**（`CompositeRetriever` 负责双路召回编排与失败处理，融合重排委托给 `FusionStrategy`，默认实现 `DefaultFusionStrategy` 复刻下方算法）：
 
 1. **去重**：以内容文本的 **SHA-256** 作为 hash key（同一切片被两路命中时合并，而非重复计数）
 2. **归一化**：对两路分数**分别做 min-max 归一化** → `norm = (max == min) ? 1.0 : (v - min) / (max - min)`

@@ -62,7 +62,7 @@
 | # | 差距 | 现状证据 | 后果 |
 | --- | --- | --- | --- |
 | P1-1 | 模型层无治理 | `LlmModelHolder` 只做原子替换；`chatModelName` 单一 | 模型故障无降级、无 A/B、无成本归集、无并发保护 |
-| P1-2 | 检索缺后段 | `CompositeRetriever` 硬编码「两路 + SHA-256 去重 + min-max + 线性加权」；`KnowledgeSearchService` 写死 `myContentRetriever` 与 Top5 | 召回质量上不去，且无法换 RRF / rerank，无法做评测迭代 |
+| P1-2 | 检索缺后段 | ~~融合硬编码~~ **已抽成 `FusionStrategy`**（默认 `DefaultFusionStrategy` 复刻原算法，可替换）；`KnowledgeSearchService` 写死 `myContentRetriever` 与 Top5 | 召回质量上不去，且无法换 RRF / rerank，无法做评测迭代 |
 | P1-3 | 无文档级权限 | ES 映射只有 `vector` / `text` / `metadata(file_name, section_title, content_hash)` | 知识库只能全租户共享，无法做部门 / 角色可见 |
 | P1-4 | Agent 能力浅 | 图只有 `agent / review(no-op) / tools` | 复杂任务无法拆解、无法自检、无法跨会话积累 |
 | P1-5 | 工具不可迭代 | `ToolDescriptor.version` 仅元数据，注册即全量可见 | 工具升级等于线上直接换行为，无法灰度与回滚 |

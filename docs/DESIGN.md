@@ -227,7 +227,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 同一性判定 | 同名**不区分大小写**；默认拒绝，带 `replace=true` 则先删旧再写入 |
 | 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名） |
 | 唯一键 | `doc_id`（UUID，删除与聚合的依据）与 `file_name`（展示与同名校验） |
-| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title` |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title`、`domains`（可用域，keyword） |
 | 切片规则 | 按中文章节边界（`一、` `二、` `三、` 等）切分，超长段落退化为递归切分 |
 | 并发 | 导入全局串行，等待上限 `stringer.rag.ingest-lock-wait-seconds`（默认 60s） |
 | 失败处理 | 导入失败回滚本次已写入的切片；失败必须上抛，不得返回成功计数 |
@@ -243,9 +243,19 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 权重 | `vector-weight`＝0.6、`keyword-weight`＝0.4、`title-boost`＝0.15、`file-name-boost`＝0.10 |
 | 超时 | `stringer.retrieval.timeout-ms`＝5000（始终为有限值） |
 | 空结果 | 返回"未检索到相关内容"文本；服务不可用返回"知识库检索服务当前不可用…"——两态分离 |
+| **按域检索** | 文档可声明可用域（`metadata.domains`，含 `*` → 全域）；过滤<b>下推到每个检索通道内</b>（`bool.filter`），不放融合后 |
 | 重建 | 删除索引并按当前维度重建，**索引内容清空，需重新上传文档** |
 
 知识检索以 `KnowledgeSearchService` 形式提供，由部署方通过 `@Tool` 暴露为工具；服务端不自带示例工具。
+
+**域对知识是两层约束**（与工具不同，别记混了）：
+
+1. **工具层**：检索工具本身声明到哪些域 —— 决定了"这个域的对话能不能检索"。
+2. **内容层**：文档声明的 `domains` —— 决定了"能检索时，能查到哪些文档"。
+
+> 过滤必须下推到通道内：两路各回 Top-N，混进其他域的文档会把本域结果挤掉，
+> 融合后再过滤就只剩一两条 —— 检索"成功了"但召回塌陷，而且不报错。
+> 历史文档（本功能上线前入库、无 `domains` 字段）按全域可见处理，避免升级后凭空消失。
 
 ---
 

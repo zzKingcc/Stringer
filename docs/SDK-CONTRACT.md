@@ -185,7 +185,8 @@
 | 敏感掩码 | ✅ 新增 `SensitiveMasker`（按名递归掩码，只改给人看的文本） |
 | **唯一入口 `StringerAgent`** | ✅ **已实现**：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`（`ask` / `ask(tenant,user)` / `stream` / `events` / `resume` / `stop` / `domainId`）。三种消费方式共用同一条事件流；`ask`/`stream` 遇审批抛 `ApprovalRequiredException`、遇 `ERROR` 抛携带 `ErrorCode` 的 `StringerException`。`DomainAgent*` 已删除，`AgentService` 降为内部通道 |
 | **提示词 ↔ 工具可见性自检** | ✅ 已实现：`StartupSelfCheckConfiguration` + `PromptToolConsistencyAudit`（启动期 `SmartInitializingSingleton`，只 WARN 不阻断）。挡"提示词点名了某工具、但它在当前域不可见"——模型被告知有能力却调不到，且不抛异常。按词边界只认工具名，业务语言描述能力刻意漏报 |
-| 测试 | ✅ 全量 59 个测试通过（含 `DefaultStringerAgentTest` 8 个、`SensitiveMaskerTest`、`ToolAnnotationScanTest`、`AnnotatedToolScannerTest`、`ToolParamSchemaTest`、`PromptToolConsistencyAuditTest` 6 个） |
+| **知识库按域** | ✅ 已实现：`metadata.domains`（keyword）+ 上传时声明（语义与 `@Tool(domains)` 同构）+ 过滤下推到两路检索通道（不能放融合后）+ `RetrievalScope` 线程绑域 + 存量索引启动补字段；历史文档无该字段按全域可见 |
+| 测试 | ✅ 全量 71 个测试通过（含 `DefaultStringerAgentTest` 8 个、`SensitiveMaskerTest`、`ToolAnnotationScanTest`、`AnnotatedToolScannerTest`、`ToolParamSchemaTest`、`PromptToolConsistencyAuditTest` 6 个、`KnowledgeBaseServiceTest` 5 个、`DomainFilterQueryTest` 4 个、`RetrievalScopeTest` 3 个） |
 
 ### 9.2 顺带修掉的两个真实缺陷
 
@@ -197,6 +198,7 @@
 | 元素 | 说明 |
 | --- | --- |
 | 配置项扁平化（`server` URL 等） | 下一步 |
-| 启动自检清单（其余项） | 提示词↔工具可见性已落地（§9.1）；待补：skill 声明的工具是否存在、工具声明为空域却无人使用等 |
+| 启动自检清单（其余项） | 提示词↔工具可见性、知识库按域均已落地（§9.1）；待补：skill 声明的工具是否存在、标了域却无人使用的文档等 |
+| skill（能力包 = 指令 + 工具） | 已确认**暂缓**，形态待 1.0 之后再定（初定 `@Skill` 注解，域声明复用现有三规则） |
 | **两端 schema 生成的完全统一** | ⚠️ 仍在做：两端已共用同一套注解、同一份 `ParamOverrides`（示例/白名单/敏感）与同一段说明文本，但**参数树的产出仍是两套代码**（服务端：`ParamSchemaResolver` → langchain4j Schema；工具实例：自有 `schema()` → 上报 JSON）。要彻底统一需重写工具实例侧的 schema 生成，属独立改动项 |
 | `sensitive` 的覆盖面 | 目前只掩码工具调用事件与审批 payload 两处；**日志与工具自身回显**未覆盖（工具实例侧不应把敏感值写进返回值/异常） |

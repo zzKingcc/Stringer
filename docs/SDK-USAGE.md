@@ -370,14 +370,4 @@ curl -N -X POST "http://localhost:9527/api/agent/resume?sessionId=s-001&approved
 - **`ask` 是阻塞的**：它内部会消费完整条流，受 `stringer.client.read-timeout` 约束；长任务请用 `events`（冷流，可自行超时/背压）。
 - **`blockLast()` vs `subscribe()`**：阻塞式入口可用 `blockLast()`；WebFlux / 异步入口用 `subscribe()`，不要混用。
 - **工具重名**：同名工具全局只能有一个；多副本请走工具实例注册（同名多实例），见 [`INSTANCE.md`](INSTANCE.md)。
-
----
-
-## 3 常见坑
-
-- **域为空**：走 SDK 时 `AgentRequest` **不接受空域**（`of(...)` / `builder().build()` 直接抛 `IllegalArgumentException`）；只有裸 HTTP（§2.6）才会把空域归一到 `default`。域不存在被拒（`10004`）。推荐用 `forDomain(...)` 绑定一次，从源头上不用操心这事。
-- **`sessionId` 不稳定**：同一会话必须复用同一个 `sessionId`，否则记忆与检查点断裂、看起来"失忆"。
-- **只处理 `TOKEN`**：忽略 `TOOL_CALL` / `TOOL_RESULT` 会看不到工具行为；忽略 `ERROR` 事件则故障被静默吞掉（HTTP 200）。
-- **`resume` 域不一致**：必须与 `chat` 时相同，否则 `30002`。用 `CallerContext.from(request)` 复用最省心。
-- **`blockLast()` vs `subscribe()`**：阻塞式入口可用 `blockLast()`；WebFlux / 异步入口用 `subscribe()`，不要混用。
-- **工具重名**：同名工具全局只能有一个；多副本请走工具实例注册（同名多实例），见 [`INSTANCE.md`](INSTANCE.md)。
+- **知识库检索不到**：检索工具没声明到该域 → 模型根本不会调用它；文档没标域 → 只属 `default`，其他域查不到。这是两层约束，排查时都要看（见 `INSTANCE.md` §2.6）。

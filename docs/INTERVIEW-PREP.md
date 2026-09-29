@@ -654,7 +654,7 @@ tools  → agent
 | 同一性判定 | 同名**不区分大小写**（`file_name_lower`）；默认拒绝，`replace=true` 先删旧再写 |
 | 删除语义 | 删除该文档全部切片，并**释放文件名**（删除后可重新上传同名） |
 | 唯一键 | `doc_id`（UUID，删除与聚合依据）+ `file_name`（展示与同名校验） |
-| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title` |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title`、`domains`（可用域） |
 | 并发 | 导入全局串行（`Semaphore(1)`），等待上限 `ingest-lock-wait-seconds`（60s） |
 | 失败处理 | 回滚本次已写入的切片；失败必须上抛，不得返回成功计数 |
 
@@ -698,10 +698,12 @@ text:     text, analyzer=ik_max_word, search_analyzer=ik_smart
 metadata: object(enabled=true)
           ├─ file_name:     keyword
           ├─ section_title: text, analyzer=ik_max_word, search_analyzer=ik_smart
-          └─ content_hash:  keyword
+          ├─ content_hash:  keyword
+          └─ domains:       keyword        ← 文档的可用域（按域检索）
 ```
 
 **索引已存在时不会自动改维度**：`createIndexWithIkMapping` 见索引存在直接返回，只打日志"已存在跳过"；若现有 dims 与当前需要不一致，则打 **ERROR** 明确说"写入会因维度不符被拒绝，需删除索引后重建"。**mapping 的 `dims` 建好改不了，只能重建**。
+但**新增字段是允许的**：`domains` 是后加的，启动期为存量索引补一次 `putMapping`（加字段可以，改已有字段类型不行）。这一步不能省 —— 靠动态映射会把字符串映射成 `text`，而 `*` 是纯标点会被分词器直接丢掉，`terms` 就永远匹配不上"全域可见"的文档。
 
 **启动行为**：只建索引、不灌库（`bootstrap-enabled`）；灌库失败不阻断启动（`bootstrap-strict` 默认 false）；`delete-on-startup` 默认 false。
 
@@ -755,6 +757,21 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 `DocumentIngestor` 是调度层，按扩展名分组到 `DocumentProcessStrategy`（`PdfDocumentProcessStrategy`、`TextDocumentProcessStrategy`、`UnknownDocumentProcessStrategy`，抽象基类 `AbstractDocumentProcessStrategy`），工厂 `DocumentProcessStrategyFactory.groupByStrategy` 做分组。
 
 设计要点：单个策略失败**必须上抛**，不能"跳过该组"了事 —— 吞掉会让本次导入返回非零计数，调用方据此判成功并跳过失败回滚。
+
+### 3.6 按域检索（知识库也有域）
+
+文档可声明可用域（`metadata.domains`，与 `@Tool(domains = {...})` 同构：含 `*` → 全域；留空 → 只属 `default`），上传时指定，列表可见。
+
+**域对知识是两层约束，跟工具不一样**：
+
+1. **工具层** —— 检索工具声明到哪些域，决定"这个域的对话能不能检索"；
+2. **内容层** —— 文档的 `domains`，决定"能检索时查到哪些文档"。
+
+**过滤必须下推到每个检索通道内**（`DomainFilterQuery` → `bool.filter`），不能放到融合之后：两路各回 Top-N，混进其他域的文档会把本域结果挤掉，融合后再过滤就只剩一两条 —— 检索"成功了"但召回塌陷，且不报错、没有日志。
+
+**域从哪来**：`api.support.RetrievalScope`（线程绑定），编排层在调用工具前绑定、执行完解除（与 `ToolInvocationContext` 同一处）。未绑定 = 不过滤，只可能出现在非对话路径（管控台预览 / 重建），保持升级前行为。
+
+> 历史文档（本功能上线前入库、无 `domains` 字段）按**全域可见**处理：让它们只属 `default` 会让这批文档从所有域凭空消失 —— 那是一次无声的数据丢失，比放宽更难发现。
 
 ---
 

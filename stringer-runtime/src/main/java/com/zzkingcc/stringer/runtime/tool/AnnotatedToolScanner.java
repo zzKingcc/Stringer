@@ -1,10 +1,8 @@
 package com.zzkingcc.stringer.runtime.tool;
 
-import com.zzkingcc.stringer.api.annotation.StringerTool;
 import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.annotation.ToolDomains;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
-import com.zzkingcc.stringer.api.annotation.ToolPolicy;
 import com.zzkingcc.stringer.api.tool.ParamSchemaResolver;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -39,8 +37,7 @@ public final class AnnotatedToolScanner {
     /**
      * 扫描一个工具提供者实例。
      *
-     * <p>方法上有 {@code @Tool}（新）或 {@code @StringerTool}（旧，已废弃）都算工具 ——
-     * 两者语义等价，旧注解保留两个版本周期。</p>
+     * <p>方法上有 {@code @Tool} 即算工具。</p>
      *
      * @param provider 工具提供者 Bean
      * @return 该 Bean 上所有工具方法的注册项（可能为空）
@@ -75,17 +72,11 @@ public final class AnnotatedToolScanner {
             // 复用 LangChain4j 的参数反序列化：arguments(JSON) → 方法参数
             DefaultToolExecutor executor = new DefaultToolExecutor(provider, method);
 
-            if (descriptor.requiresApproval()
-                    && "CONDITIONAL".equalsIgnoreCase(descriptor.approval().mode())
-                    && descriptor.approval().condition().isBlank()) {
-                log.warn("[工具扫描] {} 声明 CONDITIONAL 审批但未写 condition，将按 ALWAYS 处理（保守）", name);
-            }
-
             registered.add(ToolRegistry.Registered.local(descriptor, specification, executor));
         }
 
         if (registered.isEmpty()) {
-            log.warn("[工具扫描] {} 未实现任何 @Tool / @StringerTool 方法，已注册 0 个工具",
+            log.warn("[工具扫描] {} 未实现任何 @Tool 方法，已注册 0 个工具",
                     provider.getClass().getName());
         }
         return registered;
@@ -99,42 +90,29 @@ public final class AnnotatedToolScanner {
      */
     private static ToolDescriptor describe(Class<?> declaringClass, Method method) {
         Tool tool = method.getAnnotation(Tool.class);
-        StringerTool legacy = method.getAnnotation(StringerTool.class);
-        if (tool == null && legacy == null) {
+        if (tool == null) {
             return null;
         }
 
         String source = declaringClass.getSimpleName() + "#" + method.getName();
-        String name = firstNonBlank(
-                tool != null ? tool.value() : "",
-                legacy != null ? legacy.name() : "",
-                method.getName());
-        String description = tool != null ? tool.desc() : legacy.description();
+        String name = firstNonBlank(tool.value(), method.getName());
+        String description = tool.desc();
 
-        List<String> domains = resolveDomains(declaringClass, tool, legacy);
-        ToolDescriptor.Approval approval = tool != null ? resolveApproval(tool) : resolveApproval(method);
+        List<String> domains = resolveDomains(declaringClass, tool);
+        ToolDescriptor.Approval approval = resolveApproval(tool);
 
         return new ToolDescriptor(
                 name,
                 description,
-                legacy != null ? legacy.category() : "default",
-                legacy != null ? legacy.version() : "1.0.0",
-                tool != null ? toSideEffect(tool.effect()) : legacy.sideEffect(),
-                legacy == null || legacy.idempotent(),
-                legacy == null || legacy.toModel(),
+                "default",
+                "1.0.0",
+                tool.effect(),
+                true,
+                true,
                 List.copyOf(ParamSchemaResolver.resolve(method)),
                 List.copyOf(domains),
                 approval,
                 source);
-    }
-
-    /** 新枚举 → 既有的副作用枚举（两侧枚举值一一对应） */
-    private static StringerTool.SideEffect toSideEffect(Tool.Effect effect) {
-        return switch (effect) {
-            case READ -> StringerTool.SideEffect.READ;
-            case WRITE -> StringerTool.SideEffect.WRITE;
-            case DESTRUCTIVE -> StringerTool.SideEffect.DESTRUCTIVE;
-        };
     }
 
     /** {@code @Tool(approval = ALWAYS)} → Approval 记录 */
@@ -146,19 +124,14 @@ public final class AnnotatedToolScanner {
     }
 
     /**
-     * 可用域：方法级 {@code @Tool#domains()} → 旧 {@code @StringerTool#domains()/profiles()}
-     * → 类级 {@code @ToolDomains} → 留空（＝只属于兜底域 default）。
+     * 可用域：方法级 {@code @Tool#domains()} → 类级 {@code @ToolDomains}
+     * → 留空（＝只属于兜底域 default）。
      *
      * <p>这里<b>不</b>在留空时回填兜底域：留空本身有语义，由
      * {@link ToolDescriptor#visibleIn(String)} 统一解释，避免两处判断各说各话。</p>
      */
-    private static List<String> resolveDomains(Class<?> declaringClass, Tool tool, StringerTool legacy) {
-        String[] raw = null;
-        if (tool != null && tool.domains().length > 0) {
-            raw = tool.domains();
-        } else if (legacy != null) {
-            raw = legacy.domains().length > 0 ? legacy.domains() : legacy.profiles();
-        }
+    private static List<String> resolveDomains(Class<?> declaringClass, Tool tool) {
+        String[] raw = tool.domains().length > 0 ? tool.domains() : null;
         if ((raw == null || raw.length == 0) && declaringClass != null) {
             ToolDomains classLevel = declaringClass.getAnnotation(ToolDomains.class);
             if (classLevel != null && classLevel.value().length > 0) {
@@ -245,50 +218,5 @@ public final class AnnotatedToolScanner {
             builder.required(required.toArray(new String[0]));
         }
         return builder.build();
-    }
-
-    /**
-     * 读取 {@code @ToolPolicy}（旧写法）
-     */
-    private static ToolDescriptor.Approval resolveApproval(Method method) {
-        ToolPolicy policy = method.getAnnotation(ToolPolicy.class);
-        if (policy == null) {
-            return ToolDescriptor.Approval.none();
-        }
-        ToolPolicy.Approval approval = policy.approval();
-        if (approval.mode() == ToolPolicy.Approval.Mode.NONE) {
-            return ToolDescriptor.Approval.none();
-        }
-        return new ToolDescriptor.Approval(
-                approval.mode().name(),
-                approval.condition(),
-                approval.reason(),
-                Arrays.asList(approval.approverRoles()),
-                approval.timeoutSeconds());
-    }
-
-    /**
-     * 读取工具的<b>可用域声明</b>（授权边界）。
-     *
-     * <p>优先 {@code @StringerTool#domains()}；留空时回落到已废弃的 {@code profiles()}（老写法兼容）。
-     * 两者都按"去空白、去重、去空串"归一化。</p>
-     *
-     * <p>注意这里<b>不</b>在留空时回填兜底域：留空本身有语义（只属于 default），
-     * 由 {@link com.zzkingcc.stringer.api.tool.ToolDescriptor#visibleIn(String)} 统一解释，
-     * 避免两处判断各说各话。</p>
-     */
-    private static List<String> resolveProfiles(StringerTool annotation) {
-        String[] raw = annotation.domains();
-        if (raw == null || raw.length == 0) {
-            raw = annotation.profiles();
-        }
-        if (raw == null || raw.length == 0) {
-            return List.of();
-        }
-        return Arrays.stream(raw)
-                .filter(p -> p != null && !p.isBlank())
-                .map(String::trim)
-                .distinct()
-                .toList();
     }
 }

@@ -2,9 +2,10 @@ package com.zzkingcc.stringer.toolprovider.spring;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
+import com.zzkingcc.stringer.api.annotation.ToolDomains;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
-import com.zzkingcc.stringer.api.annotation.ToolPolicy;
+import com.zzkingcc.stringer.api.tool.ParamSchemaResolver;
 import com.zzkingcc.stringer.toolprovider.ToolHandler;
 import com.zzkingcc.stringer.toolprovider.ToolRegistrar;
 import com.zzkingcc.stringer.toolprovider.ToolSpec;
@@ -45,11 +46,11 @@ import java.util.UUID;
  * 参数 schema、副作用等级、审批策略全都堆在一段与业务方法分离的代码里。
  * 本扫描器让这些治理信息回到方法本身：</p>
  * <pre>
- * &#64;StringerTool(name = "refundOrder", description = "退款", profiles = {"admin"},
- *              sideEffect = StringerTool.SideEffect.WRITE)
- * &#64;ToolPolicy(approval = &#64;ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "退款需人工确认"))
- * public String refundOrder(&#64;ToolParam(description = "订单号") String orderNo,
- *                           &#64;ToolParam(description = "退款金额，单位：元") BigDecimal amount) { ... }
+ * &#64;Tool(desc = "退款", value = "refundOrder", domains = {"admin"},
+ *           effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
+ *           approvalReason = "退款需人工确认")
+ * public String refundOrder(&#64;ToolParam("订单号") String orderNo,
+ *                           &#64;ToolParam("退款金额，单位：元") BigDecimal amount) { ... }
  * </pre>
  * <p>方法签名即参数 schema，注解即治理策略，方法体即执行逻辑 —— 三者不再分离。</p>
  *
@@ -58,7 +59,7 @@ import java.util.UUID;
  * 早于心跳启动。扫描只取"类型"做筛选，只对命中的 Bean 触发实例化，不做全容器提前初始化。</p>
  *
  * <h2>失败策略</h2>
- * <p>参数名解析不出、工具名重复、{@code description} 缺失 —— 全部<b>启动期直接抛异常</b>。
+ * <p>参数名解析不出、工具名重复、{@code desc} 缺失 —— 全部<b>启动期直接抛异常</b>。
  * 工具声明错了却等到模型来调用才发现，排查成本远高于启动失败。</p>
  *
  * @author zzkingcc
@@ -79,7 +80,7 @@ public final class AnnotatedToolScanner {
     }
 
     /**
-     * 扫描容器内所有 Bean，把标注了 {@link StringerTool} 的方法注册给 registrar。
+     * 扫描容器内所有 Bean，把标注了 {@link Tool} 的方法注册给 registrar。
      *
      * @return 注册成功的工具数量
      */
@@ -102,20 +103,20 @@ public final class AnnotatedToolScanner {
             Object bean = beanFactory.getBean(beanName);
 
             for (Method method : methods) {
-                StringerTool annotation = method.getAnnotation(StringerTool.class);
+                Tool annotation = method.getAnnotation(Tool.class);
                 Method target = ClassUtils.getMostSpecificMethod(method, userClass);
-                String toolName = annotation.name().isBlank() ? method.getName() : annotation.name().trim();
+                String toolName = annotation.value().isBlank() ? method.getName() : annotation.value().trim();
                 String where = userClass.getName() + "#" + method.getName();
 
                 String previous = owners.put(toolName, where);
                 if (previous != null) {
                     throw new IllegalStateException("工具名重复：" + toolName
                             + " 同时声明于 " + previous + " 与 " + where
-                            + "。工具名全局唯一（同名即同一工具的多个副本），请修改 @StringerTool 的 name");
+                            + "。工具名全局唯一（同名即同一工具的多个副本），请修改 @Tool 的 value");
                 }
 
                 Binding binding = binding(target, where);
-                registrar.register(spec(annotation, target, binding, where), handler(bean, binding));
+                registrar.register(spec(annotation, userClass, target, binding, where), handler(bean, binding));
                 registered.add(toolName);
             }
         }
@@ -129,7 +130,7 @@ public final class AnnotatedToolScanner {
     // ==================== 扫描 ====================
 
     /**
-     * 收集该类（及其接口）上带 {@link StringerTool} 的方法。
+     * 收集该类（及其接口）上带 {@link Tool} 的方法。
      *
      * <p>接口也要扫：JDK 动态代理下注解只留在接口方法上，实现类的方法拿不到。</p>
      */
@@ -148,7 +149,7 @@ public final class AnnotatedToolScanner {
             if (method.getDeclaringClass() == Object.class) {
                 continue;
             }
-            if (method.getAnnotation(StringerTool.class) == null) {
+            if (method.getAnnotation(Tool.class) == null) {
                 continue;
             }
             if (seen.add(signature(method))) {
@@ -172,48 +173,63 @@ public final class AnnotatedToolScanner {
     private static boolean isInfrastructure(Class<?> type) {
         String name = type.getName();
         // 只排除框架自身：扫它们只会带来噪音，且可能触发不该触发的初始化。
-        // 不排除 Stringer 的包 —— SDK 自己的 Bean 上不会有 @StringerTool，按注解命中即可。
+        // 不排除 Stringer 的包 —— SDK 自己的 Bean 上不会有 @Tool，按注解命中即可。
         return name.startsWith("org.springframework.") || name.startsWith("java.");
     }
 
     // ==================== 声明（ToolSpec） ====================
 
-    private ToolSpec spec(StringerTool annotation, Method method, Binding binding, String where) {
-        if (annotation.description().isBlank()) {
-            throw new IllegalStateException("@StringerTool.description 必填（它是模型判断何时调用的唯一依据）：" + where);
+    private ToolSpec spec(Tool annotation, Class<?> userClass, Method method, Binding binding, String where) {
+        if (annotation.desc().isBlank()) {
+            throw new IllegalStateException("@Tool.desc 必填（它是模型判断何时调用的唯一依据）：" + where);
         }
 
         Map<String, Object> properties = new LinkedHashMap<>();
         List<String> required = new ArrayList<>();
         for (ParamMeta param : binding.params()) {
-            properties.put(param.name(), schema(param.type(), param.annotation(), 0));
+            properties.put(param.name(), schema(param.type(), param.annotation(), 0,
+                    param.name(), binding.overrides()));
             if (param.required()) {
                 required.add(param.name());
             }
         }
 
-        ToolPolicy policy = method.getAnnotation(ToolPolicy.class);
-        ToolPolicy.Approval approval = policy == null ? null : policy.approval();
-        boolean requiresApproval = approval != null && approval.mode() != ToolPolicy.Approval.Mode.NONE;
+        boolean requiresApproval = annotation.approval() == Tool.Approval.ALWAYS;
 
-        if (annotation.sideEffect() == StringerTool.SideEffect.DESTRUCTIVE && !requiresApproval) {
+        if (annotation.effect() == Tool.Effect.DESTRUCTIVE && !requiresApproval) {
             log.warn("[工具实例] {} 声明为 DESTRUCTIVE 但未配置审批：破坏性操作应当在被执行前中断。"
-                            + "请补 @ToolPolicy(approval = @Approval(mode = Mode.ALWAYS, reason = ...))",
+                            + "请补 @Tool(approval = Tool.Approval.ALWAYS, approvalReason = ...)",
                     where);
         }
 
+        // 可用域：方法级 @Tool(domains=...) 优先；留空时回落到类级 @ToolDomains
+        List<String> raw = new ArrayList<>();
+        if (annotation.domains().length > 0) {
+            raw.addAll(List.of(annotation.domains()));
+        } else {
+            ToolDomains classLevel = userClass.getAnnotation(ToolDomains.class);
+            if (classLevel != null) {
+                raw.addAll(List.of(classLevel.value()));
+            }
+        }
+        List<String> profiles = raw.stream()
+                .map(String::trim)
+                .filter(p -> !p.isBlank())
+                .distinct()
+                .toList();
+
         return new ToolSpec(
-                annotation.name().isBlank() ? method.getName() : annotation.name().trim(),
-                annotation.description(),
-                annotation.category(),
-                annotation.version(),
-                List.of(annotation.profiles()),
-                annotation.sideEffect().name(),
-                annotation.idempotent(),
-                annotation.toModel(),
+                annotation.value().isBlank() ? method.getName() : annotation.value().trim(),
+                annotation.desc(),
+                "default",
+                "1.0.0",
+                profiles,
+                annotation.effect().name(),
+                true,
+                true,
                 requiresApproval,
-                requiresApproval ? approval.mode().name() : "",
-                approval == null ? "" : approval.reason(),
+                requiresApproval ? "ALWAYS" : "",
+                annotation.approvalReason(),
                 ToolSpec.schema(properties, required.toArray(new String[0])));
     }
 
@@ -246,7 +262,7 @@ public final class AnnotatedToolScanner {
             }
             params.add(new ParamMeta(name, parameter.getParameterizedType(), annotation == null || annotation.required(), annotation));
         }
-        return new Binding(method, params);
+        return new Binding(method, params, ParamSchemaResolver.ParamOverrides.of(method));
     }
 
     // ==================== 执行 ====================
@@ -360,9 +376,14 @@ public final class AnnotatedToolScanner {
     // ==================== JSON Schema 推断 ====================
 
     /**
-     * 由方法签名 / 字段类型推断 JSON Schema，并用 {@code @ToolParam} 补充语义。
+     * 由方法签名 / 字段类型推断 JSON Schema。
+     *
+     * <p>语义分两处取：{@code @ToolParam} 给说明（唯一来源），{@code @ToolAdvanced} 给
+     * 示例 / 枚举白名单 / 敏感 —— 后者的解析与说明拼装<b>整体复用服务端同一份实现</b>
+     * （{@link ParamSchemaResolver.ParamOverrides}），保证同一段工具代码在两侧得到同一个 schema。</p>
      */
-    private Map<String, Object> schema(Type type, ToolParam annotation, int depth) {
+    private Map<String, Object> schema(Type type, ToolParam annotation, int depth,
+                                       String name, ParamSchemaResolver.ParamOverrides overrides) {
         Map<String, Object> node = new LinkedHashMap<>();
 
         if (type instanceof ParameterizedType parameterized) {
@@ -370,11 +391,13 @@ public final class AnnotatedToolScanner {
             Type[] arguments = parameterized.getActualTypeArguments();
             if (raw instanceof Class<?> rawClass && Collection.class.isAssignableFrom(rawClass)) {
                 node.put("type", "array");
-                node.put("items", arguments.length > 0 ? schema(arguments[0], null, depth + 1) : Map.of("type", "string"));
+                node.put("items", arguments.length > 0
+                        ? schema(arguments[0], null, depth + 1, null, overrides)
+                        : Map.of("type", "string"));
             } else if (raw instanceof Class<?> rawClass) {
                 node.put("type", "object");
                 if (depth < MAX_DEPTH && !isSimple(rawClass)) {
-                    node.putAll(objectOf(rawClass, depth));
+                    node.putAll(objectOf(rawClass, depth, overrides));
                 }
             }
         } else if (type instanceof Class<?> c) {
@@ -386,36 +409,40 @@ public final class AnnotatedToolScanner {
                 node.put("enum", enumValues(c));
             } else if (c.isArray()) {
                 node.put("type", "array");
-                node.put("items", schema(c.getComponentType(), null, depth + 1));
+                node.put("items", schema(c.getComponentType(), null, depth + 1, null, overrides));
             } else if (Collection.class.isAssignableFrom(c)) {
                 node.put("type", "array");
                 node.put("items", Map.of("type", "string"));
             } else {
                 node.put("type", "object");
                 if (depth < MAX_DEPTH) {
-                    node.putAll(objectOf(c, depth));
+                    node.putAll(objectOf(c, depth, overrides));
                 }
             }
         } else {
             node.put("type", "object");
         }
 
-        if (annotation != null) {
-            if (!annotation.description().isBlank()) {
-                node.put("description", annotation.description());
-            }
-            if (!annotation.example().isBlank()) {
-                node.put("example", annotation.example());
-            }
-            if (annotation.allowValues().length > 0) {
-                node.put("enum", List.of(annotation.allowValues()));
-            }
+        node.put("description", overrides.describe(name, annotation == null ? null : annotation.value()));
+
+        String example = overrides.exampleOf(name);
+        if (!example.isBlank()) {
+            node.put("example", example);
+        }
+        List<String> allowValues = overrides.allowValuesOf(name);
+        if (!allowValues.isEmpty()) {
+            node.put("type", "string");
+            node.put("enum", allowValues);
+        }
+        if (overrides.isSensitive(name)) {
+            // 服务端 ToolParamSchema 认这个键，脱敏清单必须跟着 schema 一起上报
+            node.put("x-sensitive", true);
         }
         return node;
     }
 
     /** 展开一个 POJO 的字段（含父类），递归受 {@link #MAX_DEPTH} 限制 */
-    private Map<String, Object> objectOf(Class<?> type, int depth) {
+    private Map<String, Object> objectOf(Class<?> type, int depth, ParamSchemaResolver.ParamOverrides overrides) {
         Map<String, Object> properties = new LinkedHashMap<>();
         List<String> required = new ArrayList<>();
 
@@ -429,7 +456,7 @@ public final class AnnotatedToolScanner {
                 String name = annotation != null && !annotation.name().isBlank()
                         ? annotation.name().trim()
                         : field.getName();
-                properties.put(name, schema(field.getGenericType(), annotation, depth + 1));
+                properties.put(name, schema(field.getGenericType(), annotation, depth + 1, name, overrides));
                 // 嵌套字段只有"显式标注必填且是原始类型"才进 required：默认值策略交给业务方法，schema 不该越权
                 if (annotation != null && annotation.required() && field.getType().isPrimitive()) {
                     required.add(name);
@@ -486,6 +513,11 @@ public final class AnnotatedToolScanner {
     }
 
     /** 一个工具方法：可调用的 Method + 解析好的参数列表 */
-    private record Binding(Method method, List<ParamMeta> params) {
+    /**
+     * 一个工具方法：可调用的 Method + 解析好的参数列表 + 方法级 {@code @ToolAdvanced} 的索引视图
+     * （示例 / 白名单 / 敏感；与服务端共用同一份解析）
+     */
+    private record Binding(Method method, List<ParamMeta> params,
+                           ParamSchemaResolver.ParamOverrides overrides) {
     }
 }

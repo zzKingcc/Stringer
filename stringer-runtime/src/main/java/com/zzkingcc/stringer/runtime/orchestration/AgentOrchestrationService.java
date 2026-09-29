@@ -17,6 +17,7 @@ import com.zzkingcc.stringer.runtime.model.ModelResolver;
 import com.zzkingcc.stringer.runtime.prompt.SystemPromptResolver;
 import com.zzkingcc.stringer.runtime.stream.StreamContext;
 import com.zzkingcc.stringer.runtime.stream.StreamSinkRegistry;
+import com.zzkingcc.stringer.runtime.tool.SensitiveMasker;
 import com.zzkingcc.stringer.runtime.tool.ToolInvocationContext;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.runtime.usage.TokenUsageRecorder;
@@ -351,7 +352,8 @@ public class AgentOrchestrationService implements AgentService {
                         sessionId, TraceId.current(), exists ? "域外" : "已下线",
                         request.name(), profile);
                 if (context != null) {
-                    context.emit(AgentEvent.toolCall(sessionId, request.name(), request.arguments()));
+                    context.emit(AgentEvent.toolCall(sessionId, request.name(),
+                            displayArguments(request.name(), request.arguments())));
                     context.emit(AgentEvent.toolResult(sessionId, request.name(), denied));
                 }
                 results.add(ToolExecutionResultMessage.from(request, denied));
@@ -359,7 +361,8 @@ public class AgentOrchestrationService implements AgentService {
             }
 
             if (context != null) {
-                context.emit(AgentEvent.toolCall(sessionId, request.name(), request.arguments()));
+                context.emit(AgentEvent.toolCall(sessionId, request.name(),
+                        displayArguments(request.name(), request.arguments())));
             }
 
             // 通过 ToolRouter 统一路由执行(内含 Token 用量统计与异常兜底)
@@ -861,6 +864,16 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /**
+     * 给人看的工具参数：声明的敏感项（{@code @ToolAdvanced.sensitive}）在
+     * <b>工具调用事件</b>与<b>审批 payload</b> 里只显示掩码。
+     *
+     * <p>只改展示文本 —— 真正执行与回喂模型的参数仍是原文，否则工具会拿到 {@code ***} 而失效。</p>
+     */
+    private String displayArguments(String toolName, String arguments) {
+        return SensitiveMasker.mask(arguments, toolRouter.sensitiveParams(toolName));
+    }
+
+    /**
      * 构建中断事件 payload:待授权工具调用列表(JSON)
      */
     private String buildInterruptPayload(MessagesState<ChatMessage> state, String profile) {
@@ -871,7 +884,8 @@ public class AgentOrchestrationService implements AgentService {
             for (int i = messages.size() - 1; i >= 0; i--) {
                 if (messages.get(i) instanceof AiMessage ai && ai.hasToolExecutionRequests()) {
                     for (ToolExecutionRequest req : ai.toolExecutionRequests()) {
-                        calls.add(ToolCall.of(req.name(), req.arguments(),
+                        calls.add(ToolCall.of(req.name(),
+                                displayArguments(req.name(), req.arguments()),
                                 approvalTools.contains(req.name())));
                     }
                     break;

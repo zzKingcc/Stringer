@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.runtime.domain;
 
 import com.zzkingcc.stringer.api.agent.Domains;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import org.junit.jupiter.api.Test;
 
@@ -22,7 +22,7 @@ class DomainSemanticsTest {
     /** 构造一个只关心域声明的工具描述符 */
     private static ToolDescriptor toolWithDomains(String... domains) {
         return new ToolDescriptor("demoTool", "演示工具", "default", "1.0.0",
-                StringerTool.SideEffect.READ, true, true,
+                Tool.Effect.READ, true, true,
                 List.of(), List.of(domains), null, "test#demoTool");
     }
 

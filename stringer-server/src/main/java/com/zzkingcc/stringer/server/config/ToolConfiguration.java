@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.server.config;
 
 import com.zzkingcc.stringer.api.agent.Domains;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.StringerToolProvider;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.AnnotatedToolScanner;
@@ -35,7 +35,7 @@ public class ToolConfiguration {
     /**
      * 工具注册表：扫描所有工具
      *
-     * <p>两侧写法统一：方法上有 {@code @StringerTool} 就算工具，<b>不要求类实现
+     * <p>两侧写法统一：方法上有 {@code @Tool} 就算工具，<b>不要求类实现
      * {@link StringerToolProvider}</b>——该接口退化为可选标记（实现了照样被扫到，
      * 只是不再必须），与工具实例 SDK（{@code stringer-tool-instance}）的扫描规则一致。
      * 同一段工具代码在服务端进程与业务进程之间搬迁，不用改一个字。</p>
@@ -73,7 +73,7 @@ public class ToolConfiguration {
             List<Registered> registered = AnnotatedToolScanner.scan(bean);
             if (registered.isEmpty()) {
                 // 类型上有注解、实例上扫不到：几乎只有被代理（且注解没留在代理方法上）时会发生
-                log.warn("[工具装配] {} 上有 @StringerTool 方法但从实例上扫不到（可能被代理），已跳过。"
+                log.warn("[工具装配] {} 上有 @Tool 方法但从实例上扫不到（可能被代理），已跳过。"
                         + "如需注册，请让该类实现 StringerToolProvider 或改用类代理", type.getName());
                 continue;
             }
@@ -86,7 +86,7 @@ public class ToolConfiguration {
         if (registry.isEmpty()) {
             // "一个工具都还没提供"是合法初始态（服务端不再自带示例工具），按约定只做状态陈述，不用 WARN：
             // 它既不是故障也不影响启动，WARN 只会让每次冷启动都像是出了问题。
-            log.info("[工具装配] 未注册任何工具 —— 在任意 Spring Bean 的方法上标注 @StringerTool 即可注册；"
+            log.info("[工具装配] 未注册任何工具 —— 在任意 Spring Bean 的方法上标注 @Tool 即可注册；"
                             + "此时可用的域只有兜底域 {}（工具声明留空、调用未指定域都落到它）；"
                             + "其余域需由工具声明或在管控台创建，否则入口报 10004",
                     Domains.DEFAULT);
@@ -100,16 +100,16 @@ public class ToolConfiguration {
         return name.startsWith("org.springframework.") || name.startsWith("java.");
     }
 
-    /** 类（含其接口）上是否存在 @StringerTool 方法 */
+    /** 类（含其接口）上是否存在 @Tool 方法 */
     private static boolean hasAnnotatedMethod(Class<?> userClass) {
         for (Method method : userClass.getMethods()) {
-            if (method.getAnnotation(StringerTool.class) != null) {
+            if (method.getAnnotation(Tool.class) != null) {
                 return true;
             }
         }
         for (Class<?> itf : ClassUtils.getAllInterfacesForClass(userClass)) {
             for (Method method : itf.getMethods()) {
-                if (method.getAnnotation(StringerTool.class) != null) {
+                if (method.getAnnotation(Tool.class) != null) {
                     return true;
                 }
             }

@@ -1,8 +1,8 @@
 package com.zzkingcc.stringer.example.tools;
 
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
+import com.zzkingcc.stringer.api.annotation.ToolAdvanced;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
-import com.zzkingcc.stringer.api.annotation.ToolPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -30,22 +30,21 @@ public class ExampleAnnotatedTools {
             "FR2024001", "已到达【杭州中转站】，预计明天送达",
             "FR2024002", "仓库拣货中，预计 24 小时内发出"));
 
-    // ==================== ① 全域可见：不声明 profiles ====================
+    // ==================== ① 全域可用：显式声明通配 * ====================
+    // 注意：留空 domains 不等于全域可见 —— 那表示"只属于兜底域 default"，两个面板都看不到它。
 
-    @StringerTool(name = "queryWeather",
-            description = "查询某个城市当前天气。用户询问天气、气温、是否下雨时调用",
-            category = "通用")
-    public String queryWeather(@ToolParam(description = "城市名，如 杭州", example = "杭州") String city) {
+    @Tool(desc = "查询某个城市当前天气。用户询问天气、气温、是否下雨时调用",
+            value = "queryWeather", domains = {"*"})
+    public String queryWeather(@ToolParam("城市名，如 杭州") String city) {
         log.info("[示例工具] queryWeather city={}", city);
         return city + "：多云转晴，26℃，东南风 2 级（示例数据）";
     }
 
     // ==================== ② 客服域专属 ====================
 
-    @StringerTool(name = "queryOrder",
-            description = "按订单号查询订单状态。用户追问自己订单的发货 / 物流情况时调用",
-            profiles = {"customer"}, category = "订单")
-    public String queryOrder(@ToolParam(description = "订单号，如 FR2024001", example = "FR2024001") String orderNo) {
+    @Tool(desc = "按订单号查询订单状态。用户追问自己订单的发货 / 物流情况时调用",
+            value = "queryOrder", domains = {"customer"})
+    public String queryOrder(@ToolParam("订单号，如 FR2024001") String orderNo) {
         log.info("[示例工具] queryOrder orderNo={}", orderNo);
         String status = ORDERS.get(orderNo);
         if (status == null) {
@@ -54,36 +53,32 @@ public class ExampleAnnotatedTools {
         return "订单 " + orderNo + " 当前状态：" + status;
     }
 
-    @StringerTool(name = "queryLogistics",
-            description = "按订单号查询物流轨迹。用户追问包裹到哪了、什么时候送到时调用；"
-                    + "问订单状态时优先用 queryOrder",
-            profiles = {"customer"}, category = "订单")
-    public String queryLogistics(@ToolParam(description = "订单号，如 FR2024001") String orderNo) {
+    @Tool(desc = "按订单号查询物流轨迹。用户追问包裹到哪了、什么时候送到时调用；"
+            + "问订单状态时优先用 queryOrder",
+            value = "queryLogistics", domains = {"customer"})
+    public String queryLogistics(@ToolParam("订单号，如 FR2024001") String orderNo) {
         log.info("[示例工具] queryLogistics orderNo={}", orderNo);
         return LOGISTICS.getOrDefault(orderNo, "没有查到订单 " + orderNo + " 的物流记录");
     }
 
     // ==================== ③ 管理域专属 ====================
 
-    @StringerTool(name = "businessReport",
-            description = "查询今日经营指标（订单量 / 成交额 / 退款 / 异常单数）。"
-                    + "仅管理视角可用；用户问今天经营情况、卖了多少时调用",
-            profiles = {"admin"}, category = "经营")
+    @Tool(desc = "查询今日经营指标（订单量 / 成交额 / 退款 / 异常单数）。"
+            + "仅管理视角可用；用户问今天经营情况、卖了多少时调用",
+            value = "businessReport", domains = {"admin"})
     public String businessReport() {
         log.info("[示例工具] businessReport");
         return "今日订单 128 单，成交额 ¥18,640，退款 3 单，异常 2 单（示例数据）";
     }
 
-    // ==================== ④ 管理域专属 + 有副作用 ⇒ 需人工二次确认 ====================
+    // ==================== ④ 管理域专属 + 有副作用 ⇒ 需人工二次确认 + 参数脱敏 ====================
 
-    @StringerTool(name = "closeOrder",
-            description = "关闭一笔订单。仅在用户明确要求取消 / 关闭订单时调用，必须给出原因",
-            profiles = {"admin"}, category = "订单",
-            sideEffect = StringerTool.SideEffect.WRITE)
-    @ToolPolicy(approval = @ToolPolicy.Approval(mode = ToolPolicy.Approval.Mode.ALWAYS,
-            reason = "关单不可逆，需人工确认"))
-    public String closeOrder(@ToolParam(description = "要关闭的订单号") String orderNo,
-                             @ToolParam(description = "关闭原因，如 用户申请退款") String reason) {
+    @Tool(desc = "关闭一笔订单。仅在用户明确要求取消 / 关闭订单时调用，必须给出原因",
+            value = "closeOrder", domains = {"admin"},
+            effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
+            approvalReason = "关单不可逆，需人工确认")
+    public String closeOrder(@ToolParam("要关闭的订单号") String orderNo,
+                             @ToolParam("关闭原因，如 用户申请退款") String reason) {
         log.info("[示例工具] closeOrder orderNo={} reason={}", orderNo, reason);
 
         String current = ORDERS.get(orderNo);
@@ -98,14 +93,15 @@ public class ExampleAnnotatedTools {
         return "订单 " + orderNo + " 已关闭，原因：" + reason + "。如需确认可再次查询该订单状态。";
     }
 
-    @StringerTool(name = "updateDeliveryPhone",
-            description = "修改订单的收货联系电话。仅在用户明确要求更换号码时调用，改前需与用户核对号码",
-            profiles = {"admin"}, category = "订单",
-            sideEffect = StringerTool.SideEffect.WRITE)
-    @ToolPolicy(approval = @ToolPolicy.Approval(mode = ToolPolicy.Approval.Mode.ALWAYS,
-            reason = "修改收货联系方式需人工核对"))
-    public String updateDeliveryPhone(@ToolParam(description = "订单号") String orderNo,
-                                      @ToolParam(description = "新的联系电话，11 位手机号") String phone) {
+    // ==================== ⑤ 高级可选：示例值 + 参数脱敏（@ToolAdvanced） ====================
+
+    @Tool(desc = "修改订单的收货联系电话。仅在用户明确要求更换号码时调用，改前需与用户核对号码",
+            value = "updateDeliveryPhone", domains = {"admin"},
+            effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
+            approvalReason = "修改收货联系方式需人工核对")
+    @ToolAdvanced(example = {"phone=13800000000"}, sensitive = {"phone"})
+    public String updateDeliveryPhone(@ToolParam("订单号") String orderNo,
+                                      @ToolParam("新的联系电话，11 位手机号") String phone) {
         log.info("[示例工具] updateDeliveryPhone orderNo={} phone={}", orderNo, phone);
         if (!ORDERS.containsKey(orderNo)) {
             return "没有找到订单 " + orderNo + "，未做任何修改";

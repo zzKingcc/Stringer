@@ -178,7 +178,7 @@
             <span class="badge customer">profile = "customer"</span>
         </div>
         <div class="panel-sub">
-            水果订阅的客服视角。模型能看到 <b>天气</b>（未声明 profiles = 全域可见）+ <b>订单查询</b>
+            水果订阅的客服视角。模型能看到 <b>天气</b>（显式声明通配 <code>*</code> ＝ 全域可见）+ <b>订单查询</b>
             （<code>customer</code> 专属）；管理域的经营数据、关单都不在它的视野内。
             试着问它"今天卖了多少单"，看它手上有没有这个能力。
         </div>
@@ -205,7 +205,7 @@
             <span class="badge admin">profile = "admin"</span>
         </div>
         <div class="panel-sub">
-            运营视角。在"天气"（全域可见）之上，额外可用 <b>经营数据</b> 与 <b>关单</b>；
+            运营视角。在"天气"（通配 <code>*</code>，全域可见）之上，额外可用 <b>经营数据</b> 与 <b>关单</b>；
             关单是写操作，提交后会弹二次确认。反过来，<b>查订单</b>是客服域专属，这里拿不到。
         </div>
         <div class="chat-box" id="chat-admin"></div>

@@ -48,7 +48,7 @@ public class ToolInstanceAutoConfiguration {
         ToolInstanceConfig config = properties.toConfig(server, resolveEndpoint(properties, environment));
         ToolInstanceClient client = new ToolInstanceClient(config);
 
-        // ① 注解式：方法上的 @StringerTool 直接成为工具
+        // ① 注解式：方法上的 @Tool 直接成为工具
         int annotated = 0;
         if (properties.isScanAnnotated()) {
             annotated = new AnnotatedToolScanner(beanFactory).registerTo(client);

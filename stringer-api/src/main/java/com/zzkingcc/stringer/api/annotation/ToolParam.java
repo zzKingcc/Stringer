@@ -22,6 +22,10 @@ import java.lang.annotation.Target;
  *
  * <p>两者同时存在时：<b>形参注解优先</b>（就近覆盖）。</p>
  *
+ * <p>这里只放"每个参数都该写"的字段（说明 / 名字 / 是否必填）。<b>示例值、枚举白名单、
+ * 脱敏参数名不在这里</b> —— 它们属于"偶尔才写一项"的长尾，统一放 {@link ToolAdvanced}，
+ * 免得每个参数声明都拖着一串空字段。</p>
+ *
  * @author zzkingcc
  */
 @Retention(RetentionPolicy.RUNTIME)
@@ -37,34 +41,9 @@ public @interface ToolParam {
      */
     String value() default "";
 
-    /**
-     * @deprecated 改用 {@link #value()}：新写法用一个值即可，无需显式写 {@code description = ...}。
-     *             保留为别名（{@code value} 留空时回落读取），两个版本后移除。
-     */
-    @Deprecated(since = "1.1")
-    String description() default "";
-
     /** 参数名；留空则取形参名（或标在字段上时取字段名） */
     String name() default "";
 
     /** 是否必填；{@code Optional<T>} 会被自动判定为可选 */
     boolean required() default true;
-
-    /**
-     * @deprecated 改用 {@link ToolAdvanced#example()}（按参数名对应，与参数顺序无关）。
-     */
-    @Deprecated(since = "1.1")
-    String example() default "";
-
-    /**
-     * @deprecated 改用 {@link ToolAdvanced#allowValues()}（按参数名对应）。
-     */
-    @Deprecated(since = "1.1")
-    String[] allowValues() default {};
-
-    /**
-     * @deprecated 改用 {@link ToolAdvanced#sensitive()}（按参数名给出清单）。
-     */
-    @Deprecated(since = "1.1")
-    boolean sensitive() default false;
 }

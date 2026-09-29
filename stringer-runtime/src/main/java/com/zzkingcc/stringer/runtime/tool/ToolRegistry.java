@@ -392,6 +392,31 @@ public class ToolRegistry {
         return known.isEmpty() || known.contains(profile);
     }
 
+    /**
+     * 某工具被声明为<b>敏感</b>的参数名集合（递归含 DTO 展开出的字段名）。
+     *
+     * <p>用途只有一个：把"给人看的参数文本"（工具调用事件、审批 payload）掩码，
+     * 执行时用的仍是原值。工具不存在、或没声明过 sensitive，都返回空集。</p>
+     */
+    public Set<String> sensitiveParams(String toolName) {
+        return find(toolName)
+                .map(registered -> collectSensitive(registered.descriptor().params(), new HashSet<>()))
+                .orElse(Set.of());
+    }
+
+    private static Set<String> collectSensitive(List<ToolDescriptor.Param> params, Set<String> out) {
+        if (params == null) {
+            return out;
+        }
+        for (ToolDescriptor.Param param : params) {
+            if (param.sensitive()) {
+                out.add(param.name());
+            }
+            collectSensitive(param.properties(), out);
+        }
+        return out;
+    }
+
     /** 全部工具描述符（无 Class 引用的元数据，供管理页 / 审计 / 远程注册使用） */
     public List<ToolDescriptor> descriptors() {
         return tools.values().stream()

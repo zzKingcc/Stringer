@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.server.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -148,20 +148,20 @@ public final class ToolManifest {
     }
 
     /** 副作用等级：接受枚举名（READ/WRITE/DESTRUCTIVE），也接受布尔（false=READ、true=WRITE） */
-    private static StringerTool.SideEffect sideEffect(JsonNode node) {
+    private static Tool.Effect sideEffect(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) {
-            return StringerTool.SideEffect.READ;
+            return Tool.Effect.READ;
         }
         if (node.isBoolean()) {
-            return node.asBoolean() ? StringerTool.SideEffect.WRITE : StringerTool.SideEffect.READ;
+            return node.asBoolean() ? Tool.Effect.WRITE : Tool.Effect.READ;
         }
         String raw = node.asText("").trim().toUpperCase();
-        for (StringerTool.SideEffect effect : StringerTool.SideEffect.values()) {
+        for (Tool.Effect effect : Tool.Effect.values()) {
             if (effect.name().equals(raw)) {
                 return effect;
             }
         }
-        return StringerTool.SideEffect.READ;
+        return Tool.Effect.READ;
     }
 
     /** 域：去空白 + 去重 + 剔空（与注解扫描同规则——同名即同域，前后空格会造成静默分裂） */

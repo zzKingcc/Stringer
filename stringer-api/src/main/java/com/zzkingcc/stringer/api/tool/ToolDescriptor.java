@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.api.tool;
 
 import com.zzkingcc.stringer.api.agent.Domains;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
 
 import java.util.List;
 
@@ -27,7 +27,7 @@ public record ToolDescriptor(
         String description,
         String category,
         String version,
-        StringerTool.SideEffect sideEffect,
+        Tool.Effect sideEffect,
         boolean idempotent,
         boolean toModel,
         List<Param> params,
@@ -88,9 +88,9 @@ public record ToolDescriptor(
     }
 
     /**
-     * 二次确认策略（与注解 {@code @ToolPolicy.Approval} 对应）
+     * 二次确认策略（与注解 {@code @Tool.Approval} 对应）
      *
-     * @param mode           NONE / ALWAYS / CONDITIONAL / ONCE_PER_SESSION
+     * @param mode           NONE / ALWAYS
      * @param condition      条件表达式（CONDITIONAL 模式）
      * @param reason         展示给审批人的原因
      * @param approverRoles  有批准权的角色标识，由<b>宿主</b>判定——平台不预定义角色，也不做校验

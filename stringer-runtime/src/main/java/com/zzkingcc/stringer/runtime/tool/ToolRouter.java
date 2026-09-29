@@ -40,7 +40,7 @@ public class ToolRouter {
                 registry.size(), registry.toolsRequiringApproval().size(),
                 registry.toolsRequiringApproval());
         if (registry.isEmpty()) {
-            log.warn("[工具路由] 当前没有任何工具被注册：请确认工具提供者实现了 StringerToolProvider 且被 Spring 扫描到");
+            log.warn("[工具路由] 当前没有任何工具被注册：请确认工具方法上标注了 @Tool，且所在 Bean 已被 Spring 扫描到");
         }
     }
 
@@ -121,6 +121,13 @@ public class ToolRouter {
      */
     public List<ToolDescriptor> getToolDescriptors() {
         return registry.descriptors();
+    }
+
+    /**
+     * 某工具的敏感参数名（供工具调用事件与审批 payload 做值掩码）。
+     */
+    public Set<String> sensitiveParams(String toolName) {
+        return registry.sensitiveParams(toolName);
     }
 
     /**

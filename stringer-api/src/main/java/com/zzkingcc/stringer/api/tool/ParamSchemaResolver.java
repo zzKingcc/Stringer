@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.api.tool;
 
+import com.zzkingcc.stringer.api.annotation.ToolAdvanced;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
 
 import java.lang.reflect.Field;
@@ -20,11 +21,17 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BiConsumer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 方法签名 + 注解 → 参数结构（含 DTO 递归展开）。
@@ -39,15 +46,24 @@ import java.util.UUID;
  * <p>支持两种载体：形参前的 {@code @ToolParam}，以及参数 DTO 字段上的 {@code @ToolParam}；
  * 形参优先（就近覆盖）。</p>
  *
+ * <p>方法级的 {@link ToolAdvanced} 在树建好之后按<b>参数名</b>统一套上（示例 / 枚举白名单 / 敏感），
+ * 名字既可是形参名也可是 DTO 展开出的字段名 —— 因此 {@code @ToolAdvanced} 的约定是"按名字对应，
+ * 不做位置对齐"。</p>
+ *
  * @author zzkingcc
  */
 public final class ParamSchemaResolver {
+
+    private static final Logger log = LoggerFactory.getLogger(ParamSchemaResolver.class);
 
     /**
      * 嵌套展开的深度上限 —— 超过即停止展开。
      * 深结构会让模型难以正确构造，循环引用更是会在扫描期爆栈，两者都必须挡住。
      */
     public static final int MAX_DEPTH = 5;
+
+    /** 未写说明时的占位文案；{@link #hasDescription} 以它为判据 */
+    private static final String UN_DESCRIBED = "（未描述）";
 
     private ParamSchemaResolver() {
     }
@@ -70,7 +86,10 @@ public final class ParamSchemaResolver {
             out.add(resolveOne(name, parameter.getParameterizedType(), annotation,
                     required, 0, new HashSet<>()));
         }
-        return List.copyOf(out);
+
+        // 方法级 @ToolAdvanced 在树建好后按参数名套上（示例 / 白名单 / 敏感）；
+        // 说明的"示例后缀"也在这一步统一处理，两侧（服务端与工具实例）必须得到同一段文本
+        return List.copyOf(applyOverrides(out, ParamOverrides.of(method)));
     }
 
     /** 递归解析一个参数（可能是 DTO） */
@@ -82,17 +101,14 @@ public final class ParamSchemaResolver {
                                                    Set<Class<?>> visiting) {
         Class<?> raw = rawTypeOf(generic);
 
+        // 白名单先取"类型自带的"（枚举常量）；@ToolAdvanced.allowValues 在整棵树建好后按名字套上
         List<String> allowValues = new ArrayList<>();
-        if (annotation != null && annotation.allowValues().length > 0) {
-            allowValues.addAll(Arrays.asList(annotation.allowValues()));
-        } else if (raw != null && raw.isEnum()) {
+        if (raw != null && raw.isEnum()) {
             allowValues.addAll(enumValues(raw));
         }
 
         String type = allowValues.isEmpty() ? jsonType(raw) : "enum";
         String description = descriptionOf(annotation);
-        String example = annotation == null ? "" : annotation.example();
-        boolean sensitive = annotation != null && annotation.sensitive();
 
         List<ToolDescriptor.Param> children = List.of();
         if ("object".equals(type)) {
@@ -107,7 +123,7 @@ public final class ParamSchemaResolver {
         }
 
         return new ToolDescriptor.Param(name, type, description, required,
-                List.copyOf(allowValues), example, sensitive, children);
+                List.copyOf(allowValues), "", false, children);
     }
 
     /**
@@ -156,18 +172,47 @@ public final class ParamSchemaResolver {
         return resolveOne(name, generic, annotation, required, depth + 1, visiting);
     }
 
-    /** 参数说明：新写法 {@code value} 优先，回落到旧的 {@code description} */
+    /**
+     * 参数说明：{@code value} 是唯一来源。没写就是"未描述" ——
+     * 不阻断注册，但会由扫描器统计出来并打 WARN（模型只能靠参数名猜）。
+     */
     private static String descriptionOf(ToolParam annotation) {
-        if (annotation == null) {
-            return "（未描述）";
+        if (annotation == null || annotation.value().isBlank()) {
+            return UN_DESCRIBED;
         }
-        if (!annotation.value().isBlank()) {
-            return annotation.value().trim();
+        return annotation.value().trim();
+    }
+
+    /**
+     * 把 {@link ToolAdvanced} 按参数名套到已建好的参数树上。
+     *
+     * <p>递归整棵树：名字既可能是形参名，也可能是 DTO 展开出的字段名，两者一视同仁。
+     * 顺带处理"白名单把类型变成 enum"与"示例并入说明"两件事 —— 它们是这三个字段能被模型看见的
+     * 唯一途径（底层 schema 只有 description 一个自由文本位，没有独立的 example 槽）。</p>
+     */
+    static List<ToolDescriptor.Param> applyOverrides(List<ToolDescriptor.Param> params,
+                                                     ParamOverrides overrides) {
+        List<ToolDescriptor.Param> out = new ArrayList<>(params.size());
+        for (ToolDescriptor.Param param : params) {
+            List<String> allowValues = overrides.allowValuesOf(param.name());
+            boolean gainedOptions = !allowValues.isEmpty();
+            String example = overrides.exampleOf(param.name());
+
+            List<ToolDescriptor.Param> children = param.properties().isEmpty()
+                    ? param.properties()
+                    : applyOverrides(param.properties(), overrides);
+
+            out.add(new ToolDescriptor.Param(
+                    param.name(),
+                    gainedOptions ? "enum" : param.type(),
+                    overrides.describe(param.name(), param.description()),
+                    param.required(),
+                    gainedOptions ? allowValues : param.allowValues(),
+                    example,
+                    overrides.isSensitive(param.name()),
+                    children));
         }
-        if (!annotation.description().isBlank()) {
-            return annotation.description().trim();
-        }
-        return "（未描述）";
+        return out;
     }
 
     private static String fallbackParamName(Parameter parameter, int index) {
@@ -241,7 +286,7 @@ public final class ParamSchemaResolver {
         return param != null
                 && param.description() != null
                 && !param.description().isBlank()
-                && !param.description().startsWith("（未描述）");
+                && !param.description().startsWith(UN_DESCRIBED);
     }
 
     /** 递归统计"缺说明的参数"数量（含嵌套字段） */
@@ -254,5 +299,111 @@ public final class ParamSchemaResolver {
             missing += countMissingDescription(param.properties());
         }
         return missing;
+    }
+
+    // ==================== @ToolAdvanced 的索引化视图 ====================
+
+    /**
+     * {@link ToolAdvanced} 按参数名索引后的形态：查名字即可拿到示例 / 白名单 / 是否敏感。
+     *
+     * <p>公开出来是给<b>工具实例侧</b>复用的 —— 两侧必须用同一套解析与同一段说明文本，
+     * 否则同一段工具代码搬到另一侧就会得到不同的 schema（这正是本类要消除的问题）。</p>
+     *
+     * <p>写在 {@code 参数名=值} 里的格式错误（缺 {@code =}、参数名为空）会被<b>忽略并 WARN</b> ——
+     * 静默丢弃会让"写了但没生效"变成一个查不出来的问题。</p>
+     *
+     * @param examples    参数名 → 示例值
+     * @param allowValues 参数名 → 枚举白名单
+     * @param sensitive   需要掩码的参数名
+     */
+    public record ParamOverrides(Map<String, String> examples,
+                                 Map<String, List<String>> allowValues,
+                                 Set<String> sensitive) {
+
+        public static ParamOverrides of(Method method) {
+            ToolAdvanced annotation = method == null ? null : method.getAnnotation(ToolAdvanced.class);
+            if (annotation == null) {
+                return new ParamOverrides(Map.of(), Map.of(), Set.of());
+            }
+
+            Map<String, String> examples = new LinkedHashMap<>();
+            for (String entry : annotation.example()) {
+                nameValue(entry, (name, value) -> examples.putIfAbsent(name, value));
+            }
+
+            Map<String, List<String>> allowValues = new LinkedHashMap<>();
+            for (String entry : annotation.allowValues()) {
+                nameValue(entry, (name, value) -> allowValues.put(name, Arrays.stream(value.split("\\|"))
+                        .map(String::trim)
+                        .filter(v -> !v.isBlank())
+                        .toList()));
+            }
+
+            Set<String> sensitive = new LinkedHashSet<>();
+            for (String name : annotation.sensitive()) {
+                if (name != null && !name.isBlank()) {
+                    sensitive.add(name.trim());
+                } else {
+                    log.warn("[参数解析] @ToolAdvanced.sensitive 含空白项，已忽略");
+                }
+            }
+            return new ParamOverrides(examples, allowValues, sensitive);
+        }
+
+        public String exampleOf(String name) {
+            // Map.of() 是 null 敌意的：匿名节点（如数组元素）没有名字，必须先挡掉
+            return name == null ? "" : examples.getOrDefault(name, "");
+        }
+
+        public List<String> allowValuesOf(String name) {
+            return name == null ? List.of() : allowValues.getOrDefault(name, List.of());
+        }
+
+        public boolean isSensitive(String name) {
+            return name != null && sensitive.contains(name);
+        }
+
+        /**
+         * 参数说明的最终形态：留空 → {@code （未描述）}；有示例则追加到末尾。
+         *
+         * <p>示例之所以并进说明而不是单独占一个字段：底层模型 schema（langchain4j 的
+         * {@code JsonXxxSchema}）只有 {@code description} 一个自由文本位，额外字段会被丢掉 ——
+         * 也就到不了模型眼前。已是"未描述"时改用分号连写，避免出现两对括号。</p>
+         */
+        public String describe(String name, String rawDescription) {
+            String base = rawDescription == null || rawDescription.isBlank()
+                    ? UN_DESCRIBED : rawDescription.trim();
+            String example = exampleOf(name);
+            if (example.isBlank() || base.contains(example)) {
+                return base;
+            }
+            if (UN_DESCRIBED.equals(base)) {
+                return UN_DESCRIBED + "；示例：" + example + "）";
+            }
+            return base + "（示例：" + example + "）";
+        }
+
+        /** 拆一个 {@code 参数名=值} 条目；不合法就 WARN 后跳过 */
+        private static void nameValue(String entry, BiConsumer<String, String> sink) {
+            if (entry == null) {
+                return;
+            }
+            int split = entry.indexOf('=');
+            if (split <= 0 || split == entry.length() - 1) {
+                warn(entry);
+                return;
+            }
+            String name = entry.substring(0, split).trim();
+            String value = entry.substring(split + 1).trim();
+            if (name.isEmpty() || value.isEmpty()) {
+                warn(entry);
+                return;
+            }
+            sink.accept(name, value);
+        }
+
+        private static void warn(String entry) {
+            log.warn("[参数解析] @ToolAdvanced 的条目「{}」不是「参数名=值」形式，已忽略", entry);
+        }
     }
 }

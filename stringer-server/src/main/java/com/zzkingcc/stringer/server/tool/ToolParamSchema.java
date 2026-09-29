@@ -33,33 +33,40 @@ final class ToolParamSchema {
         return objectSchema(parameters);
     }
 
-    /** 由根级 JSON Schema 派生描述符参数列表（只看顶层，嵌套结构退化为 object / array） */
+    /**
+     * 由根级 JSON Schema 派生描述符参数列表 —— <b>递归保留嵌套结构</b>，与本地 Bean 工具口径一致。
+     *
+     * <p>早先这里只读顶层、把嵌套结构拍成 object/array，于是"同一段工具代码"在本地部署与
+     * 远端实例两种形态下会得到不同的描述符（远端看不到 DTO 子字段，进而看不到声明在子字段上的
+     * 示例 / 白名单 / 敏感）。既然上报报文里本来就带着 {@code properties}，就没有理由丢掉。</p>
+     */
     static List<ToolDescriptor.Param> toParams(JsonNode parameters) {
-        List<ToolDescriptor.Param> params = new ArrayList<>();
         if (parameters == null || !parameters.isObject()) {
-            return params;
+            return List.of();
         }
-        JsonNode properties = parameters.path("properties");
-        if (!properties.isObject()) {
-            return params;
-        }
+        return toParams(parameters.path("properties"), textList(parameters.path("required")));
+    }
 
-        List<String> required = textList(parameters.path("required"));
+    private static List<ToolDescriptor.Param> toParams(JsonNode properties, List<String> required) {
+        List<ToolDescriptor.Param> params = new ArrayList<>();
+        if (properties == null || !properties.isObject()) {
+            return params;
+        }
         Iterator<Map.Entry<String, JsonNode>> it = properties.fields();
         while (it.hasNext()) {
             Map.Entry<String, JsonNode> entry = it.next();
-            String name = entry.getKey();
             JsonNode property = entry.getValue();
             List<String> allowValues = textList(property.path("enum"));
             String type = allowValues.isEmpty() ? typeName(property) : "enum";
             params.add(new ToolDescriptor.Param(
-                    name,
+                    entry.getKey(),
                     type,
                     property.path("description").asText("（未描述）"),
-                    required.contains(name),
+                    required.contains(entry.getKey()),
                     List.copyOf(allowValues),
                     property.path("example").asText(""),
-                    property.path("x-sensitive").asBoolean(false)));
+                    property.path("x-sensitive").asBoolean(false),
+                    toParams(property.path("properties"), textList(property.path("required")))));
         }
         return params;
     }

@@ -16,12 +16,13 @@ import java.util.Map;
  * @param description      给 LLM 的用途说明（写清"何时调用 / 何时不要调用"比参数描述更重要）
  * @param category         管理页分类（不参与任何过滤）
  * @param version          语义化版本
- * @param profiles         所属的域；<b>留空 = 所有域可见</b>
+ * @param profiles         可用域（<b>授权边界</b>）；<b>留空 = 只属于兜底域 {@code default}</b>，
+ *                         {@code "*"} = 任何域可用（须显式声明）
  * @param sideEffect       {@code READ} / {@code WRITE} / {@code DESTRUCTIVE}
  * @param idempotent       是否幂等（决定失败后能否自动重试）
  * @param toModel          结果是否回填 LLM
  * @param requiresApproval 是否需要人工二次确认
- * @param approvalMode     {@code ALWAYS} / {@code CONDITIONAL} / {@code ONCE_PER_SESSION}
+ * @param approvalMode     {@code ALWAYS}（新注解只保留 {@code NONE} / {@code ALWAYS}）
  * @param approvalReason   展示给审批人的原因
  * @param parameters       参数 JSON Schema（{@code {"type":"object","properties":{...},"required":[...]}}）
  */
@@ -78,10 +79,22 @@ public record ToolSpec(String name,
         return root;
     }
 
-    /** 声明所属的域（可多次调用，追加） */
-    public ToolSpec withProfiles(String... profiles) {
-        return new ToolSpec(name, description, category, version, List.of(profiles), sideEffect,
+    /**
+     * 声明可用域（<b>授权边界</b>，覆盖式设置）。留空 = 只属于兜底域 {@code default}；
+     * {@code "*"} = 任何域可用（须显式写出）。
+     */
+    public ToolSpec withDomains(String... domains) {
+        return new ToolSpec(name, description, category, version, List.of(domains), sideEffect,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
+    }
+
+    /**
+     * @deprecated 更名为 {@link #withDomains(String...)}（语义从"可见性"升级为"授权边界"）。
+     *             保留为别名转调。
+     */
+    @Deprecated(since = "1.1")
+    public ToolSpec withProfiles(String... profiles) {
+        return withDomains(profiles);
     }
 
     public ToolSpec withCategory(String category) {

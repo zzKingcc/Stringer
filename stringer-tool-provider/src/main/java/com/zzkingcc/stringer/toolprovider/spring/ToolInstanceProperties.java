@@ -17,7 +17,7 @@ public class ToolInstanceProperties {
     private boolean enabled = false;
 
     /**
-     * 是否扫描 {@code @StringerTool} 注解方法并自动注册（默认 true）。
+     * 是否扫描 {@code @Tool} 注解方法并自动注册（默认 true）。
      * 关掉它就只能用 {@code ToolInstanceContributor} 编程式注册——
      * 适合"工具清单要在启动时动态拼装"或"容器里带同名方法不想被扫到"的场景。
      */

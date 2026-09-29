@@ -2,9 +2,9 @@ package com.zzkingcc.stringer.toolprovider.spring;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.zzkingcc.stringer.api.annotation.StringerTool;
+import com.zzkingcc.stringer.api.annotation.Tool;
+import com.zzkingcc.stringer.api.annotation.ToolAdvanced;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
-import com.zzkingcc.stringer.api.annotation.ToolPolicy;
 import com.zzkingcc.stringer.toolprovider.ToolHandler;
 import com.zzkingcc.stringer.toolprovider.ToolRegistrar;
 import com.zzkingcc.stringer.toolprovider.ToolSpec;
@@ -33,7 +33,7 @@ class AnnotatedToolScannerTest {
 
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(DemoTools.class)) {
             int count = new AnnotatedToolScanner(ctx).registerTo(new Collector(specs, handlers));
-            assertEquals(3, count);
+            assertEquals(4, count);
         }
 
         ToolSpec note = specs.get("addNote");
@@ -48,6 +48,33 @@ class AnnotatedToolScannerTest {
         assertTrue(parameters.path("required").toString().contains("text"));
         assertEquals("string", parameters.path("properties").path("text").path("type").asText());
         assertEquals("备注内容", parameters.path("properties").path("text").path("description").asText());
+    }
+
+    @Test
+    void ToolAdvanced的示例白名单与敏感落到schema() {
+        Map<String, ToolSpec> specs = new LinkedHashMap<>();
+
+        try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(DemoTools.class)) {
+            new AnnotatedToolScanner(ctx).registerTo(new Collector(specs, new LinkedHashMap<>()));
+        }
+
+        JsonNode properties = specs.get("rebind").parameters().path("properties");
+
+        // ① 示例：既进 example 字段，也追加到模型唯一看得见的说明里
+        assertEquals("FR2024001", properties.path("orderNo").path("example").asText());
+        assertEquals("订单号（示例：FR2024001）", properties.path("orderNo").path("description").asText());
+
+        // ② 枚举白名单：成为 schema 的 enum
+        assertEquals("string", properties.path("channel").path("type").asText());
+        assertEquals("[\"SMS\",\"APP\"]", properties.path("channel").path("enum").toString());
+
+        // ③ 敏感：上报 x-sensitive，服务端据此把值掩码
+        assertTrue(properties.path("phone").path("x-sensitive").asBoolean());
+        assertEquals("新手机号（示例：13800000000）", properties.path("phone").path("description").asText());
+
+        // 没声明的参数不该被牵连
+        assertTrue(properties.path("orderNo").path("x-sensitive").isMissingNode());
+        assertTrue(properties.path("channel").path("example").isMissingNode());
     }
 
     @Test
@@ -83,19 +110,31 @@ class AnnotatedToolScannerTest {
 
     static class DemoTools {
 
-        @StringerTool(name = "addNote", description = "记一条备注", profiles = {"admin"},
-                category = "运营", sideEffect = StringerTool.SideEffect.WRITE)
-        @ToolPolicy(approval = @ToolPolicy.Approval(mode = ToolPolicy.Approval.Mode.ALWAYS, reason = "写操作需确认"))
-        public String addNote(@ToolParam(description = "备注内容") String text) {
+        @Tool(desc = "记一条备注", value = "addNote", domains = {"admin"},
+                effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
+                approvalReason = "写操作需确认")
+        public String addNote(@ToolParam("备注内容") String text) {
             return "已记录: " + text;
         }
 
-        @StringerTool(description = "统计城市数量，用于演示类型化参数绑定")
+        @Tool(desc = "统计城市数量，用于演示类型化参数绑定")
         public String countCities(int count, String city, Level level) {
             return "城市 " + count + " 个：" + city + "，类型 " + level;
         }
 
-        @StringerTool(description = "无参数工具")
+        @Tool(desc = "按订单号改绑手机号", value = "rebind", domains = {"admin"},
+                effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
+                approvalReason = "改绑需人工核对")
+        @ToolAdvanced(example = {"orderNo=FR2024001", "phone=13800000000"},
+                allowValues = {"channel=SMS|APP"},
+                sensitive = {"phone"})
+        public String rebind(@ToolParam("订单号") String orderNo,
+                             @ToolParam("通知渠道") String channel,
+                             @ToolParam("新手机号") String phone) {
+            return "已改绑: " + orderNo + "/" + channel + "/" + phone;
+        }
+
+        @Tool(desc = "无参数工具")
         public String ping() {
             return "pong";
         }
@@ -107,12 +146,12 @@ class AnnotatedToolScannerTest {
 
     static class DuplicatedTools {
 
-        @StringerTool(name = "sameName", description = "第一个")
+        @Tool(value = "sameName", desc = "第一个")
         public String first() {
             return "1";
         }
 
-        @StringerTool(name = "sameName", description = "第二个")
+        @Tool(value = "sameName", desc = "第二个")
         public String second() {
             return "2";
         }

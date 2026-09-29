@@ -20,6 +20,17 @@ import java.util.Map;
 @Slf4j
 public class EsIndexManager {
 
+    /**
+     * 切片元数据里"可用域"的字段名（与 {@code @Tool(domains = {...})} 同构：含 {@code *} → 全域；留空 → 兜底域）。
+     *
+     * <p>必须是 {@code keyword}：动态映射会把它变成 {@code text}（默认分词器），
+     * 而 {@code "*"} 是纯标点会被分词器丢掉，"全域可见"的文档就永远查不到。</p>
+     */
+    public static final String DOMAINS_FIELD = "domains";
+
+    /** ES 查询路径 */
+    public static final String DOMAINS_QUERY_FIELD = "metadata." + DOMAINS_FIELD;
+
     private EsIndexManager() {}
 
     /** 启动诊断：输出 ES 版本、集群健康、索引存在性及字段结构 */
@@ -120,6 +131,8 @@ public class EsIndexManager {
                 } else {
                     log.info("[ES] 索引[{}]已存在（mapping dims={}），跳过创建IK mapping", indexName, current);
                 }
+                // 存量索引补字段：domains 是新增的（知识库按域检索），mapping 允许加新字段，不允许改旧字段类型
+                ensureDomainsMapping(esClient, indexName);
                 return;
             }
 
@@ -151,7 +164,8 @@ public class EsIndexManager {
                             "properties": {
                               "file_name":     { "type": "keyword" },
                               "section_title": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
-                              "content_hash":  { "type": "keyword" }
+                              "content_hash":  { "type": "keyword" },
+                              "domains":       { "type": "keyword" }
                             }
                           }
                         }
@@ -184,6 +198,36 @@ public class EsIndexManager {
     }
 
     /** 写入后校验：刷新索引，输出查询结果 */
+    /**
+     * 存量索引补 {@code metadata.domains} 字段（知识库按域检索需要）。
+     *
+     * <p>为什么必须显式声明为 {@code keyword}：靠动态映射的话，字符串会被映射成 {@code text}
+     * （默认分词器），而 {@code "*"} 是纯标点、被分词器直接丢掉 —— {@code terms} 就永远匹配不上
+     * "全域可见"的文档。加字段是 ES 允许的操作（改已有字段类型才不允许）。</p>
+     */
+    private static void ensureDomainsMapping(ElasticsearchClient esClient, String indexName) {
+        try {
+            var state = esClient.indices().get(g -> g.index(indexName)).get(indexName);
+            if (state != null && state.mappings() != null && state.mappings().properties() != null) {
+                Property metadata = state.mappings().properties().get("metadata");
+                if (metadata != null && metadata.isObject()
+                        && metadata.object().properties().containsKey(DOMAINS_FIELD)) {
+                    return;
+                }
+            }
+            esClient.indices().putMapping(p -> p
+                    .index(indexName)
+                    .withJson(new java.io.StringReader(
+                            "{\"properties\":{\"metadata\":{\"type\":\"object\","
+                                    + "\"properties\":{\"" + DOMAINS_FIELD + "\":{\"type\":\"keyword\"}}}}}")));
+            log.info("[ES] 索引[{}] 已补上 metadata.domains(keyword) 字段（知识库按域检索需要）", indexName);
+        } catch (Exception e) {
+            // 补字段失败不该阻断启动：过滤条件仍会生效，只是"全域可见"的文档可能查不到，留日志可查
+            log.warn("[ES] 索引[{}] 补充 metadata.domains 字段失败，按域检索可能过滤不到文档: {}",
+                    indexName, e.getMessage());
+        }
+    }
+
     public static void writeAfterVerify(ElasticsearchClient esClient, String indexName) {
         try {
             esClient.indices().refresh(r -> r.index(indexName));

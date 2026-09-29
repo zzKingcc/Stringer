@@ -4,6 +4,7 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
@@ -23,9 +24,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -93,16 +96,52 @@ public class KnowledgeBaseService {
     public record UploadResult(String docId, String fileName, long size, int chunks) {}
 
     /** 索引内已入库的文档条目 */
-    public record DocumentItem(String docId, String fileName, String fileNameLower, int chunks) {}
+    public record DocumentItem(String docId, String fileName, String fileNameLower,
+                               int chunks, List<String> domains) {}
 
     /**
-     * 同步上传一个文档。
+     * 规范化文档的可用域 —— 与 {@code @Tool(domains = {...})} <b>同构</b>：
+     * 含 {@code "*"} → 全域可见；留空 → 只属兜底域；否则原样（去空白 + 去重）。
+     *
+     * <p>同构是刻意的：接入方学一次规则，工具与知识库两个维度通用。</p>
+     */
+    public static List<String> normalizeDomains(List<String> domains) {
+        Set<String> seen = new LinkedHashSet<>();
+        if (domains != null) {
+            for (String domain : domains) {
+                if (domain == null || domain.isBlank()) {
+                    continue;
+                }
+                seen.add(domain.trim());
+            }
+        }
+        if (seen.contains(Domains.ANY)) {
+            return List.of(Domains.ANY);
+        }
+        if (seen.isEmpty()) {
+            return List.of(Domains.DEFAULT);
+        }
+        return List.copyOf(seen);
+    }
+
+    /**
+     * 同步上传一个文档（不声明域 → 只属兜底域 {@code default}）。
      *
      * @param content  文件字节
      * @param fileName 原始文件名（含扩展名）
      * @param replace  {@code true} = 已存在同名文档时先删旧再写入；{@code false} = 直接拒绝
      */
     public UploadResult upload(byte[] content, String fileName, boolean replace) {
+        return upload(content, fileName, replace, List.of());
+    }
+
+    /**
+     * 同步上传一个文档，并声明它的可用域。
+     *
+     * <p>域决定<b>哪些对话能检索到这份文档</b>。检索工具本身仍由部署方用 {@code @Tool} 暴露到哪些域，
+     * 两层是叠加的：工具不在该域 → 根本不会被调用；工具在该域 → 再按文档的域过滤内容。</p>
+     */
+    public UploadResult upload(byte[] content, String fileName, boolean replace, List<String> domains) {
         String name = requireSupported(fileName);
         if (content == null || content.length == 0) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED, "文件内容为空");
@@ -112,9 +151,11 @@ public class KnowledgeBaseService {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
                     "文件 " + name + " 超过大小上限：" + content.length + " 字节，上限 " + max + " 字节");
         }
-        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，replace={}", name, content.length, replace);
+        List<String> effective = normalizeDomains(domains);
+        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，replace={}，可用域={}",
+                name, content.length, replace, effective);
 
-        Future<UploadResult> future = submit(content, name, replace);
+        Future<UploadResult> future = submit(content, name, replace, effective);
         try {
             return future.get();
         } catch (InterruptedException e) {
@@ -131,9 +172,9 @@ public class KnowledgeBaseService {
     }
 
     /** 提交导入任务；队列满时明确拒绝，而不是无界堆积 */
-    private Future<UploadResult> submit(byte[] content, String fileName, boolean replace) {
+    private Future<UploadResult> submit(byte[] content, String fileName, boolean replace, List<String> domains) {
         try {
-            return ingestExecutor.submit(() -> ingest(content, fileName, replace));
+            return ingestExecutor.submit(() -> ingest(content, fileName, replace, domains));
         } catch (RejectedExecutionException e) {
             log.warn("[知识库] 导入队列已满（容量 {}），拒绝本次上传：{}",
                     ragProperties.getIngestQueueCapacity(), fileName);
@@ -158,6 +199,7 @@ public class KnowledgeBaseService {
 
             Map<String, String> idToName = new LinkedHashMap<>();
             Map<String, Integer> idToChunks = new LinkedHashMap<>();
+            Map<String, List<String>> idToDomains = new LinkedHashMap<>();
             for (Hit<Map> hit : resp.hits().hits()) {
                 Map<String, Object> md = metadataOf(hit.source());
                 if (md == null) {
@@ -169,10 +211,12 @@ public class KnowledgeBaseService {
                 }
                 idToName.putIfAbsent(docId, text(md.get("file_name")));
                 idToChunks.merge(docId, 1, Integer::sum);
+                idToDomains.putIfAbsent(docId, domainsOf(md));
             }
             List<DocumentItem> items = new ArrayList<>();
             idToName.forEach((id, fileName) ->
-                    items.add(new DocumentItem(id, fileName, lower(fileName), idToChunks.getOrDefault(id, 0))));
+                    items.add(new DocumentItem(id, fileName, lower(fileName), idToChunks.getOrDefault(id, 0),
+                            idToDomains.getOrDefault(id, List.of(Domains.DEFAULT)))));
             return items;
         } catch (Exception e) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
@@ -218,7 +262,8 @@ public class KnowledgeBaseService {
 
     // ==================== 内部实现 ====================
 
-    private UploadResult ingest(byte[] content, String fileName, boolean replace) throws InterruptedException {
+    private UploadResult ingest(byte[] content, String fileName, boolean replace,
+                                List<String> domains) throws InterruptedException {
         // 串行锁在任务内部获取：排队等待不占用额外池线程，池大小可保持很小
         if (!ingestPermit.tryAcquire(ragProperties.getIngestLockWaitSeconds(), TimeUnit.SECONDS)) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
@@ -246,7 +291,7 @@ public class KnowledgeBaseService {
             }
 
             docId = UUID.randomUUID().toString();
-            Document doc = buildDocument(content, fileName, docId, lowerName);
+            Document doc = buildDocument(content, fileName, docId, lowerName, domains);
             int processed = DocumentIngestor.ingestExternalDocuments(
                     List.of(doc), esClient, index, embeddingStore, embeddingModel);
             if (processed <= 0) {
@@ -295,14 +340,42 @@ public class KnowledgeBaseService {
         return index;
     }
 
-    private Document buildDocument(byte[] content, String fileName, String docId, String lowerName) {
+    private Document buildDocument(byte[] content, String fileName, String docId,
+                                   String lowerName, List<String> domains) {
         Document doc = Document.from(new String(content, StandardCharsets.UTF_8));
         Metadata md = doc.metadata();
         md.put("file_name", fileName);
         md.put("file_name_lower", lowerName);
         md.put("doc_id", docId);
         md.put("upload_time", Instant.now().toString());
+        // 列表是 ES 过滤需要的形态；Metadata 没有 put(String,Object) 重载，只能走 putAll
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("domains", domains);
+        md.putAll(extra);
         return doc;
+    }
+
+    /**
+     * 读取切片元数据里的可用域；<b>没有该字段的按全域可见</b> ——
+     * 那是本功能上线前入库的历史文档，当时检索本来就是全库的。
+     * 视作"只属 default"会让它们从所有域里凭空消失，那是一次无声的数据丢失。
+     */
+    static List<String> domainsOf(Map<String, Object> md) {
+        Object raw = md.get("domains");
+        if (raw instanceof List<?> list) {
+            List<String> out = new ArrayList<>();
+            for (Object value : list) {
+                if (value != null && !value.toString().isBlank()) {
+                    out.add(value.toString());
+                }
+            }
+            if (!out.isEmpty()) {
+                return List.copyOf(out);
+            }
+        } else if (raw != null && !raw.toString().isBlank()) {
+            return List.of(raw.toString());
+        }
+        return List.of(Domains.ANY);
     }
 
     /** 校验扩展名在白名单内，返回去空白的文件名 */

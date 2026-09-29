@@ -795,6 +795,7 @@ public class AdminController {
             row.put("docId", item.docId());
             row.put("fileName", item.fileName());
             row.put("chunks", item.chunks());
+            row.put("domains", item.domains());
             documents.add(row);
         }
         Map<String, Object> body = new LinkedHashMap<>();
@@ -808,13 +809,15 @@ public class AdminController {
      * 上传一个知识库文档（multipart，字段名 {@code file}）
      *
      * @param replace {@code true} = 已存在同名文档时先删旧再写入；{@code false} = 同名直接拒绝（60005）
+     * @param domains 该文档的可用域（与 {@code @Tool(domains=)} 同构：含 {@code *} → 全域；留空 → 只属兜底域）
      */
     @PostMapping(value = "/kb/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> kbUpload(@RequestParam("file") MultipartFile file,
-                                        @RequestParam(value = "replace", defaultValue = "false") boolean replace)
+                                        @RequestParam(value = "replace", defaultValue = "false") boolean replace,
+                                        @RequestParam(value = "domains", required = false) List<String> domains)
             throws IOException {
         KnowledgeBaseService.UploadResult result =
-                knowledgeBaseService.upload(file.getBytes(), file.getOriginalFilename(), replace);
+                knowledgeBaseService.upload(file.getBytes(), file.getOriginalFilename(), replace, domains);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 0);
         body.put("success", true);
@@ -822,6 +825,7 @@ public class AdminController {
         body.put("fileName", result.fileName());
         body.put("size", result.size());
         body.put("chunks", result.chunks());
+        body.put("domains", KnowledgeBaseService.normalizeDomains(domains));
         return body;
     }
 

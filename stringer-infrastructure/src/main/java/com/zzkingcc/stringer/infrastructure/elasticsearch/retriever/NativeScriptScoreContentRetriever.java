@@ -3,6 +3,7 @@ package com.zzkingcc.stringer.infrastructure.elasticsearch.retriever;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import dev.langchain4j.data.segment.TextSegment;
@@ -72,13 +73,16 @@ public class NativeScriptScoreContentRetriever implements ContentRetriever {
                                 .script(script))
                         .build();
 
+        // 域过滤下推到通道内：放融合之后会把本域结果挤掉（Top-N 被其他域占满），召回会塌陷
+        Query domainFiltered = DomainFilterQuery.wrap(scriptScoreQuery);
+
         try {
             SearchResponse<Map> resp = esClient.search(s -> s
                             .index(indexName)
                             .size(maxResults)
                             .minScore(minScoreRaw)//匹配数量
                             .source(src -> src.filter(f -> f.includes("text", "metadata")))
-                            .query(scriptScoreQuery),
+                            .query(domainFiltered),
                     Map.class);
 
             List<Content> out = new ArrayList<>();

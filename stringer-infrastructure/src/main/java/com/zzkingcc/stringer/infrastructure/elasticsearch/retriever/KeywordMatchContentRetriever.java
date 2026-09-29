@@ -49,12 +49,15 @@ public class KeywordMatchContentRetriever implements ContentRetriever {
                         .type(co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType.BestFields))
                 .build();
 
+        // 域过滤下推到通道内：放融合之后会把本域结果挤掉（Top-N 被其他域占满），召回会塌陷
+        Query domainFiltered = DomainFilterQuery.wrap(matchQuery);
+
         try {
             SearchResponse<Map> resp = esClient.search(s -> s
                             .index(indexName)
                             .size(maxResults)
                             .source(src -> src.filter(f -> f.includes("text", "metadata")))
-                            .query(matchQuery),
+                            .query(domainFiltered),
                     Map.class);
 
             List<Content> out = new ArrayList<>();

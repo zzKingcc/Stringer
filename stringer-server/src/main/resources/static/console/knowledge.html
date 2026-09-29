@@ -38,6 +38,18 @@
                 </label>
                 <button id="uploadBtn">上传</button>
             </div>
+            <div class="btn-row">
+                <label class="hint" style="margin:0;">
+                    可用域（按住 Ctrl / Cmd 可多选）：
+                    <select id="domainSelect" multiple size="4" style="min-width:12rem;">
+                        <option value="*">*（全域可见）</option>
+                    </select>
+                </label>
+                <span class="hint" style="margin:0;">
+                    决定<b>哪些对话能检索到这份文档</b>，与 <code>@Tool(domains = {...})</code> 同构：含 <code>*</code> → 全域；
+                    不选 → 只属兜底域 <code>default</code>。检索工具本身仍由部署方声明到哪些域，两层叠加。
+                </span>
+            </div>
             <div id="uploadResult" class="result"></div>
         </div>
 
@@ -66,6 +78,36 @@
 <script src="assets/console.js"></script>
 <script>
     var esc = Console.escapeHtml;
+
+    /** 域标签：* 是全域；历史文档（升级前入库）没有 domains 字段，服务端按全域返回 */
+    function domainLabel(domains) {
+        var list = domains || [];
+        if (!list.length) return '<span class="pill">default</span>';
+        var all = list.indexOf('*') >= 0;
+        if (all) return '<span class="pill">全域 *</span>';
+        return list.map(function (d) { return '<span class="pill">' + esc(d) + '</span>'; }).join(' ');
+    }
+
+    function loadDomainOptions() {
+        var select = document.getElementById('domainSelect');
+        Console.request('/api/agent/domains').then(function (data) {
+            var fallback = data.fallback || 'default';
+            (data.domains || []).forEach(function (id) {
+                if (id === '*') return;   // 已在 HTML 里作为首项
+                var opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = id + (id === fallback ? '（兜底域）' : '');
+                select.appendChild(opt);
+            });
+        }).catch(function () {
+            // 拉不到域清单不影响上传：不选即兜底域，页面已写明
+        });
+    }
+
+    function selectedDomains() {
+        var select = document.getElementById('domainSelect');
+        return Array.prototype.slice.call(select.selectedOptions || []).map(function (o) { return o.value; });
+    }
 
     function loadEmbeddingStatus() {
         var el = document.getElementById('embStatus');
@@ -96,12 +138,13 @@
                 return '<tr>'
                     + '<td><code>' + esc(d.docId || '') + '</code></td>'
                     + '<td>' + esc(d.fileName || '') + '</td>'
+                    + '<td>' + domainLabel(d.domains) + '</td>'
                     + '<td>' + (d.chunks || 0) + '</td>'
                     + '<td><button class="danger" data-doc="' + esc(d.docId || '') + '">删除</button></td>'
                     + '</tr>';
             }).join('');
             box.className = '';
-            box.innerHTML = '<table><thead><tr><th>docId</th><th>文件名</th><th>切片数</th><th>操作</th>'
+            box.innerHTML = '<table><thead><tr><th>docId</th><th>文件名</th><th>可用域</th><th>切片数</th><th>操作</th>'
                 + '</tr></thead><tbody>' + rows + '</tbody></table>';
             box.querySelectorAll('button[data-doc]').forEach(function (btn) {
                 btn.addEventListener('click', function () { removeDoc(btn.getAttribute('data-doc')); });
@@ -130,12 +173,15 @@
         var form = new FormData();
         form.append('file', input.files[0]);
         var replace = document.getElementById('replaceChk').checked;
+        var domains = selectedDomains();
+        var query = '/admin/kb/documents?replace=' + (replace ? 'true' : 'false');
+        domains.forEach(function (d) { query += '&domains=' + encodeURIComponent(d); });
 
         btn.disabled = true;
         box.className = 'result show';
         box.textContent = '上传中…（切片 + 向量化，耗时随文件体积增长）';
 
-        fetch('/admin/kb/documents?replace=' + (replace ? 'true' : 'false'), {
+        fetch(query, {
             method: 'POST',
             body: form,
             credentials: 'same-origin'
@@ -181,6 +227,7 @@
     document.getElementById('rebuildBtn').addEventListener('click', rebuild);
     Console.ready(function () {
         loadEmbeddingStatus();
+        loadDomainOptions();
         loadDocuments();
     });
 </script>

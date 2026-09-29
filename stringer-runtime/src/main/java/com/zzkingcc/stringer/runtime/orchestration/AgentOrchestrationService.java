@@ -9,6 +9,7 @@ import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.event.AgentEvent;
 import com.zzkingcc.stringer.api.model.ToolCall;
 import com.zzkingcc.stringer.api.model.ToolCallPayload;
+import com.zzkingcc.stringer.api.support.RetrievalScope;
 import com.zzkingcc.stringer.api.support.TraceId;
 import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.domain.memory.DualConstraintChatMemory;
@@ -371,10 +372,14 @@ public class AgentOrchestrationService implements AgentService {
             // 绑定与解除都在本线程同一次调用内,不会泄漏到同线程的下一轮。
             ToolInvocationContext.bind(context == null ? null : context.getCaller(),
                     context == null ? null : context.traceId());
+            // 知识库检索要按本轮域过滤，而工具签名里没有域参数：在这里把域绑给检索层。
+            // 与 ToolInvocationContext 同绑定点、同解除点，不会泄漏到同线程的下一轮。
+            RetrievalScope.bind(profile);
             String result;
             try {
                 result = toolRouter.execute(request);
             } finally {
+                RetrievalScope.clear();
                 ToolInvocationContext.clear();
             }
 

@@ -41,13 +41,23 @@ public class KnowledgeBaseClient {
     public record DocumentItem(String docId, String fileName, int chunks) {}
 
     /**
-     * 上传一个文档。
+     * 上传一个文档（不声明域 → 只属兜底域 {@code default}）。
      *
      * @param content  文件字节
      * @param fileName 文件名（含扩展名，需在服务端白名单内）
      * @param replace  {@code true} = 已存在同名文档时覆盖更新；{@code false} = 同名直接拒绝
      */
     public UploadResult upload(byte[] content, String fileName, boolean replace) {
+        return upload(content, fileName, replace, List.of());
+    }
+
+    /**
+     * 上传一个文档，并声明它的可用域。
+     *
+     * <p>域决定<b>哪些对话能检索到这份文档</b>，与 {@code @Tool(domains = {...})} 同构：
+     * 含 {@code "*"} → 全域可见；留空 → 只属兜底域；否则原样。
+     */
+    public UploadResult upload(byte[] content, String fileName, boolean replace, List<String> domains) {
         if (content == null || content.length == 0) {
             throw new StringerException(ErrorCode.INVALID_PARAMETER, "上传内容为空");
         }
@@ -65,10 +75,20 @@ public class KnowledgeBaseClient {
             }
         });
 
+        List<String> effectiveDomains = domains == null ? List.of() : domains.stream()
+                .filter(d -> d != null && !d.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+
         Map<String, Object> resp = webClient.post()
-                .uri(uri -> uri.path("/admin/kb/documents")
-                        .queryParam("replace", replace)
-                        .build())
+                .uri(uri -> {
+                    uri.path("/admin/kb/documents").queryParam("replace", replace);
+                    if (!effectiveDomains.isEmpty()) {
+                        uri.queryParam("domains", effectiveDomains);
+                    }
+                    return uri.build();
+                })
                 .header(ClientCredential.CREDENTIAL_HEADER, credential.get())
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))

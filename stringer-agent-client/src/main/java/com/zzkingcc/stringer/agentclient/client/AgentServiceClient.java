@@ -6,7 +6,7 @@ import com.zzkingcc.stringer.api.agent.CallerContext;
 import com.zzkingcc.stringer.api.event.AgentEvent;
 import com.zzkingcc.stringer.agentclient.exception.StringerErrors;
 import com.zzkingcc.stringer.agentclient.exception.StringerException;
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -27,7 +27,7 @@ public class AgentServiceClient implements AgentService {
     private final WebClient webClient;
     private final ClientCredential credential;
 
-    public AgentServiceClient(WebClient webClient, ServerProperties server, ClientCredential credential) {
+    public AgentServiceClient(WebClient webClient, StringerProperties server, ClientCredential credential) {
         this.webClient = webClient;
         this.credential = credential;
         log.info("[Stringer客户端] 初始化完成，服务端地址={}，接入账号={}",

@@ -16,7 +16,7 @@ import java.util.Map;
  * @param description      给 LLM 的用途说明（写清"何时调用 / 何时不要调用"比参数描述更重要）
  * @param category         管理页分类（不参与任何过滤）
  * @param version          语义化版本
- * @param profiles         可用域（<b>授权边界</b>）；<b>留空 = 只属于兜底域 {@code default}</b>，
+ * @param domains          可用域（<b>授权边界</b>）；<b>留空 = 只属于兜底域 {@code default}</b>，
  *                         {@code "*"} = 任何域可用（须显式声明）
  * @param sideEffect       {@code READ} / {@code WRITE} / {@code DESTRUCTIVE}
  * @param idempotent       是否幂等（决定失败后能否自动重试）
@@ -30,7 +30,7 @@ public record ToolSpec(String name,
                        String description,
                        String category,
                        String version,
-                       List<String> profiles,
+                       List<String> domains,
                        String sideEffect,
                        boolean idempotent,
                        boolean toModel,
@@ -45,7 +45,7 @@ public record ToolSpec(String name,
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("工具名不能为空");
         }
-        profiles = profiles == null ? List.of() : List.copyOf(profiles);
+        domains = domains == null ? List.of() : List.copyOf(domains);
         category = blankTo(category, "default");
         version = blankTo(version, "1.0.0");
         sideEffect = blankTo(sideEffect, "READ");
@@ -88,38 +88,29 @@ public record ToolSpec(String name,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
     }
 
-    /**
-     * @deprecated 更名为 {@link #withDomains(String...)}（语义从"可见性"升级为"授权边界"）。
-     *             保留为别名转调。
-     */
-    @Deprecated(since = "1.1")
-    public ToolSpec withProfiles(String... profiles) {
-        return withDomains(profiles);
-    }
-
     public ToolSpec withCategory(String category) {
-        return new ToolSpec(name, description, category, version, profiles, sideEffect,
+        return new ToolSpec(name, description, category, version, domains, sideEffect,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
     }
 
     public ToolSpec withSideEffect(String sideEffect) {
-        return new ToolSpec(name, description, category, version, profiles, sideEffect,
+        return new ToolSpec(name, description, category, version, domains, sideEffect,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
     }
 
     public ToolSpec withIdempotent(boolean idempotent) {
-        return new ToolSpec(name, description, category, version, profiles, sideEffect,
+        return new ToolSpec(name, description, category, version, domains, sideEffect,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
     }
 
     public ToolSpec withToModel(boolean toModel) {
-        return new ToolSpec(name, description, category, version, profiles, sideEffect,
+        return new ToolSpec(name, description, category, version, domains, sideEffect,
                 idempotent, toModel, requiresApproval, approvalMode, approvalReason, parameters);
     }
 
     /** 需要人工确认（有副作用的工具应配它；{@code mode} 留空按 ALWAYS 处理） */
     public ToolSpec withApproval(String mode, String reason) {
-        return new ToolSpec(name, description, category, version, profiles, sideEffect,
+        return new ToolSpec(name, description, category, version, domains, sideEffect,
                 idempotent, toModel, true, mode, reason, parameters);
     }
 
@@ -130,7 +121,7 @@ public record ToolSpec(String name,
         entry.put("description", description == null ? "" : description);
         entry.put("category", category);
         entry.put("version", version);
-        entry.put("profiles", profiles);
+        entry.put("domains", domains);
         entry.put("sideEffect", sideEffect);
         entry.put("idempotent", idempotent);
         entry.put("toModel", toModel);

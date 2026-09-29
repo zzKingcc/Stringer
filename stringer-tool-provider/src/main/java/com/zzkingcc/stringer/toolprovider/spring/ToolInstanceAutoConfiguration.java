@@ -1,6 +1,6 @@
 package com.zzkingcc.stringer.toolprovider.spring;
 
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import com.zzkingcc.stringer.toolprovider.ToolInstanceClient;
 import com.zzkingcc.stringer.toolprovider.ToolInstanceConfig;
 import com.zzkingcc.stringer.toolprovider.ToolInstanceContributor;
@@ -25,8 +25,8 @@ import java.net.URI;
  * @author zzkingcc
  */
 @AutoConfiguration
-@ConditionalOnProperty(prefix = "stringer.tool-instance", name = "enabled", havingValue = "true")
-@EnableConfigurationProperties({ServerProperties.class, ToolInstanceProperties.class})
+@ConditionalOnProperty(prefix = "stringer", name = "tools", havingValue = "true")
+@EnableConfigurationProperties({StringerProperties.class, ToolInstanceProperties.class})
 @Import(ToolInstanceInvokeController.class)
 public class ToolInstanceAutoConfiguration {
 
@@ -40,7 +40,7 @@ public class ToolInstanceAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public ToolInstanceClient toolInstanceClient(ServerProperties server,
+    public ToolInstanceClient toolInstanceClient(StringerProperties server,
                                                 ToolInstanceProperties properties,
                                                 Environment environment,
                                                 ListableBeanFactory beanFactory,

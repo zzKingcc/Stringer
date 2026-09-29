@@ -4,7 +4,7 @@ import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.agentclient.exception.StringerErrors;
 import com.zzkingcc.stringer.agentclient.exception.StringerStartupException;
 import com.zzkingcc.stringer.agentclient.properties.ClientProperties;
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -28,12 +28,12 @@ public class ClientCredential {
     static final String LOGIN_PATH = "/api/agent/login";
 
     private final WebClient webClient;
-    private final ServerProperties server;
+    private final StringerProperties server;
     private final ClientProperties properties;
 
     private final AtomicReference<String> credential = new AtomicReference<>();
 
-    public ClientCredential(WebClient webClient, ServerProperties server, ClientProperties properties) {
+    public ClientCredential(WebClient webClient, StringerProperties server, ClientProperties properties) {
         this.webClient = webClient;
         this.server = server;
         this.properties = properties;

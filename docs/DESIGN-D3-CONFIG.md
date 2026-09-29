@@ -146,7 +146,7 @@ public class StringerProperties {
 
 ## 7 迁移清单（落地时一并做）
 
-1. `stringer-example` 的 `application.yml` 改成新形态；
+1. `stringer-example` 已移除（例子后期重写），故无需迁移示例配置；
 2. `SDK-USAGE.md` / `SDK-CONTRACT.md`（配置章节）/ `INSTANCE.md`（若有配置说明）同步；
 3. `DESIGN-1.0.md` §2.5 标注 D3 已完成；
 4. 在 `CHANGELOG`/release note 注明旧键 deprecated。
@@ -155,7 +155,7 @@ public class StringerProperties {
 
 - 单测：`StringerProperties` URL 解析（scheme/host/port，默认端口回退）；新旧键优先级与 WARN 触发；
 - 兼容单测：只写 `host/port` 仍能拼出正确 `serverUrl`；
-- `stringer-example` 用新配置联调全流程不改一行跑通；
+- 示例已移除，改以单测覆盖新旧键解析与 URL 推导；
 - `clean test` 全绿。
 
 ## 9 待你拍板

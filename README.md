@@ -212,13 +212,7 @@ public String refundOrder(@ToolParam("订单号") String orderNo,
 
 ### 联调示例
 
-仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@Tool` 声明——并以"工具实例"身份注册给服务端）：
-
-```bash
-mvn -pl stringer-example spring-boot:run
-```
-
-访问 `http://localhost:8080/test.html` 体验完整链路（含审批中断 → 恢复）。
+`stringer-example` 示例模块**已移除**（测试版破坏性改造，例子后期重写）。接入方式见 `SDK-USAGE.md` / `INSTANCE.md`。
 
 ## 架构
 
@@ -248,7 +242,6 @@ stringer-server
 | `stringer-server` | **服务端**：可独立部署，承载全部重逻辑与管控台 |
 | `stringer-agent-client` | **消费侧唯一坐标**：`StringerAgent`（`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`）+ 工具实例 SDK + 公共异常与输入安全 |
 | `stringer-tool-provider` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
-| `stringer-example` | 接入示例与联调 |
 
 ## 接口
 

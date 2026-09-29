@@ -67,7 +67,7 @@ public class ToolRegistry {
                     + "（已存在来源 " + previous.descriptor().source()
                     + "，冲突来源 " + local.descriptor().source() + "）");
         }
-        remember(local.descriptor().profiles());
+        remember(local.descriptor().domains());
         log.info("[工具注册] {} ← {}（category={}, sideEffect={}, 需授权={}）",
                 name, local.descriptor().source(),
                 local.descriptor().category(), local.descriptor().sideEffect(),
@@ -130,7 +130,7 @@ public class ToolRegistry {
                 if (name == null || name.isBlank()) {
                     continue;
                 }
-                remember(r.descriptor().profiles());
+                remember(r.descriptor().domains());
                 if (oldNames.contains(name)) {
                     refreshReplica(name, instanceId, callEndpoint, r);
                 } else {
@@ -273,7 +273,7 @@ public class ToolRegistry {
      */
     private static ToolDescriptor withoutSource(ToolDescriptor d) {
         return new ToolDescriptor(d.name(), d.description(), d.category(), d.version(), d.sideEffect(),
-                d.idempotent(), d.toModel(), d.params(), d.profiles(), d.approval(), null);
+                d.idempotent(), d.toModel(), d.params(), d.domains(), d.approval(), null);
     }
 
     // ==================== 读取 ====================
@@ -348,7 +348,7 @@ public class ToolRegistry {
     public Set<String> knownProfiles() {
         Set<String> all = new HashSet<>(declaredProfiles);
         for (Registered r : tools.values()) {
-            addProfiles(all, r.descriptor().profiles());
+            addDomains(all, r.descriptor().domains());
         }
         // 通配不是域，不能混进域集合（否则会出现一个叫 "*" 的域）
         all.remove(Domains.ANY);
@@ -360,10 +360,10 @@ public class ToolRegistry {
 
     /** 记下一次域声明：域一经被声明就在进程内保留，提供它的工具断开后它依然可用 */
     private void remember(List<String> profiles) {
-        addProfiles(declaredProfiles, profiles);
+        addDomains(declaredProfiles, profiles);
     }
 
-    private static void addProfiles(Set<String> target, List<String> profiles) {
+    private static void addDomains(Set<String> target, List<String> profiles) {
         if (profiles == null) {
             return;
         }

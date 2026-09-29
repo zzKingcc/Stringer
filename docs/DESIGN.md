@@ -38,7 +38,7 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | `stringer-sdk-core` | 共享契约层：被两个 SDK 共同依赖，承载 `ServerProperties`（`stringer.server.*`）、`ClientProperties` 等共用配置 | `sdkcore` |
 | `stringer-agent-client` | 消费侧 SDK：凭证管理、`AgentServiceClient`（内部通道）、**唯一入口** `StringerAgent`（`DefaultStringerAgentFactory` / `DefaultStringerAgent`）、`KnowledgeBaseClient`、启动连通性探测 | `agentclient` |
 | `stringer-tool-provider` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolprovider` |
-| `stringer-example` | 接入示例（含示例知识文档与示例工具），不随服务端交付 | `example` |
+| ~~`stringer-example`~~ | **已移除**（例子后期重写） | — |
 
 依赖方向：`api → common → domain → infrastructure → runtime → server`；`sdk-core` 依赖 `api`+`common`；`agent-client` 与 `tool-provider` 都依赖 `sdk-core`（两者互不依赖，可单独或同时引入）；`tool-provider` 不依赖任何其它 Stringer 模块（与服务端只通过 HTTP 报文耦合）。
 

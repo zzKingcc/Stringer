@@ -110,7 +110,7 @@ class ToolAnnotationScanTest {
     void classLevelDomainsAndApprovalAreInherited() {
         ToolDescriptor close = find(AnnotatedToolScanner.scan(new DemoTools()), "close");
 
-        assertTrue(close.profiles().contains("admin"), "应继承类级 @ToolDomains");
+        assertTrue(close.domains().contains("admin"), "应继承类级 @ToolDomains");
         assertTrue(close.requiresApproval(), "@Tool(approval = ALWAYS) 应生效");
         assertEquals("关单需人工确认", close.approval().reason());
         assertEquals("WRITE", close.sideEffect().name());

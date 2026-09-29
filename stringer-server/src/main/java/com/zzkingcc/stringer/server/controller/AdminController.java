@@ -526,7 +526,7 @@ public class AdminController {
         /* 全域可见＝显式声明了通配 "*" 的工具（它们在每个域里都会出现）。
            注意与「未声明域」区分：未声明＝只属于兜底域 default，不再等于全域可见。 */
         List<ToolDescriptor> globalTools = all.stream()
-                .filter(d -> d.profiles() != null && d.profiles().contains(Domains.ANY))
+                .filter(d -> d.domains() != null && d.domains().contains(Domains.ANY))
                 .toList();
 
         int approvalTotal = 0;
@@ -777,7 +777,7 @@ public class AdminController {
         t.put("provider", providerOf(d.source()));
         t.put("source", d.source());
         // 该工具是否"只声明了一个域"——一眼看出域的专属能力，还是全域通用能力
-        t.put("exclusive", d.profiles() != null && d.profiles().size() == 1);
+        t.put("exclusive", d.domains() != null && d.domains().size() == 1);
         return t;
     }
 

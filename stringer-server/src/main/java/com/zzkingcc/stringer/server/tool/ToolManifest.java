@@ -120,7 +120,7 @@ public final class ToolManifest {
                 entry.path("idempotent").asBoolean(true),
                 entry.path("toModel").asBoolean(true),
                 List.copyOf(params),
-                profiles(entry.path("profiles")),
+                domains(entry.path("domains")),
                 approval(entry),
                 // source 只作来源标识与排障，不参与路由（路由永远看地址列表）
                 "remote://" + instanceId + "@" + endpoint);
@@ -165,7 +165,7 @@ public final class ToolManifest {
     }
 
     /** 域：去空白 + 去重 + 剔空（与注解扫描同规则——同名即同域，前后空格会造成静默分裂） */
-    private static List<String> profiles(JsonNode node) {
+    private static List<String> domains(JsonNode node) {
         return textList(node).stream().map(String::trim).distinct().toList();
     }
 
@@ -181,7 +181,7 @@ public final class ToolManifest {
                     .append(compact(entry.path("description"))).append('\u0001')
                     .append(entry.path("category").asText("")).append('\u0001')
                     .append(entry.path("version").asText("")).append('\u0001')
-                    .append(textList(entry.path("profiles"))).append('\u0001')
+                    .append(textList(entry.path("domains"))).append('\u0001')
                     .append(compact(entry.path("parameters"))).append('\u0001')
                     .append(entry.path("sideEffect").asText("")).append('\u0001')
                     .append(entry.path("idempotent").asText("")).append('\u0001')

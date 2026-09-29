@@ -150,9 +150,22 @@ Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③
 
 `PromptToolConsistencyAudit` + `StartupSelfCheckConfiguration`（`SmartInitializingSingleton`）：提示词里出现的工具名必须在该域可见 → WARN（复用 `countMissingDescription` 模式）；**只 WARN 不阻断**，异常降级为一条 WARN。配套编写纪律（base 段不许点名具体工具）。
 
-### 2.5 配置形态（当前 · D3 待收敛）
+### 2.5 配置形态（**D3 已落地** · 无兼容）
 
-当前消费侧配置仍是「按内部模块分组」（约 13 项键）；早期草稿提出的「13→4 项扁平化」（`server` URL / `username` / `password` / `domains` / `tools`）**尚未实施**，列为待做（见 §5 D3）。
+消费侧配置已收敛为顶层扁平键（**测试版不做兼容，旧键已直接删除**）：
+
+```yaml
+stringer:
+  server: http://localhost:9527   # 一个 URL 取代 host + port（含协议）
+  username: stringer              # 接入账号（常默认，可不写）
+  password: stringer              # 接入密码（常默认，可不写）
+  tools: true                     # 是否注册本进程 @Tool（默认 false）
+```
+
+- 配置类：`sdkcore.config.StringerProperties`（`prefix="stringer"`），由它解析出 host/port 供工具实例复用；旧 `ServerProperties`（`host`/`port`/`username`/`password`）与 `tool-instance.enabled` **已删除**。
+- **不引入 `domains` 配置键**，域存在性由运行时服务端校验。
+- 高级键（`stringer.client.*`、`stringer.tool-instance.*` 其余）保留原名。
+- 详见 `DESIGN-D3-CONFIG.md`。
 
 ---
 
@@ -197,6 +210,9 @@ Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③
 | **域 S1 声明强制化 + 默认域** | `domains` 留空→`default`+WARN；`{"*"}` 全域；启动期 seed `default`；`ToolDescriptor.visibleIn` 授权语义 | `DOMAIN-REFACTOR-PLAN §5.1` |
 | **域 S2 域注册表 + 域清单接口** | `DomainRegistry`（BUILTIN/MANUAL）；`ToolRouter` 合并两来源；`DomainStore`(domains.json)；`GET /api/agent/domains` + `POST/DELETE /admin/domains` | 同上 |
 | **域 S3 命名统一 + 管控台域管理** | `domains()` 为主、`profiles()` deprecated；管控台域空间「来源」列 + 新建/删除（仅人工域） | 同上 |
+| **D3 配置扁平化（无兼容）** | 新增 `StringerProperties`（`prefix="stringer"`）承载 `server` URL + `username`/`password` + `tools`；删除旧 `ServerProperties`（host/port/username/password）与 `tool-instance.enabled`；工具实例开关改 `stringer.tools` | 本轮 |
+| **旧 `profiles` 命名与报文键清理** | `ToolDescriptor`/`ToolSpec` 字段 `profiles`→`domains`；上报与解析端 JSON 键 `profiles`→`domains`；删除 `ToolSpec.withProfiles` 别名；`visibleIn` 参数名 `profile`→`domainId` | 本轮 |
+| **删除 example 模块** | `stringer-example` 整体移除（含 module 与 dependencyManagement），例子后期重写 | 本轮 |
 
 ### 4.2 待做（路线图上，未实施）
 
@@ -204,7 +220,7 @@ Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③
 | --- | --- | --- |
 | **域 S4 装配接管** | 模型/提示词/知识/记忆从全局迁入域；全局值降级为 `default` 域装配初值 | S1/S2（已具备） |
 | **域 S5 域内选择与覆盖** | 域 `include`/`exclude` + 交集 + 覆盖审批/超时/配额；越界发布即失败 | S4 |
-| **D3 配置扁平化** | 消费侧 14→3 项（`server` URL / `username` / `password` / `tools`，`tools` **默认关闭**；**不引入 `domains` 配置键**，域存在性由运行时服务端校验）+ 旧键映射。详见 `DESIGN-D3-CONFIG.md` | 独立 |
+| **重写 example 示例** | `stringer-example` 已移除，需重新编写接入示例（含演示工具与联调语料） | 独立 |
 | **T1 / T2(数据面) / T4 / T5(后段) / T6 / T7 / T8 / T9(后段)** | 见 §3 状态列 | 各主题自述 |
 | **skill 系统** | 形态（`@Skill` 注解 vs `skills/*.md`）+ 归属（域构件/跨域 `{"*"}`）— **已确认暂缓**，1.0 后定 | — |
 | **项目改名** | 候选已给（Strata/Thalamus/Sigil/Rein/…），**用户明确暂缓**，选名后按 10 类影响面清单执行 | — |
@@ -225,7 +241,7 @@ Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③
 
 | # | 决策 | 现状与建议 |
 | --- | --- | --- |
-| D3 | 配置是否一次扁平化 | 建议一次全改（旧键映射保留），否则使用者同时见两套写法 |
+| ~~D3 配置是否一次扁平化~~ | **已裁定并落地**：一次全改 + **不兼容旧键**（旧键直接删除，无映射无别名）；兼容层推迟到 1.0 正式版 |
 | S4/S5 | 装配接管与域内覆盖的优先级 | 建议先 S4（按域装配）再 S5（覆盖/审批/配额） |
 | T4 | 多 LLM 落地节奏 | 设计已就绪（`MULTI-LLM-DESIGN.md`）；建议与 S4 同批做（域绑模型档案） |
 | T3 | 其余 SPI 范围 | 坚持「只抽当前有两处以上实现的点」；先 `FusionStrategy` 验证模式，再扩 `MemoryStore`/`CheckpointStore`/`ModelProvider` |

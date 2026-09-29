@@ -9,7 +9,7 @@ import com.zzkingcc.stringer.agentclient.exception.StringerStartupException;
 import com.zzkingcc.stringer.agentclient.properties.ClientProperties;
 import com.zzkingcc.stringer.api.agent.StringerAgentFactory;
 import com.zzkingcc.stringer.api.code.ErrorCode;
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import org.slf4j.Logger;
@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * @author zzkingcc
  */
 @AutoConfiguration
-@EnableConfigurationProperties({ServerProperties.class, ClientProperties.class})
+@EnableConfigurationProperties({StringerProperties.class, ClientProperties.class})
 public class StringerAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(StringerAutoConfiguration.class);
@@ -41,7 +41,7 @@ public class StringerAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(name = "stringerWebClient")
-    public WebClient stringerWebClient(ServerProperties server, ClientProperties properties) {
+    public WebClient stringerWebClient(StringerProperties server, ClientProperties properties) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
                         (int) properties.getConnectTimeout().toMillis())
@@ -65,7 +65,7 @@ public class StringerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public ClientCredential stringerClientCredential(WebClient stringerWebClient,
-                                                     ServerProperties server,
+                                                     StringerProperties server,
                                                      ClientProperties properties) {
         return new ClientCredential(stringerWebClient, server, properties);
     }
@@ -82,7 +82,7 @@ public class StringerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public StringerAgentFactory stringerAgentFactory(WebClient stringerWebClient,
-                                                    ServerProperties server,
+                                                    StringerProperties server,
                                                     ClientCredential stringerClientCredential) {
         return new DefaultStringerAgentFactory(
                 new AgentServiceClient(stringerWebClient, server, stringerClientCredential));
@@ -104,7 +104,7 @@ public class StringerAutoConfiguration {
      */
     @Bean
     public SmartInitializingSingleton stringerConnectivityCheck(WebClient stringerWebClient,
-                                                                ServerProperties server,
+                                                                StringerProperties server,
                                                                 ClientProperties properties,
                                                                 ClientCredential clientCredential) {
         return () -> {
@@ -152,14 +152,14 @@ public class StringerAutoConfiguration {
     /**
      * 把失败翻译成可操作的排查提示。
      */
-    private static String describeFailure(ErrorCode code, ServerProperties server) {
+    private static String describeFailure(ErrorCode code, StringerProperties server) {
         // 先给出按码确定的主干提示
         String byCode = switch (code) {
             case AUTH_REQUIRED -> "服务端拒绝了访问凭证。若最近在管控台改过密码，"
-                    + "请同步更新 stringer.server.password（当前账号 " + server.getUsername() + "）";
+                    + "请同步更新 stringer.password（当前账号 " + server.getUsername() + "）";
             case EXTERNAL_SERVICE_TIMEOUT -> "连接超时，请检查网络与防火墙，或确认服务端是否仍在启动中";
             case SERVER_UNREACHABLE -> "网络层不可达：连接被拒绝通常是服务端未启动或端口不对，"
-                    + "域名解析失败请检查 stringer.server.host 与 DNS";
+                    + "域名解析失败请检查 stringer.server 与 DNS";
             default -> null;
         };
 

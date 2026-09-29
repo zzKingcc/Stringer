@@ -1,6 +1,6 @@
 package com.zzkingcc.stringer.agentclient.properties;
 
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -9,7 +9,7 @@ import java.time.Duration;
 /**
  * 客户端调用行为配置（{@code stringer.client.*}）
  *
- * <p>只管"怎么调"，不管"调哪里"——服务端地址与账号在 {@link ServerProperties}。</p>
+ * <p>只管"怎么调"，不管"调哪里"——服务端地址与账号在 {@link StringerProperties}。</p>
  *
  * @author zzkingcc
  */

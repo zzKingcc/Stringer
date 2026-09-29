@@ -28,7 +28,6 @@
         <module>stringer-agent-client</module>
         <module>stringer-tool-provider</module>
         <module>stringer-server</module>
-        <module>stringer-example</module>
     </modules>
 
     <properties>
@@ -115,12 +114,6 @@
                 <artifactId>stringer-tool-provider</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
-            <dependency>
-                <groupId>com.zzkingcc</groupId>
-                <artifactId>stringer-example</artifactId>
-                <version>${stringer.version}</version>
-            </dependency>
-
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>

@@ -1,6 +1,6 @@
 package com.zzkingcc.stringer.toolprovider.spring;
 
-import com.zzkingcc.stringer.sdkcore.config.ServerProperties;
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import com.zzkingcc.stringer.toolprovider.ToolInstanceConfig;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -12,9 +12,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "stringer.tool-instance")
 public class ToolInstanceProperties {
-
-    /** 是否启用工具实例（默认 false：引了 jar 不等于要当工具提供方） */
-    private boolean enabled = false;
 
     /**
      * 是否扫描 {@code @Tool} 注解方法并自动注册（默认 true）。
@@ -43,17 +40,9 @@ public class ToolInstanceProperties {
     private int requestTimeoutMillis = ToolInstanceConfig.DEFAULT_REQUEST_TIMEOUT_MILLIS;
 
     /** 转成内核用的不可变配置（顺带做必填校验，缺失即启动失败） */
-    public ToolInstanceConfig toConfig(ServerProperties server, String endpoint) {
+    public ToolInstanceConfig toConfig(StringerProperties server, String endpoint) {
         return new ToolInstanceConfig(server.getHost(), server.getPort(), server.getUsername(), server.getPassword(),
                 instanceId, endpoint, heartbeatIntervalSeconds, maxBackoffSeconds, requestTimeoutMillis);
-    }
-
-    public boolean isEnabled() {
-        return enabled;
-    }
-
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
     }
 
     public boolean isScanAnnotated() {

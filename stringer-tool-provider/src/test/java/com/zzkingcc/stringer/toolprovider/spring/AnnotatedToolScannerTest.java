@@ -38,7 +38,7 @@ class AnnotatedToolScannerTest {
 
         ToolSpec note = specs.get("addNote");
         assertEquals("记一条备注", note.description());
-        assertEquals(List.of("admin"), note.profiles());
+        assertEquals(List.of("admin"), note.domains());
         assertEquals("WRITE", note.sideEffect());
         assertTrue(note.requiresApproval(), "声明了 ALWAYS 审批就应需要人工确认");
         assertEquals("ALWAYS", note.approvalMode());

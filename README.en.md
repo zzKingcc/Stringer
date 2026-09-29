@@ -210,7 +210,7 @@ The signature is the parameter schema, the annotation is the governance policy, 
 
 ### Demo
 
-The repository includes `stringer-example` (a client integration demo on port 8080, shipping six demo tools — all declared with `@Tool` — registered as a tool instance):
+`stringer-example` demo module **has been removed** (beta is a breaking change; the demo will be rewritten later). See `SDK-USAGE.md` / `INSTANCE.md` for integration.
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -246,7 +246,6 @@ Tool provider (tool-provider SDK, or your own HTTP implementation)
 | `stringer-server` | **Server**: standalone deployable, hosts all heavy logic and the console |
 | `stringer-agent-client` | **Consumer-side single coordinate**: remote calls + tool instance SDK + shared exceptions and input security |
 | `stringer-tool-provider` | **Tool instance SDK**: registration and heartbeat keep-alive plus the invocation endpoint; depends only on the contract module `stringer-api`, no internal implementation (delivered transitively by the starter) |
-| `stringer-example` | Integration demo |
 
 ## API
 

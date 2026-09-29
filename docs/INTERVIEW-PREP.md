@@ -46,7 +46,7 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 - `stringer-server`：服务端装配（配置、管控接口、鉴权、设置存储、异常出口、静态管控台）
 - `stringer-agent-client`：消费侧客户端（凭证管理、`AgentServiceClient` 内部通道、`DefaultStringerAgentFactory`/`DefaultStringerAgent`、`KnowledgeBaseClient`、启动连通性探测）
 - `stringer-tool-provider`：工具实例 SDK（注解扫描、注册心跳、反向调用端点）
-- `stringer-example`：接入示例（含 6 个演示工具与 4 篇示例语料）
+- ~~`stringer-example`~~：**已移除**，例子后期重写（原含 6 个演示工具与 4 篇示例语料）
 
 依赖方向（文字描述的分层图）：
 

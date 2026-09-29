@@ -17,7 +17,7 @@ import java.util.List;
  * @param idempotent  是否幂等（决定能否自动重试）
  * @param toModel     结果是否回填 LLM
  * @param params      参数列表（结构 + 语义，用于校验与生成 schema）
- * @param profiles    本工具的可用域（<b>授权边界</b>）：留空 = 只属于兜底域 default；
+ * @param domains     本工具的可用域（<b>授权边界</b>）：留空 = 只属于兜底域 default；
  *                    含 {@code "*"} = 任何域可用（须显式声明）
  * @param approval    二次确认策略
  * @param source      来源标识，如 {@code com.foo.Bean#method}，用于排障与审计
@@ -31,7 +31,7 @@ public record ToolDescriptor(
         boolean idempotent,
         boolean toModel,
         List<Param> params,
-        List<String> profiles,
+        List<String> domains,
         Approval approval,
         String source) {
 
@@ -45,15 +45,15 @@ public record ToolDescriptor(
      *   <li>其余 → 声明列表须命中该域（域为空时归一化为兜底域）。</li>
      * </ol>
      */
-    public boolean visibleIn(String profile) {
-        if (profiles != null && profiles.contains(Domains.ANY)) {
+    public boolean visibleIn(String domainId) {
+        if (domains != null && domains.contains(Domains.ANY)) {
             return true;
         }
-        String domain = Domains.normalize(profile);
-        if (profiles == null || profiles.isEmpty()) {
+        String domain = Domains.normalize(domainId);
+        if (domains == null || domains.isEmpty()) {
             return Domains.DEFAULT.equals(domain);
         }
-        return profiles.contains(domain);
+        return domains.contains(domain);
     }
 
     /**

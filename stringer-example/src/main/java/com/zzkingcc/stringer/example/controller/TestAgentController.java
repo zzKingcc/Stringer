@@ -1,8 +1,8 @@
 package com.zzkingcc.stringer.example.controller;
 
 import com.zzkingcc.stringer.api.agent.AgentRequest;
-import com.zzkingcc.stringer.api.agent.AgentService;
 import com.zzkingcc.stringer.api.agent.CallerContext;
+import com.zzkingcc.stringer.api.agent.StringerAgentFactory;
 import com.zzkingcc.stringer.api.event.AgentEvent;
 import com.zzkingcc.stringer.api.event.AgentEventType;
 import com.zzkingcc.stringer.common.util.InputSanitizer;
@@ -37,14 +37,14 @@ public class TestAgentController {
     /** 遗留文本协议:停止事件,与 test.html 约定 */
     private static final String LEGACY_STOPPED = "__STOPPED__";
 
-    /** 场景 → 域。与服务端工具声明的 {@code profiles} 对应。 */
+    /** 场景 → 域。与服务端工具声明的 {@code domains} 对应。 */
     private static final String SCENARIO_CUSTOMER = "customer";
     private static final String SCENARIO_ADMIN = "admin";
 
-    private final AgentService agentService;
+    private final StringerAgentFactory agentFactory;
 
-    public TestAgentController(AgentService agentService) {
-        this.agentService = agentService;
+    public TestAgentController(StringerAgentFactory agentFactory) {
+        this.agentFactory = agentFactory;
     }
 
     /**
@@ -69,19 +69,13 @@ public class TestAgentController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
     public Flux<AgentEvent> chat(@RequestBody AgentRequest request) {
-        AgentRequest safeRequest = AgentRequest.builder()
-                .sessionId(request.getSessionId())
-                .message(InputSanitizer.validate(request.getMessage()))
-                // 域必须原样透传：漏传会被服务端判为"未携带 profile"而直接拒绝
-                .profile(request.getProfile())
-                .tenantId(request.getTenantId())
-                .userId(request.getUserId())
-                .attributes(request.getAttributes())
-                .build();
+        String message = InputSanitizer.validate(request.getMessage());
         log.info("[Agent入口] 会话[{}] chat 请求, profile={}, tenantId={}, userId={}",
-                safeRequest.getSessionId(), safeRequest.getProfile(),
-                safeRequest.getTenantId(), safeRequest.getUserId());
-        return agentService.chat(safeRequest);
+                request.getSessionId(), request.getProfile(),
+                request.getTenantId(), request.getUserId());
+        // 域在取门面时就绑好；之后的调用不再有"传没传域"的问题
+        return agentFactory.forDomain(request.getProfile())
+                .events(request.getSessionId(), message, request.getTenantId(), request.getUserId());
     }
 
     /**
@@ -96,9 +90,11 @@ public class TestAgentController {
     public Flux<AgentEvent> resume(@RequestParam String sessionId,
                                    @RequestParam boolean approved,
                                    @RequestBody CallerContext caller) {
+        // 门面按中断时的域绑定；域不一致由服务端以 30002 拒绝（不会静默换域恢复）
+        CallerContext required = caller == null ? CallerContext.of(null) : caller;
         log.info("[Agent入口] 会话[{}] resume 请求, approved={}, profile={}",
-                sessionId, approved, caller == null ? null : caller.profile());
-        return agentService.resume(sessionId, approved, caller);
+                sessionId, approved, required.profile());
+        return agentFactory.forDomain(required.profile()).resume(sessionId, approved);
     }
 
     /**
@@ -109,7 +105,8 @@ public class TestAgentController {
      */
     @PostMapping("/stop/{sessionId}")
     public Map<String, Object> stop(@PathVariable String sessionId) {
-        boolean triggered = agentService.stop(sessionId);
+        // 停止按会话寻址，与域无关；用兜底域门面即可（门面只负责把域塞进请求）
+        boolean triggered = agentFactory.forDomain(null).stop(sessionId);
         log.info("[Agent入口] 会话[{}] stop 请求, stopRequested={}", sessionId, triggered);
         return Map.of("sessionId", sessionId, "stopRequested", triggered);
     }
@@ -134,12 +131,9 @@ public class TestAgentController {
         CallerContext caller = callerOf(scenario);
         log.info("[Agent入口-遗留] 会话[{}] 场景={} 域={} 收到问题:{}",
                 sessionId, scenario, caller.profile(), safeMessage);
-        AgentRequest request = AgentRequest.builder()
-                .sessionId(sessionId)
-                .message(safeMessage)
-                .profile(caller.profile())
-                .build();
-        return agentService.chat(request).map(this::toLegacyText);
+        return agentFactory.forDomain(caller.profile())
+                .events(sessionId, safeMessage)
+                .map(this::toLegacyText);
     }
 
     /**
@@ -155,7 +149,7 @@ public class TestAgentController {
         CallerContext caller = callerOf(scenario);
         log.info("[Agent入口-遗留] 会话[{}] resume 请求, approved={}, 场景={}, 域={}",
                 sessionId, approved, scenario, caller.profile());
-        return agentService.resume(sessionId, approved, caller).map(this::toLegacyText);
+        return agentFactory.forDomain(caller.profile()).resume(sessionId, approved).map(this::toLegacyText);
     }
 
     /** 遗留文本协议:工具调用痕迹前缀,与 test.html 约定。格式 {@code __TOOL__:工具名:参数JSON} 后跟换行 */

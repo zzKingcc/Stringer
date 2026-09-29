@@ -12,8 +12,9 @@
 
     <artifactId>stringer-agent-client</artifactId>
     <name>stringer-agent-client</name>
-    <description>Stringer 对话 SDK（消费侧）：远程调用 chat / resume / stop 与知识库，提供域门面与启动期连通性校验；
-        编排 / 知识库 / 存储逻辑仍在服务端。工具注册能力在独立的 stringer-tool-provider 中</description>
+    <description>Stringer 对话 SDK（消费侧）：唯一入口 StringerAgent（forDomain → ask/stream/events/resume/stop）
+        与知识库客户端，含启动期连通性校验；编排 / 知识库 / 存储逻辑仍在服务端。
+        工具注册能力在独立的 stringer-tool-provider 中</description>
 
     <dependencies>
         <!-- ===== 公共契约层：契约 + 公共异常 + 服务端连接配置 ===== -->

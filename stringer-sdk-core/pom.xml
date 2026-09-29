@@ -16,7 +16,7 @@
         被对话 SDK 与工具 SDK 共同依赖，本身不含任何可独立运行的能力</description>
 
     <dependencies>
-        <!-- ===== 对外契约层：AgentService / 事件 / DTO / 错误码 / 工具注解 ===== -->
+        <!-- ===== 对外契约层：StringerAgent / 事件 / DTO / 错误码 / 工具注解 ===== -->
         <dependency>
             <groupId>com.zzkingcc</groupId>
             <artifactId>stringer-api</artifactId>

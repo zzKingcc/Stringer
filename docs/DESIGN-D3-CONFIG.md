@@ -107,17 +107,24 @@ public class StringerProperties {
 
 ---
 
-## 5 兼容性（旧配置不炸）
+## 5 兼容性：**不兼容**（beta 破坏性改造）
 
-| 旧写法 | 新写法 | 冲突规则 |
-| --- | --- | --- |
-| `stringer.server.host` + `stringer.server.port` | `stringer.server`（URL） | 两者都写 → **URL 优先**并 WARN；只写 host/port → 自动拼 URL（旧配置零改动） |
-| `stringer.server.username` / `.password` | `stringer.username` / `.password` | 都写 → 顶层优先并 WARN；只写旧键 → 回退生效 |
-| `stringer.tool-instance.enabled` | `stringer.tools` | 都写 → `tools` 优先并 WARN |
-| `stringer.client.*` | 不变 | 不变 |
-| `stringer.tool-instance.*`（除 enabled） | 不变 | 不变 |
+> **版本约定（用户裁定）**：**测试版 = 破坏性改造，不兼容上一版本；只有正式版（GA）才做兼容。**
+> 因此本节**不做**旧键映射、不做 deprecated 别名、不做"双写都认"。旧键直接删除。
 
-**原则**：旧键全部保留可用一个版本周期，只是文档标注 deprecated；新键优先，冲突时 WARN 而非报错（与现有 P0-4 自检「只 WARN 不阻断」的风格一致）。
+| 旧写法 | 处置（无兼容） |
+| --- | --- |
+| `stringer.server.host` | **删除**，改用 `stringer.server`（URL） |
+| `stringer.server.port` | **删除**，并入 `stringer.server`（URL） |
+| `stringer.server.username` / `.password` | **删除**，改用顶层 `stringer.username` / `stringer.password` |
+| `stringer.tool-instance.enabled` | **删除**，改用 `stringer.tools` |
+| `stringer.client.*` | 保留（本来就是高级键，不在此次收敛范围） |
+| `stringer.tool-instance.*`（除 `enabled`） | 保留（跨机部署才用） |
+
+**原则**：
+1. 旧键**一律不认**，写了也不会生效（Spring 未知属性默认忽略，不会报错，但也不会有 WARN——如需提示可在自检里加"未知键"扫描，可选）；
+2. 不做"两套写法并存"，使用者只有一种写法；
+3. 兼容层（deprecated 转调、旧键映射、协议旧键）**留到 1.0 正式版再做**，届时按 GA 策略统一补。
 
 ---
 

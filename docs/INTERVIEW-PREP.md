@@ -842,6 +842,8 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 **starter 自动配置注册的 Bean**：`stringerWebClient`（`WebClient`）、`stringerClientCredential`、`stringerAgentFactory`（`StringerAgentFactory`，**唯一入口**）、`stringerKnowledgeBaseClient`、`stringerConnectivityCheck`（`SmartInitializingSingleton`，失败即中断启动）。底层 `AgentServiceClient` 不再作为 Bean 暴露。
 
+**服务端启动期自检（`StartupSelfCheckConfiguration`）**：只提醒、不阻断。目前一项 —— **提示词 ↔ 工具可见性一致性自检**（`PromptToolConsistencyAudit`）：域同时绑定【工具集 + 提示词】而两者分处两地维护，容易写出"提示词点名了某工具、但它在当前域不可见"，模型被告知有能力却调不到，且不抛异常、HTTP 仍 200。自检在 `SmartInitializingSingleton` 阶段（工具扫完、设置读到）逐域比对：**公共基线**点名则在所有不可见它的域上报，**域差异**点名则在该域上报（基线已报过的不重复）。只按词边界认"工具名"，业务语言描述能力覆盖不到 —— 刻意漏报避免误报。
+
 **客户端两个健壮性细节**：
 
 - `ClientCredential.get()` 双检锁 + `AtomicReference`：并发下只登一次；`invalidate()` 丢缓存，下次请求自动重登。`isUnauthorized` 从异常 cause 链里捞 `WebClientResponseException` 取 HTTP 状态码。

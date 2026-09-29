@@ -61,13 +61,6 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
         } catch (ChatMemoryException e) {
             throw e;
         } catch (Exception e) {
-            // 兼容旧格式数据：若读到 Hash 类型的旧 key，以 String + langchain4j 反序列化会触发
-            // WRONGTYPE（嵌套在 cause 链中）。此时删除旧 key，返回空列表。
-            if (containsWrongType(e)) {
-                log.warn("[会话记忆] 会话[{}]存在旧格式数据（Hash类型），已自动清除并重置", memoryId);
-                redisTemplate.delete(key);
-                return new ArrayList<>();
-            }
             log.error("[会话记忆] 读取会话[{}]失败：{}", memoryId, e.getMessage(), e);
             throw new ChatMemoryException(ErrorCode.CHAT_MEMORY_READ_ERROR, "读取会话记忆失败: " + e.getMessage(), e);
         }
@@ -120,19 +113,4 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
         return KEY_PREFIX + memoryId;
     }
 
-    /**
-     * 遍历异常 cause 链，检查是否包含 WRONGTYPE（Redis key 类型不匹配）。
-     * 顶层异常消息通常只有 "Error in execution"，真正的 WRONGTYPE 在嵌套 cause 中。
-     */
-    private boolean containsWrongType(Throwable e) {
-        Throwable current = e;
-        while (current != null) {
-            String msg = current.getMessage();
-            if (msg != null && msg.contains("WRONGTYPE")) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
 }

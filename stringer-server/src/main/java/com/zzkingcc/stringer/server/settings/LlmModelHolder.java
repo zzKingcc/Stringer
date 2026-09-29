@@ -189,7 +189,7 @@ public class LlmModelHolder {
                 .build();
 
         // 流式与非流式共用同一套服务商配置：同一个 Key 同时具备两种能力是常态，
-        // 拆成两套只会让用户在管控台多填一遍（AiProperties.Streaming 保留为兼容字段）
+        // 拆成两套只会让用户在管控台多填一遍
         this.streamingChatModel = OpenAiStreamingChatModel.builder()
                 .baseUrl(s.getChatBaseUrl())
                 .apiKey(s.getChatApiKey())

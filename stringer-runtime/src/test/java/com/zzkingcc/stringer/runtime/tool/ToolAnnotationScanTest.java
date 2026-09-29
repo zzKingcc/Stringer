@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>这里盯的是两条曾经出错、且改坏了不会立即被发现的规则：</p>
  * <ol>
- *   <li>DTO / record 参数必须展开成嵌套的 object（旧实现退化成 string，模型根本构造不出对象）；</li>
+ *   <li>DTO / record 参数必须展开成嵌套的 object，模型才能构造出结构化参数；</li>
  *   <li>类级 {@code @ToolDomains} 必须被方法继承。</li>
  * </ol>
  *

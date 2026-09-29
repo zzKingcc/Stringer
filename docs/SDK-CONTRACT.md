@@ -1,7 +1,7 @@
 # SDK 契约表（注解与门面的完整参数）
 
-> 用途：契约说明。**§1~§6 的形态已实现**（进度与残留缺口见 §9）；§7 的"现状对照"保留为改造前的快照，不代表当前实现。
-> 来源：`DESIGN-1.0.md` §2（SDK 与注解面，收敛后的形态；四份早期草稿已归档于 `docs/archive/`）。
+> 用途：`@Tool` 注解体系与 `StringerAgent` 门面的完整契约。**§1~§6 即当前实现的全部形态**。
+> 来源：`DESIGN-1.0.md` §4（工具体系）与 §5（消费侧 SDK）。
 > 记法：**必填**列里标「是」的只有一个字段 —— 这轮收敛的目标就是"只有一个必填"。
 
 ---
@@ -137,68 +137,3 @@
 **不要求填的（有默认值，只在需要时改）**：健康检查/连接/读取超时、实例 id（自动生成）、端点（自动推导）、心跳周期、退避上限、请求超时。
 
 ---
-
-## 7 与现状的差异（哪些已有、哪些要新增）
-
-| 元素 | 现状 | 目标 |
-| --- | --- | --- |
-| `@StringerTool` | ✅ 已有，**8 个字段** | → `@Tool`，**1 个必填 + 5 个可选** |
-| `@ToolParam` | ⚠️ 已有（6 字段），**只读形参** | → 3 字段；**同时支持字段载体** |
-| `@ToolPolicy` + `@Approval` | ✅ 已有（7 字段，5 个不生效） | → 平铺进 `@Tool` 的 `approval` + `approvalReason` |
-| `@ToolDomains` | ❌ 无 | 新增（类级默认域） |
-| `@ToolAdvanced` | ❌ 无 | 新增（承接 `example` / `allowValues` / `sensitive`） |
-| `Effect` 枚举 | ✅ `StringerTool.SideEffect` | 更名为 `Effect`（值不变） |
-| `StringerAgent` | ❌ 无 | 新增门面（`ask` / `stream` / `events` / `resume` / `stop`） |
-| `StringerAgentFactory` | ❌ 无（曾用 `DomainAgentFactory`） | ✅ 已落地：合并并更名，`forDomain` 是唯一域绑定入口 |
-| `@DomainBinding` | ❌ **从未落地**（设计中的注解式入口） | **不做** —— 与注入式 `forDomain` 语义重复，代理/继承/类级优先级的复杂度不划算 |
-| `ApprovalRequiredException` | ❌ 无（只能自己过滤 `INTERRUPT` 事件） | 新增 |
-| `AgentService` / `AgentRequest` / `CallerContext` | ✅ 已有 | 降为**内部/HTTP 契约**：服务端实现 `AgentService`，SDK 内部持有远程实现；`AgentRequest`/`CallerContext` 只在裸 HTTP 与内核层出现，不再是消费侧入口 |
-| `DomainAgent` / `DomainAgentFactory` | ✅ 曾补齐实现，随后**已删除** | 能力并入 `StringerAgent` / `StringerAgentFactory`（一个入口，不留中间名） |
-
----
-
-## 8 这份表里最该先确认的三件事
-
-| # | 问题 | 我的建议 |
-| --- | --- | --- |
-| 1 | `desc` 是唯一必填 —— 是否接受 | 接受。它是模型判断"何时调用"的唯一依据；缺了工具等于不可用 |
-| 2 | `@ToolParam` 的字段载体（DTO）是否本轮就支持 | 支持，且两端扫描器**已统一**（详见 `DESIGN-1.0.md` §2.2；原 `SDK-REDESIGN.md` §9 的问题已在 P2-⑧ 落地） |
-| 3 | 移出的 5 个审批字段 | 移出。它们在当前实现里**不生效**，留着等于向使用者承诺不存在的能力 |
-
----
-
-## 9 实现进度（2026-09-28）
-
-### 9.1 已实现
-
-| 元素 | 状态 |
-| --- | --- |
-| `@Tool` | ✅ `desc` 唯一必填 + `value` / `domains` / `effect` / `approval` / `approvalReason` |
-| `@ToolDomains` | ✅ 类级默认域，方法级 `domains` 优先 |
-| `@ToolAdvanced` | ✅ **已接入**：`example` → `Param.example` + 追加进参数说明；`allowValues` → schema 的 `enum`；`sensitive` → `Param.sensitive` + 工具调用事件与审批 payload 的值掩码。一律 `参数名=值`，名字可命中 DTO 展开出的字段名 |
-| `@ToolParam` | ✅ 只剩 `value` / `name` / `required`；`description` / `example` / `allowValues` / `sensitive` 四个废弃别名**已删除** |
-| `ToolDescriptor.Param` | ✅ 增加 `properties`（`type=object` 的子字段）；保留七参构造，既有调用点无需改动 |
-| `ParamSchemaResolver` | ✅ 放在 `stringer-api`、两端共用：DTO 递归展开、深度上限 5、循环引用检测、形参/字段两种载体、UUID/Temporal/Date 识别；`ParamOverrides`（`@ToolAdvanced` 的索引视图）也是公开共用的 |
-| 服务端扫描器 | ✅ 只认 `@Tool`；参数走共用解析器；**DTO 从"退化成 string"改为展开成 object** |
-| 工具实例扫描器 | ✅ 只认 `@Tool`；`@ToolParam.value()` 生效；类级 `@ToolDomains` 生效；`@ToolAdvanced` 随 schema 上报（含 `x-sensitive`） |
-| 远端工具描述符 | ✅ `ToolParamSchema#toParams` 改为**递归**，远端不再是"只有顶层、嵌套被拍平" |
-| 敏感掩码 | ✅ 新增 `SensitiveMasker`（按名递归掩码，只改给人看的文本） |
-| **唯一入口 `StringerAgent`** | ✅ **已实现**：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`（`ask` / `ask(tenant,user)` / `stream` / `events` / `resume` / `stop` / `domainId`）。三种消费方式共用同一条事件流；`ask`/`stream` 遇审批抛 `ApprovalRequiredException`、遇 `ERROR` 抛携带 `ErrorCode` 的 `StringerException`。`DomainAgent*` 已删除，`AgentService` 降为内部通道 |
-| **提示词 ↔ 工具可见性自检** | ✅ 已实现：`StartupSelfCheckConfiguration` + `PromptToolConsistencyAudit`（启动期 `SmartInitializingSingleton`，只 WARN 不阻断）。挡"提示词点名了某工具、但它在当前域不可见"——模型被告知有能力却调不到，且不抛异常。按词边界只认工具名，业务语言描述能力刻意漏报 |
-| **知识库按域** | ✅ 已实现：`metadata.domains`（keyword）+ 上传时声明（语义与 `@Tool(domains)` 同构）+ 过滤下推到两路检索通道（不能放融合后）+ `RetrievalScope` 线程绑域 + 存量索引启动补字段；历史文档无该字段按全域可见 |
-| 测试 | ✅ 全量 71 个测试通过（含 `DefaultStringerAgentTest` 8 个、`SensitiveMaskerTest`、`ToolAnnotationScanTest`、`AnnotatedToolScannerTest`、`ToolParamSchemaTest`、`PromptToolConsistencyAuditTest` 6 个、`KnowledgeBaseServiceTest` 5 个、`DomainFilterQueryTest` 4 个、`RetrievalScopeTest` 3 个） |
-
-### 9.2 顺带修掉的两个真实缺陷
-
-1. 服务端本地 Bean 的 **DTO / record 参数曾退化成 `type: string`** —— 模型看到的是字符串参数，产出的也是字符串，反序列化到 DTO 必然失败，**工具永远拿不到参数**。现已展开为嵌套 `object`。
-2. **远端工具的嵌套参数曾被拍平**：`ToolParamSchema#toParams` 只读顶层，于是"同一段工具代码"在本地部署与远端实例两种形态下描述符不一致（远端看不到 DTO 子字段，也就看不到声明在子字段上的示例/白名单/敏感）。现已递归。
-
-### 9.3 尚未实现
-
-| 元素 | 说明 |
-| --- | --- |
-| 配置项扁平化（`server` URL 等） | 下一步 |
-| 启动自检清单（其余项） | 提示词↔工具可见性、知识库按域均已落地（§9.1）；待补：skill 声明的工具是否存在、标了域却无人使用的文档等 |
-| skill（能力包 = 指令 + 工具） | 已确认**暂缓**，形态待 1.0 之后再定（初定 `@Skill` 注解，域声明复用现有三规则） |
-| **两端 schema 生成的完全统一** | ✅ 已完成：工具实例侧弃用自有 `schema()`，改为复用 `ParamSchemaResolver` 的 `Param` 树并经 `toWireSchema` 渲染上报 JSON；`Param` 新增 `items` 字段承载数组元素结构，服务端本地扫描（`toSchemaElement`）与远端解析（`ToolParamSchema`）均按 `items` 展开，本地 / 远端 / 上报三者口径一致。新增 `SchemaUnificationTest` 做"对拍"：上报报文被 `ToolParamSchema` 解析后须逐棵等于 `resolve` 算出的参数树 |
-| `sensitive` 的覆盖面 | 目前只掩码工具调用事件与审批 payload 两处；**日志与工具自身回显**未覆盖（工具实例侧不应把敏感值写进返回值/异常） |

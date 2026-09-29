@@ -239,7 +239,6 @@
 
 `domains` 声明该文档的<b>可用域</b>，与 `@Tool(domains = {...})` 同构：含 `*` → 全域可见（须显式写）；留空 / 不传 → 只属兜底域 `default`。
 一次传多个用重复参数：`?domains=customer&domains=admin`。
-列表里 `domains: ["*"]` 且文档是升级前入库的，表示"历史文档，按全域可见处理"（当时检索本就是全库的）。
 | GET | `/admin/kb/status` | — | `code` 与索引状态字段（`index`、`indexExists`、`documents`、`chunks`、`hint`） |
 | POST | `/admin/kb/rebuild` | — | `code`、`success`、`index`、`dimensions`、`message` |
 

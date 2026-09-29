@@ -16,9 +16,6 @@ public class AiProperties {
     /** 非流式对话模型（用于非流式场景；当前编排主用流式） */
     private Chat chat = new Chat();
 
-    /** 流式对话模型（Agent 编排主用） */
-    private Streaming streaming = new Streaming();
-
     /** 文本向量模型（知识库向量化 + 检索） */
     private Embedding embedding = new Embedding();
 
@@ -33,15 +30,6 @@ public class AiProperties {
         /** 采样温度 */
         private Double temperature = 0.5;
         /** 单次最大 token */
-        private Integer maxTokens = 2048;
-    }
-
-    @Data
-    public static class Streaming {
-        private String baseUrl;
-        private String apiKey;
-        private String modelName = "qwen3.7-plus";
-        private Double temperature = 0.5;
         private Integer maxTokens = 2048;
     }
 

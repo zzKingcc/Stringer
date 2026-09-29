@@ -147,7 +147,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 2. **内容层** —— 文档的 `domains`，决定"能检索时查到哪些文档"。
 
 过滤在检索通道内部完成（两路各带 `bool.filter`）：把它放到融合之后会把本域结果挤掉，召回塌陷且不报错。
-历史文档（升级前入库、无 `domains` 字段）按**全域可见**处理 —— 让它们只属 `default` 会让这批文档凭空从所有域消失。
+未声明 `domains` 的文档**只属于兜底域 `default`**；全域可见必须显式写 `"*"`。
 
 ### 2.7 yaml 兜底与可调参数
 
@@ -453,7 +453,7 @@ public class OrderTools implements ToolInstanceContributor {
 | `description` | `of(name, desc)` | 给 LLM 的用途说明（写清「何时调用/何时不要调用」比参数描述更重要） |
 | `category` | `withCategory` | 管理页分类，**不参与任何过滤** |
 | `version` | 默认 `1.0.0` | 语义化版本 |
-| `domains` | `withDomains(..)` | 可用域（授权边界）。**留空＝只属于兜底域 `default`**；`"*"`＝任何域可用。旧名 `withProfiles` 已废弃 |
+| `domains` | `withDomains(..)` | 可用域（授权边界）。**留空＝只属于兜底域 `default`**；`"*"`＝任何域可用 |
 | `sideEffect` | `withSideEffect` | `READ` / `WRITE` / `DESTRUCTIVE` |
 | `idempotent` | 默认 `true` | 是否幂等（当前只登记展示，不参与重试判定） |
 | `toModel` | 默认 `true` | 结果是否回填 LLM（当前只登记展示） |
@@ -529,7 +529,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 域是「一次对话的场景」，同时绑定**工具集 + 提示词**。
 
-- 工具可见性**唯一维度**就是域：`@Tool#domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里（旧名 `profiles` 已废弃，编程式的 `withProfiles` 保留为 `@Deprecated` 别名）。
+- 工具可见性**唯一维度**就是域：`@Tool#domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里。
 - 域有**三个来源**：内置兜底域 `default`（不可删）、管控台**人工创建**（可删）、工具声明**派生**。派生域**一经声明即常驻**——工具被断开后域仍在，只是该域下暂无工具；写下 `domains = {"customer"}` 即创建了 `customer` 域，不用先去管控台建域。
 - 每次请求的域**留空则回落兜底域 `default`**；非空但不存在才报 `10004`——绝不静默回退成全量工具。
 - 越权判断（角色→域映射）在宿主侧：平台信任调用方声明的域，只校验「域是否存在」。

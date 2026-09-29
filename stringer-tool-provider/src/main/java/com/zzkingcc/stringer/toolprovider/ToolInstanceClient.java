@@ -203,7 +203,7 @@ public class ToolInstanceClient implements ToolRegistrar {
 
         JsonNode parsed = mapper.readTree(response.body());
         if (!parsed.path("accepted").asBoolean(false)) {
-            // 400 已在上面的 4xx 分支拦掉，走到这里说明报文格式异常（例如服务端协议不兼容）
+            // 400 已在上面的 4xx 分支拦掉，走到这里说明报文格式异常
             throw new IllegalStateException("服务端未受理本次注册：" + abbreviate(response.body()));
         }
 

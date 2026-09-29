@@ -55,7 +55,7 @@ public final class DomainFilterQuery {
         String field = EsIndexManager.DOMAINS_QUERY_FIELD;
         return Query.of(q -> q.bool(b -> b
                 .should(s -> s.terms(t -> t.field(field).terms(tv -> tv.value(values))))
-                // 历史文档（本功能上线前入库、没有 domains 字段）按全域可见处理。
+                // 未声明 domains 的文档只属于兜底域 default，因此过滤条件恒含 default。
                 // 否则升级后这些文档会从所有域里凭空消失 —— 那是一次无声的数据丢失，比放宽更难发现。
                 .should(s -> s.bool(nb -> nb.mustNot(mn -> mn.exists(e -> e.field(field)))))
                 .minimumShouldMatch("1")));

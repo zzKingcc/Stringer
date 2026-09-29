@@ -3,7 +3,7 @@
 > 面向接入方（业务应用）与工具提供方。
 > 契约定义见 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)，HTTP 端点与 SSE 事件见 [`API.md`](API.md)，工具实例接入实操见 [`INSTANCE.md`](INSTANCE.md)。
 >
-> 本文所有示例基于 `v1.0-beta.1` 已实现的接口。注解以收敛后的 `@Tool` 全家桶为准（详见 §1.6 旧注解迁移）。
+> 本文所有示例基于当前已实现的接口。工具声明以 `@Tool` 全家桶为准。
 
 ---
 
@@ -144,23 +144,6 @@ public OrderVO query(String orderNo, String status, String idCard) { ... }
 > 名字写错**不报错、只静默不生效**；只有"不是 `参数名=值` 形式"的条目会在启动期打 WARN。改参数名时记得同步改这里。
 > 同名参数（例如两个 DTO 都有 `status`）会一起命中，参数名保持唯一最稳妥。
 
-### 1.6 旧注解已删除（`@StringerTool` / `@ToolPolicy` / `@ToolParam` 的废弃字段）
-
-`@StringerTool` 与 `@ToolPolicy` **已从 SDK 移除，不再被扫描器识别**——写了不会注册，也不会报错。迁移到 `@Tool` 的对照：
-
-| 旧写法 | 新写法 |
-| --- | --- |
-| `@StringerTool(name="x", description="…", domains={"c"})` | `@Tool(value="x", desc="…", domains={"c"})` |
-| `@StringerTool(sideEffect = StringerTool.SideEffect.WRITE)` | `@Tool(effect = Tool.Effect.WRITE)` |
-| `@ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "…"))` | `@Tool(approval = Tool.Approval.ALWAYS, approvalReason = "…")` |
-| `@ToolParam(description = "…")` | `@ToolParam(value = "…")` 或直接 `@ToolParam("…")` |
-| `@ToolParam(example = …)` / `allowValues = …` / `sensitive = …` | 移到方法级 `@ToolAdvanced`（写法变成 `参数名=值`） |
-| `profiles = {"c"}`（旧字段） | `domains = {"c"}` |
-| `version` / `idempotent` / `toModel` / `category` | 不再需要（默认即可） |
-
-> `@ToolParam` 现在**只剩 `value` / `name` / `required` 三个字段**，那四个废弃别名已彻底删除（写了编译不过）。
-> `@Tool` 的 `approval` 只有 `NONE` / `ALWAYS`——条件式审批（`CONDITIONAL`）与会话内免确认（`ONCE_PER_SESSION`）都未落地，不再暴露。
-> 编程式注册侧同一批改名的还有 `ToolSpec.withProfiles(..)` → `withDomains(..)`（旧名保留为 `@Deprecated` 别名转调）。
 
 ---
 

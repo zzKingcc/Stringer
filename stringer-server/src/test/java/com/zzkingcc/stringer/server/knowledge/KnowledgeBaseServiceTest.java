@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 知识库文档的域声明：与 {@code @Tool(domains = {...})} 同构，且历史文档不能被"过滤掉"。
+ * 知识库文档的域声明：与 {@code @Tool(domains = {...})} 同构（留空＝只属兜底域）。
  */
 class KnowledgeBaseServiceTest {
 
@@ -37,11 +37,11 @@ class KnowledgeBaseServiceTest {
     }
 
     @Test
-    void 历史文档没有domains字段时按全域可见() {
-        Map<String, Object> legacy = new LinkedHashMap<>();
-        legacy.put("file_name", "退款政策.md");
-        assertEquals(List.of("*"), KnowledgeBaseService.domainsOf(legacy),
-                "升级前入库的文档没有 domains 字段 —— 视作全域可见，否则它们会凭空从所有域消失");
+    void 没有domains字段时只属兜底域() {
+        Map<String, Object> md = new LinkedHashMap<>();
+        md.put("file_name", "退款政策.md");
+        assertEquals(List.of(Domains.DEFAULT), KnowledgeBaseService.domainsOf(md),
+                "未声明域的文档只属于兜底域，与工具声明留空的语义一致");
     }
 
     @Test
@@ -50,7 +50,8 @@ class KnowledgeBaseServiceTest {
                 KnowledgeBaseService.domainsOf(Map.of("domains", List.of("admin"))));
         assertEquals(List.of("default"),
                 KnowledgeBaseService.domainsOf(Map.of("domains", "default")));
-        assertTrue(KnowledgeBaseService.domainsOf(Map.of("domains", List.of())).contains("*"),
-                "空列表等同没有该字段：按历史文档处理");
+        assertEquals(List.of(Domains.DEFAULT),
+                KnowledgeBaseService.domainsOf(Map.of("domains", List.of())),
+                "空列表等同未声明域：只属于兜底域");
     }
 }

@@ -356,9 +356,8 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 读取切片元数据里的可用域；<b>没有该字段的按全域可见</b> ——
-     * 那是本功能上线前入库的历史文档，当时检索本来就是全库的。
-     * 视作"只属 default"会让它们从所有域里凭空消失，那是一次无声的数据丢失。
+     * 读取切片元数据里的可用域；与工具声明同构：<b>没有该字段（或为空）即只属于兜底域
+     * {@code default}</b>，全域可见必须显式声明通配 {@code "*"}。
      */
     static List<String> domainsOf(Map<String, Object> md) {
         Object raw = md.get("domains");
@@ -375,7 +374,7 @@ public class KnowledgeBaseService {
         } else if (raw != null && !raw.toString().isBlank()) {
             return List.of(raw.toString());
         }
-        return List.of(Domains.ANY);
+        return List.of(Domains.DEFAULT);
     }
 
     /** 校验扩展名在白名单内，返回去空白的文件名 */

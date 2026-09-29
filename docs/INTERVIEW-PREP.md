@@ -771,7 +771,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 **域从哪来**：`api.support.RetrievalScope`（线程绑定），编排层在调用工具前绑定、执行完解除（与 `ToolInvocationContext` 同一处）。未绑定 = 不过滤，只可能出现在非对话路径（管控台预览 / 重建），保持升级前行为。
 
-> 历史文档（本功能上线前入库、无 `domains` 字段）按**全域可见**处理：让它们只属 `default` 会让这批文档从所有域凭空消失 —— 那是一次无声的数据丢失，比放宽更难发现。
+> 未声明 `domains` 的文档**只属于兜底域 `default`**，与工具声明留空同构；全域可见必须显式写 `"*"`。
 
 ---
 
@@ -926,7 +926,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 | 限流 | `20000 RATE_LIMITED`、`20001 LLM_RATE_LIMITED`、`20003 CONCURRENT_LIMIT` 三个码已定义但**代码中不会发出** |
 | 错误码覆盖 | 对外只可引用 `API.md` §5 列出的码；`90006` 及以上未定义 |
 | 测试 | 仓库有少量单测（`AtomicFiles`、`CancellationRegistry`、`MetricsRegistry`、`InstanceMute`、`ToolProfileRetention`、`LlmModelHolder`、`AnnotatedToolScanner`），覆盖率有限 |
-| 发行 | 无跨版本配置迁移；版本与配置强绑定 |
+| 发行 | 版本与配置强绑定 |
 | 安全 | 见 §2.13 登记项（明文凭据、无登录限流、跨域全放行、回调端点无鉴权） |
 
 **演进方向（被问"如果让你继续做"可以说）**：
@@ -997,7 +997,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 - **并发与状态坑**：串行守卫必须在 `clear()` 之前；`onDispose` 要判 `isCurrent`；清理失败要回滚在线状态否则冻结在 `DRAINING`；幽灵副本（校验必须前置）；`releaseThread` 只在到 END 时生效，异常路径要主动清检查点。
 
 **Q18：这套东西怎么测？**
-现实答案：单测覆盖有限（并发原语、工具扫描器、模型持有者），主要靠 `stringer-example` 做端到端联调（6 个演示工具 + 两个域面板 + 完整审批中断 → resume 链路）。如果要补，优先级是：① 编排状态机的状态迁移测试（中断/恢复/拒绝/停止四条路径）；② 注册表的并发 diff 测试（多实例同名、地址漂移、判死与心跳竞争）；③ 融合排序的离线评测集。
+现实答案：单测覆盖并发原语、工具扫描器、模型持有者、参数 schema 统一（`SchemaUnificationTest` 做两端对拍）等纯逻辑；端到端联调靠接入方自己的应用（示例模块待重写）。如果要补，优先级是：① 编排状态机的状态迁移测试（中断/恢复/拒绝/停止四条路径）；② 注册表的并发 diff 测试（多实例同名、地址漂移、判死与心跳竞争）；③ 融合排序的离线评测集。
 
 ---
 

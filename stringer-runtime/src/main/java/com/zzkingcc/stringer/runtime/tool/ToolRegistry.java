@@ -384,12 +384,10 @@ public class ToolRegistry {
     /**
      * 该域是否可以被使用（入口层 fail-fast 的判据）。
      *
-     * <p>因 {@link #knownProfiles()} 恒含兜底域 {@code default}，正常链路下 {@code known} 不会为空；
-     * 空集合分支保留，用于兼容"完全没有域概念"的历史部署。</p>
+     * <p>{@link #knownProfiles()} 恒含兜底域 {@code default}，因此判定等价于"该域是否已被注册"。</p>
      */
-    public boolean acceptsProfile(String profile) {
-        Set<String> known = knownProfiles();
-        return known.isEmpty() || known.contains(profile);
+    public boolean acceptsProfile(String domainId) {
+        return knownProfiles().contains(domainId);
     }
 
     /**

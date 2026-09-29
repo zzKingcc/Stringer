@@ -112,7 +112,7 @@ public class AgentOrchestrationService implements AgentService {
     private final Map<String, String> interruptedProfiles = new ConcurrentHashMap<>();
 
     /**
-     * 单模型构造（兼容入口）：所有域共用同一个模型。
+     * 单模型构造：不传 {@link ModelResolver}，所有域共用构造期注入的那个模型。
      */
     public AgentOrchestrationService(
             StreamingChatModel streamingChatModel,

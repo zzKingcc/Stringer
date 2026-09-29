@@ -329,8 +329,7 @@ public final class ParamSchemaResolver {
     /**
      * Java 类型 → JSON Schema 类型名。
      *
-     * <p>注意与旧实现的差异：<b>复杂对象现在返回 {@code object}</b> 而不是 {@code string} ——
-     * 旧实现把 DTO 当字符串，模型产出字符串后反序列化必然失败，等于工具拿不到参数。</p>
+     * <p>复杂对象（DTO / record）展开为 {@code object} 并递归其字段，让模型能构造出结构化参数。</p>
      */
     private static String jsonType(Class<?> type) {
         if (type == null) {

@@ -1,262 +1,220 @@
-# Stringer 1.0 设计定稿（DESIGN-1.0）
+# Stringer 设计总览
 
-> **性质**：这是 Stringer 的**权威 1.0 设计基线**。它取代并归档了四份早期重叠草稿
-> （`SDK-REDESIGN` / `DOMAIN-REFACTOR-PLAN` / `REDESIGN-PLAN` / `DOMAIN-MODEL`），
-> 把其中**已落地、已决策**的部分沉淀为定稿，把**未落地**的部分收敛为统一路线图与开放决策。
-> 早期草稿仍保留在 `docs/archive/` 仅供追溯「为什么这么定」。
->
-> **读法**：本文是「现在是什么 + 接下来做什么」。凡涉及「当时怎么想的、有哪些备选」，
-> 请回 `docs/archive/`；凡涉及「当前契约长什么样」，请看 `SDK-CONTRACT.md` / `API.md` / `DESIGN.md`。
->
-> **口径校正**：本文所有类名、注解名、契约字段均以 `v1.0-beta.1` 之后的**实际代码**为准；
-> 早期草稿里 `DomainAgent` / `DomainAgentFactory` / `@DomainBinding` 等表述**未进入代码**，
-> 已被 `StringerAgent` 唯一门面方案取代，下文已按真实状态书写。
+> 本文是 Stringer 的**唯一设计入口**：从当前实现出发，讲清设计原理、核心 API 与典型用法。
+> 深度细节（配置项总表、落盘文件、管控台、接口索引等）见 [`DESIGN.md`](DESIGN.md)；
+> 注解与门面的完整参数契约见 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
 
 ---
 
-## 0 定位与一句话结论
+## 1 定位与结构
 
-**定位**：Java 生态的 AI Agent 运行时中间件——服务端（`stringer-server`，承载重逻辑）+ 薄 starter（`stringer-agent-client`，调 AI）+ 工具实例 SDK（`stringer-tool-provider`，给工具）。
+Stringer 是 **Java 生态的 AI Agent 运行时中间件**：服务端承载全部重逻辑与治理，业务应用通过薄 SDK 调用，工具可以住在业务进程里。
 
-**已做好的骨架**（方向正确，不推翻）：
-1. 图编排（`agent → 条件边(exit|auto|review) → tools → agent`，tools 回边是**无条件固定边**）；
-2. 工具治理（注册 / 心跳 / 副本 / 域可见性 / 审批中断）；
-3. 域可见性（工具声明域 + 对话绑定域，交集生效）；
-4. 管控台落盘优先 + yaml 回落的热替换配置（`LlmModelHolder` / `InfraSettingsHolder` / `Swappable*`）。
+```
+                    ┌──────────────────────────────────────────┐
+   业务应用          │  stringer-server（服务端，可独立部署）      │
+   ┌────────────┐   │                                          │
+   │ @Tool 方法 │──┼──▶ 工具注册 / 心跳 / 副本 ◀── 工具实例上报   │
+   └────────────┘   │                                          │
+   ┌────────────┐   │  ┌────────────────────────────────────┐  │
+   │StringerAgent│──┼─▶│ 域（Domain）：工具集 + 提示词 + 知识 │  │
+   └────────────┘   │  └───────────────┬────────────────────┘  │
+    (forDomain)     │                  ▼                        │
+                    │   图编排 agent → 条件边 → tools → agent    │
+                    │        │                    │             │
+                    │        ▼                    ▼             │
+                    │   模型（LLM）          知识库检索（ES）      │
+                    │   记忆 / 检查点（Redis）                    │
+                    └──────────────────────────────────────────┘
+```
 
-**当前天花板**（roadmap 的动因）：权威状态在进程内存（单实例、无 HA）；治理只有「域可见性 + 审批」两维；能力深度不足（单模型、检索缺重排/文档级权限、Agent 不能规划）；扩展点是空壳（已清理，见 §4）。
+模块坐标（消费侧只需引一个）：
 
-**改造总纲**：**契约与扩展点（地基）→ 能力层 → 形态跃迁** 三段推进。
-
-### 0.1 版本与兼容约定（用户裁定，2026-09-29）
-
-> **测试版（beta）= 破坏性改造，不兼容上一版本；只有正式版（GA / 1.0）才做兼容。**
-
-由此推出的三条执行规则（**覆盖一切旧设计里「保留兼容」的表述**）：
-
-1. **不做旧写法兼容**：不留 deprecated 别名、不做旧键映射、不做「新旧双认」。旧写法**直接删除**。
-2. **不做渐进迁移**：改造一次到位（如 D3 配置「全改」），不分两批，避免两套写法并存。
-3. **兼容层推迟到 GA**：deprecated 转调、旧协议键、旧配置键等，统一在 1.0 正式版发版前按 GA 策略补齐。
-
-> ⚠️ 因此，早期草稿 / 早期设计里出现的「v1 冻结为兼容面」「旧键保留一个版本周期」「第一阶段不改变对外行为」
-> 等表述**均已作废**，以本节为准。已落地的兼容残留（如旧 `profiles` 命名与报文键）也在清理清单中。
-
----
-
-## 1 域模型（核心抽象 · 定稿）
-
-> 这是 Stringer 最核心的抽象，其他一切能力都挂在它上面。
-
-### 1.1 定义
-
-**域 = 一个可独立发布、可灰度、可计量、可授权的 Agent 能力单元。**
-它是业务的 AI 切片，而非技术上的工具集合。判断标准：一个域应完整回答「这次对话用什么、花多少、谁负责、怎么变」。
-
-**当前形态（v1.0-beta 之后）**：域已从「工具可见性的派生标签」升级为**带身份与来源的实体**
-（`DomainRegistry`：`BUILTIN` 内置 / `MANUAL` 人工），并具备工具授权域的强制声明与对话绑定。
-**尚未**升级为「十项装配 + 治理单元」（模型/提示词/知识/记忆按域装配、版本灰度等仍在路线图上，见 §3 T2/T4/T5）。
-
-### 1.2 两条硬约束（已落地，v1.0-beta 之后）
-
-| # | 约束 | 机制 |
-| --- | --- | --- |
-| 1 | **工具必须声明可用域** | `@Tool(domains=...)`；留空 → 归入内置域 `default` 并启动期 WARN；显式全域须写 `{"*"}`。`ToolDescriptor.visibleIn` 语义从「可见性」改为「授权判定」（含 `*` → 全域可用，留空 → 只属 `default`）。 |
-| 2 | **对话必须绑定到指定域** | SDK 门面 `StringerAgentFactory.forDomain(domainId)` 在取得实例时绑定域；运行期服务端以 `default` 兜底（`profile` 为空不再报 `10009`）。`default` 域在启动期幂等 seed，`ToolRegistry.knownProfiles()` 恒含 `default`。 |
-
-**效果**：域成为不可绕过的接线点——不存在「无归属的工具」与「无域的调用」，只存在「还没分类的」（计入 `default`，当作待治理债）。
-
-### 1.3 双向声明、交集生效（已落地）
-
-| 关系 | 谁主导 | 说明 |
-| --- | --- | --- |
-| 工具 → 域（我能被谁用） | **工具侧强制声明** | 工具作者最清楚适用范围与副作用，这是**授权** |
-| 域 → 工具（我用谁、怎么用） | 域侧 | 在授权范围内决定用不用、是否加审批、超时与配额 |
-| 域 → 模型/提示词/知识/记忆/配额 | 域侧 | 这些信息工具侧不持有 |
-
-**生效规则（四条）**：①工具必须声明域，留空归 `default`；②域只能在授权范围内 `include`/`exclude`；③生效＝**交集**（`域 ∈ 工具声明域` 且 `工具 ∈ 域引用集合`）；④越界即失败、不静默（域引用未授权工具 → 发布期校验 fail-closed）。
-**优先级**：工具声明边界 > 域 `exclude` > 域 `include`（域只能收紧，不能放宽）。
-
-### 1.4 默认域 `default`
-
-启动期幂等 seed（`builtin` 来源，**不可删除**）；装配初值来自现有全局配置（全局模型/提示词/知识索引/记忆策略），于是「全局配置＝`default` 域的装配」，继承链只剩一条。
-通配 `{"*"}` 与留空语义不同：留空＝只属 `default`（保守）；`{"*"}`＝显式全域。`default` 使用量由平台事实呈现（清单 + 计数），**不设阈值、不告警**。
-
-### 1.5 域 ≠ 租户（正交）
-
-| | 域（Domain） | 租户（Tenant） |
-| --- | --- | --- |
-| 回答 | **用什么**（工具/模型/提示词/知识/策略） | **谁的**（数据/额度/账单） |
-| 隔离 | 逻辑边界：可见性与配置 | 数据边界：key 前缀、索引 filter，必要时物理隔离 |
-| 数量级 | 数十（一个场景一个域） | 数百到数千 |
-
-**当前状态**：租户仅**透传**（`CallerContext.tenantId` / `userId`、`AgentRequest.tenantId`），
-会话/记忆/检查点/ES 索引**均无租户维度**（T2 数据面未做）。判定口诀：
-**数据不同 → 加租户；能力不同 → 拆域；值不同（且不影响装配）→ 租户覆盖层**。
-
-### 1.6 入口形态（已落地 · 已校正）
-
-| 层 | 形态 |
+| 坐标 | 作用 |
 | --- | --- |
-| **SDK（注入式，唯一推荐）** | `StringerAgent agent = factory.forDomain("customer-service")`；返回的 `StringerAgent` 上**没有** `profile` 参数，写不出「忘记传域」的代码。`ask` / `stream` / `events` / `stop` / `resume` 五法，均带 `tenantId`/`userId`。 |
-| 兼容通道（保留 deprecated） | `AgentService.chat(AgentRequest)` 与 `POST /api/agent/chat` + `profile` 继续可用，文档明确为兜底通道；新接入一律走 `forDomain` 绑定形态。 |
-| HTTP 资源形态 | 域成为 URL 资源：`POST /api/v1/domains/{domainId}/chat`（与旧 `/api/agent/chat` 并存）。 |
-
-> ⚠️ **与早期草稿的偏差（重要）**：`DOMAIN-REFACTOR-PLAN` / `DOMAIN-MODEL` 曾描述新增 `DomainAgent` / `DomainAgentFactory` / 注解式 `@DomainBinding` 作为 SDK 入口。
-> 实际在 P0（`0697123`）已让 **`StringerAgent` 成为唯一门面**、删除了 `DomainAgent*`，
-> 且**注解式 `@DomainBinding` 未进入代码**。本文以 `StringerAgentFactory.forDomain(...)` 注入为唯一入口。
-> 契约字段当前仍叫 `profile`（尚未重命名为 `domainId`），`AgentRequest` 仍用 `profile`。
-
-### 1.7 信任模型（已决策）
-
-域从「调用方自声明的纯标签」升级为「治理边界」分两步：
-**第一步（阶段 A）** 域先承载**非对抗性治理**（配额/成本/灰度，被绕过不致命）；
-**第二步** 待真有对外多租户时，再补域授权的强校验（clientId + 域授权关系）。
-域仍是工具可见性的**唯一**权限维度，租户只做数据边界与配额，不叠加第二维。
+| `stringer-agent-client` | **消费侧唯一坐标**：`StringerAgent` 门面 + 工具实例 SDK |
+| `stringer-tool-provider` | 工具实例 SDK（随 starter 传递，也可单独引） |
+| `stringer-server` | 服务端，承载编排、注册表、管控台 |
+| `stringer-api` | 契约层（注解、事件、错误码）——只依赖 `jackson-annotations` |
+| 其余（`common` / `domain` / `infrastructure` / `runtime` / `sdk-core`） | 内部实现，不单独交付 |
 
 ---
 
-## 2 SDK 与注解面（消费侧 · 定稿）
+## 2 核心概念：域（Domain）
 
-### 2.1 注解（已落地，P0）
+> **域 = 一个可独立发布、可灰度、可计量、可授权的 Agent 能力单元。**
+> 它是业务的 AI 切片，而不是技术上的工具集合。
 
-| 注解 | 字段（带默认值） | 说明 |
+**为什么它是核心抽象**：一次对话"用什么工具、哪个模型、哪份提示词与知识、什么策略"——这些差异全部由域承载；工具侧只回答"我允许被哪些域使用"。
+
+### 2.1 双向声明、交集生效
+
+| 关系 | 谁定 | 说明 |
 | --- | --- | --- |
-| `@Tool` | `value`（方法名）、`desc`（**必填**）、`domains`（继承类级→缺省 `default`）、`effect`（`READ`）、`approval`（`NONE`）、`approvalReason`（`""`） | 工具注册唯一主注解；`effect`=`WRITE`/`DESTRUCTIVE`，`approval`=`ALWAYS` 等 |
-| `@ToolParam` | `value`（**必填**，参数说明）、`required`（`true`） | 形参或 DTO 字段上均可 |
-| `@ToolAdvanced` | `example` / `allowValues` / `sensitive`（按「参数名=值」对应） | 高级可选：示例值、枚举白名单、敏感字段；可落在形参或 DTO 字段 |
-| `@ToolDomains` | `value`（类级默认域） | 同类工具同属一域时写一次，方法级 `@Tool(domains=)` 可覆盖 |
+| 工具 → 域 | **工具侧**（授权） | 工具作者最清楚适用范围与副作用 |
+| 域 → 工具 | 域侧（选择） | 在授权范围内决定用不用、是否加审批 |
+| 域 → 模型 / 提示词 / 知识 / 记忆 | 域侧 | 这些信息工具侧不持有 |
 
-**已剔除（落到默认值或移出）**：旧 `@StringerTool`/`@ToolPolicy`/`@Approval` 嵌套写法已收敛为上述平铺字段；不生效的 5 个审批字段（`approverRoles`/`timeoutSeconds`/`onTimeout`/`payloadFields`/`condition`）移出注解（等真正实现再回 `@ToolAdvanced` 体系）。
+**生效规则**：
 
-### 2.2 参数 schema（已落地，P2-⑧ · 三口径一致）
+| # | 规则 |
+| --- | --- |
+| 1 | 工具**必须声明**可用域；留空 → 归入兜底域 `default`；全域须**显式**写 `{"*"}` |
+| 2 | 生效 = **交集**：`域 ∈ 工具声明域` **且** `工具 ∈ 域引用集合` |
+| 3 | 优先级：工具声明边界 > 域 `exclude` > 域 `include`（域只能收紧，不能放宽） |
+| 4 | 越界即失败：域引用未授权工具 → 发布期校验失败，不静默剔除 |
 
-`ParamSchemaResolver` 是**共享真相**，产出 `ToolDescriptor.Param` 树（含 `items` 数组元素结构）。
-服务端本地扫描（`runtime` `AnnotatedToolScanner`）、远端解析（`server` `ToolParamSchema`）、工具实例上报 JSON（`toWireSchema`）三者**共用同一棵树**，消除「同一段工具代码在两端搬迁后参数 schema 不一致」的隐患。
-- 递归展开：`record`/普通类 → `object`；`List<T>`/数组 → `array`+`items`；枚举 → `string`+`enum`；`Optional<T>` → 非必填。
-- 防护：嵌套深度上限 `MAX_DEPTH`（5）+ 循环引用检测；`-parameters` 缺失时顶层参数名以 Spring 绑定名为准重新落键（避免 `arg0`）。
-- 示例/白名单/敏感经 `@ToolAdvanced` 按参数名套上，DTO 字段与数组元素字段同样生效。
+```java
+@ToolDomains("admin")                       // 类级默认域（方法级 domains 可覆盖）
+public class OrderTools {
 
-### 2.3 调用侧三种形态（已落地，P0）
+    @Tool(desc = "按订单号退款。仅在用户明确要求退款时调用",
+          effect = Tool.Effect.WRITE,
+          approval = Tool.Approval.ALWAYS,
+          approvalReason = "退款需人工确认")
+    public String refundOrder(@ToolParam("订单号，如 FR2024001") String orderNo,
+                              @ToolParam("退款金额，单位：元") BigDecimal amount) { ... }
+}
+```
+
+### 2.2 兜底域 `default`
+
+启动期幂等预置、**不可删除**。留空的工具与未指定域的调用都落到它——
+所以**不存在"无归属的工具"与"无域的调用"**，只存在"还没分类的"，它是可见、可统计、可治理的债。
+`default` 的装配初值来自全局配置，于是继承链只有一条：其他域未声明时继承 `default`。
+
+---
+
+## 3 一次对话的链路
+
+```
+业务代码
+  │  factory.forDomain("customer-service").ask(sessionId, question, tenantId, userId)
+  ▼
+StringerAgent ──HTTP SSE──▶ ServerAgentController ──▶ AgentOrchestrationService
+                                                            │
+        ┌───────────────────────────────────────────────────┘
+        ▼
+   ┌─────────┐   条件边    ┌─────────┐
+   │  agent  │───────────▶│  tools  │──┐   （tools 回边是固定边，无条件）
+   │ (LLM)   │◀───────────└─────────┘  │
+   └────┬────┘   exit / auto / review  │
+        │                               │
+        ▼                               ▼
+   输出 TOKEN 事件              工具执行（本地 Bean 或远端工具实例）
+                                      │
+                                      ├─ 需要审批 → INTERRUPT 事件 → 挂起等待 resume
+                                      └─ 域外工具 → 拒绝（10001），文本回灌不结束流
+```
+
+**执行单元内冻结**：一次 `chat` 及其全部 `resume` 内，域与提示词冻结；`resume` 必须用中断时的域。
+**主循环形状不变**：`agent → 条件边(exit|auto|review) → tools → agent`。
+
+---
+
+## 4 工具体系
+
+### 4.1 声明（唯一入口：`@Tool` 全家桶）
+
+| 注解 | 字段 | 默认 | 何时写 |
+| --- | --- | --- | --- |
+| `@Tool` | `desc` | **必填** | 总是（模型靠它决定何时调用） |
+| | `value` | 方法名 | 想换工具名时 |
+| | `domains` | 继承类级 → `default` | 与类级不同时 |
+| | `effect` | `READ` | 写 / 破坏性操作 |
+| | `approval` / `approvalReason` | `NONE` / `""` | 需人工确认时 |
+| `@ToolParam` | `value` | **必填**（参数说明） | 总是 |
+| | `required` | `true` | 可选参数时 |
+| `@ToolDomains` | `value` | `{}` → `default` | 同类工具同属一域时写一次 |
+| `@ToolAdvanced` | `example` / `allowValues` / `sensitive` | 空 | 需要示例值、枚举白名单、脱敏时（按「参数名=值」） |
+
+### 4.2 参数 schema：两端同一棵树
+
+`ParamSchemaResolver`（在 `stringer-api`）是**唯一真相**：方法签名 + 注解 → `ToolDescriptor.Param` 树。
+服务端本地扫描、远端工具实例上报、上报 JSON 渲染**共用这一棵树**，所以"同一段工具代码搬到服务端进程"参数结构不变。
+
+| 类型 | 展开 |
+| --- | --- |
+| record / 普通类 | `object` + 递归 `properties` |
+| `List<T>` / 数组 | `array` + `items`（元素结构） |
+| 枚举 | `string` + `enum` |
+| `Optional<T>` | 非必填 |
+
+防护：嵌套深度上限 `MAX_DEPTH`（5）+ 循环引用检测。
+
+```java
+// DTO 载体：字段上的 @ToolParam 与形参上的等价，形参优先
+public record OrderQuery(@ToolParam("订单号，如 FR2024001") String orderNo,
+                         @ToolParam("是否返回明细") Boolean detail) {}
+
+@Tool(desc = "按条件查询订单。用户追问发货/物流时调用")
+public OrderVO query(OrderQuery args) { ... }
+```
+
+### 4.3 治理
+
+| 能力 | 说明 |
+| --- | --- |
+| 域可见性 | 交集生效，域外调用拒绝（`10001`）走文本回灌，不结束流 |
+| 审批中断 | `approval = ALWAYS` → 产出 `INTERRUPT` 事件挂起；`ask`/`stream` 抛 `ApprovalRequiredException`（带待审批工具清单） |
+| 敏感脱敏 | `@ToolAdvanced(sensitive = {"phone"})` → 工具调用事件与审批 payload 中的值被掩码（执行仍用原值） |
+| 心跳与副本 | 工具实例按心跳保活，服务端判死摘除；同名工具多副本负载均衡 |
+| 启动自检 | 提示词里点名的工具必须在对应域可见，否则启动期 WARN（不阻断） |
+
+---
+
+## 5 消费侧 SDK
+
+### 5.1 唯一入口：`StringerAgent`
 
 ```java
 StringerAgent agent = factory.forDomain("customer-service"); // 绑定一次，可复用（线程安全）
-String answer      = agent.ask(sessionId, question, tenantId, userId);   // ① 只要答案（70% 场景）
-Flux<String> toks  = agent.stream(sessionId, question, tenantId, userId); // ② 逐字输出
-Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③ 工具/中断细节（高级）
+
+String answer       = agent.ask(sessionId, question, tenantId, userId);    // ① 只要答案
+Flux<String> tokens = agent.stream(sessionId, question, tenantId, userId); // ② 逐字输出
+Flux<AgentEvent> ev = agent.events(sessionId, question, tenantId, userId); // ③ 工具/中断细节
+
+agent.resume(sessionId, approved).subscribe();   // 审批后恢复
+boolean stopped = agent.stop(sessionId);
 ```
-`resume` / `stop` 同样三种形态。`ask` 内部收集 TOKEN 拼串，遇 `INTERRUPT` 抛 `ApprovalRequiredException`（带待审批工具清单）。
 
-### 2.4 启动自检（已落地，P0-4）
+`forDomain(...)` 在**取得实例时**绑定域，门面上的方法签名里没有 profile 参数——写不出"忘记传域"的代码。
+`ask` / `stream` 遇审批抛 `ApprovalRequiredException`，遇错误抛携带 `ErrorCode` 的 `StringerException`。
 
-`PromptToolConsistencyAudit` + `StartupSelfCheckConfiguration`（`SmartInitializingSingleton`）：提示词里出现的工具名必须在该域可见 → WARN（复用 `countMissingDescription` 模式）；**只 WARN 不阻断**，异常降级为一条 WARN。配套编写纪律（base 段不许点名具体工具）。
-
-### 2.5 配置形态（**D3 已落地** · 无兼容）
-
-消费侧配置已收敛为顶层扁平键（**测试版不做兼容，旧键已直接删除**）：
+### 5.2 配置
 
 ```yaml
 stringer:
-  server: http://localhost:9527   # 一个 URL 取代 host + port（含协议）
-  username: stringer              # 接入账号（常默认，可不写）
-  password: stringer              # 接入密码（常默认，可不写）
-  tools: true                     # 是否注册本进程 @Tool（默认 false）
+  server: http://localhost:9527   # 服务端地址（含协议与端口）
+  username: stringer              # 接入账号（默认即为 stringer，常可不写）
+  password: stringer              # 接入密码（同上）
+  tools: true                     # 把本进程的 @Tool 注册给服务端（默认 false）
 ```
 
-- 配置类：`sdkcore.config.StringerProperties`（`prefix="stringer"`），由它解析出 host/port 供工具实例复用；旧 `ServerProperties`（`host`/`port`/`username`/`password`）与 `tool-instance.enabled` **已删除**。
-- **不引入 `domains` 配置键**，域存在性由运行时服务端校验。
-- 高级键（`stringer.client.*`、`stringer.tool-instance.*` 其余）保留原名。
-- 详见 `DESIGN-D3-CONFIG.md`。
-
----
-
-## 3 架构差距与路线图（T1–T9 · 三阶段）
-
-> 完整论证见 `docs/archive/REDESIGN-PLAN.md`。此处只给**目标 + 当前状态**。
-
-| 主题 | 目标 | 阶段 | 当前状态 |
-| --- | --- | --- | --- |
-| **T1 状态外置** | 权威状态（工具注册/实例/导入锁）外置到 Redis，可多副本/HA | C 形态 | ⬜ 未做（仍进程内） |
-| **T2 租户贯穿** | 会话/记忆/检查点/检索/配额按租户隔离与归集 | A 字段 → C 配额 | ⬜ 仅透传，数据面未做 |
-| **T3 扩展点落地** | 检索/记忆/检查点/模型/重排器可插拔 | A 地基 | 🟡 部分：空壳 `api.spi` 已删（P2-⑦）；`FusionStrategy` 真接口已建（P2-⑥）；其余 SPI 未建 |
-| **T4 模型网关** | 多端点路由/降级/熔断/灰度；域绑模型档案 | B 能力 | ⬜ 未做（仍是单 `LlmModelHolder`，无 `ModelRouter`/`ModelProfile`；设计见 `MULTI-LLM-DESIGN.md`） |
-| **T5 检索深化** | rerank / 查询改写 / 文档级 ACL / 增量更新 / 评测闭环 | B 能力 | 🟡 部分：融合已抽 `FusionStrategy`（P2-⑥）；rerank/ACL/评测未做 |
-| **T6 编排升级** | review 节点泛化 / 子图 / 长任务 / 工具缓存 / 多 Agent（缓做） | C 形态 | ⬜ 未做（图仍三节点） |
-| **T7 工具生态** | MCP 双向适配 / 工具版本灰度 / 工具级治理 / 协议版本协商 | B 能力 | ⬜ 未做（仍自定义 `POST /stringer/invoke`） |
-| **T8 契约演进** | `ErrorCode` 接口化 / `AgentEvent` 加 usage·node / HTTP 版本化 / 幂等键 | A 地基 | ⬜ 未做（`ErrorCode` 仍是封闭 enum；事件 payload 裸 JSON） |
-| **T9 可观测** | trace 贯穿 / Micrometer 指标 / SSE 续传 / 背压 / 客户端韧性 | A→B | 🟡 部分：traceId 仅工具调用透传；无指标导出、无续传、无背压 |
-
-**三阶段**：A 地基（T3/T8 + T9 trace/指标 + T2 字段贯穿，默认单租户）→ B 能力（T4/T5/T7 + T9 可靠性）→ C 形态（T1/T2 配额成本/T6）。阶段间无强绑定；业务重在「质量」可长期停在 B。
-
-**已决策的关键选型**：①形态——A 阶段先收敛状态写路径到接口，C 再决定是否真多实例；②租户——逻辑隔离，索引名/key 前缀做成可注入；③Agent 深度——先强化单 Agent，多 Agent 放 C 之后；④工具协议——内部协议不变，对外双向适配 MCP；⑤存储——只 SPI 化检索/记忆/检查点三项；⑥兼容——v1 冻结 + v2 并轨，事件只加字段、HTTP 加版本前缀。
-
----
-
-## 4 实现状态矩阵（已落地 vs 待做 · 总览）
-
-> 这是收敛的核心：把四份草稿里「当时计划 / 当时已做 / 当时未做」统一成一份现状账。
-
-### 4.1 已落地（git 已提交）
-
-| 项 | 内容 | 提交 |
+| 键 | 默认 | 说明 |
 | --- | --- | --- |
-| **P0-1 工具注解收敛** | `@Tool`/`@ToolParam`/`@ToolAdvanced`/`@ToolDomains` 取代旧注解；扫描器双认；`SensitiveMasker`；两端 schema 对齐 | `483a62b` |
-| **P0-2 StringerAgent 唯一入口** | 旧 `DomainAgent*` 删除；`autoconfig` 只暴露 `StringerAgentFactory`；示例迁移 | `0697123` |
-| **P0-3 文档与代码对齐** | DESIGN/API/INSTANCE/SDK-USAGE/SDK-CONTRACT 等同步 | `24c3802` |
-| **P0-4 提示词↔工具可见性启动自检** | `PromptToolConsistencyAudit` + `StartupSelfCheckConfiguration`；测试 +6（59 测试） | `0e6015f` |
-| **P1-3 知识库按域** | `RetrievalScope` 线程绑域 + `DomainFilterQuery` 两路通道下推 `bool.filter`；mapping 加 `metadata.domains`(keyword)；`KnowledgeBaseService.normalizeDomains` + `upload(...,domains)`；管控台域选择器 | `2a7a906`（+`e7aaed8` docs） |
-| **P2-⑥ 检索策略可插拔** | `FusionStrategy` 接口 + `DefaultFusionStrategy`（复刻原算法）；`CompositeRetriever` 只管编排；测试 +9 | `15b93e8` |
-| **P2-⑦ 清理空壳 SPI** | 删除 `api.spi` 下 6 个死代码接口（零 import 零实现） | `5ccb65a` |
-| **P2-⑧ 两端 schema 产出统一** | 工具实例侧复用 `ParamSchemaResolver` 的 `Param` 树 + 新增 `toWireSchema`；`ToolDescriptor.Param` 加 `items`；本地/远端/上报三口径一致；`SchemaUnificationTest` 对拍 | `7d30587` |
-| **域 S1 声明强制化 + 默认域** | `domains` 留空→`default`+WARN；`{"*"}` 全域；启动期 seed `default`；`ToolDescriptor.visibleIn` 授权语义 | `DOMAIN-REFACTOR-PLAN §5.1` |
-| **域 S2 域注册表 + 域清单接口** | `DomainRegistry`（BUILTIN/MANUAL）；`ToolRouter` 合并两来源；`DomainStore`(domains.json)；`GET /api/agent/domains` + `POST/DELETE /admin/domains` | 同上 |
-| **域 S3 命名统一 + 管控台域管理** | `domains()` 为主、`profiles()` deprecated；管控台域空间「来源」列 + 新建/删除（仅人工域） | 同上 |
-| **D3 配置扁平化（无兼容）** | 新增 `StringerProperties`（`prefix="stringer"`）承载 `server` URL + `username`/`password` + `tools`；删除旧 `ServerProperties`（host/port/username/password）与 `tool-instance.enabled`；工具实例开关改 `stringer.tools` | 本轮 |
-| **旧 `profiles` 命名与报文键清理** | `ToolDescriptor`/`ToolSpec` 字段 `profiles`→`domains`；上报与解析端 JSON 键 `profiles`→`domains`；删除 `ToolSpec.withProfiles` 别名；`visibleIn` 参数名 `profile`→`domainId` | 本轮 |
-| **删除 example 模块** | `stringer-example` 整体移除（含 module 与 dependencyManagement），例子后期重写 | 本轮 |
+| `stringer.server` | `http://localhost:9527` | 服务端 URL；未写端口时按协议取默认（http 80 / https 443） |
+| `stringer.username` / `stringer.password` | `stringer` | 接入账号 |
+| `stringer.tools` | `false` | 启用工具实例（会在本进程起心跳线程并暴露回调端点） |
+| `stringer.client.*` | 见 `DESIGN.md` | 调用超时（高级，几乎不改） |
+| `stringer.tool-instance.*` | 见 `DESIGN.md` | 实例 id / 回调地址 / 心跳（跨机部署才动） |
 
-### 4.2 待做（路线图上，未实施）
+### 5.3 裸 HTTP
+
+`POST /api/agent/chat`（SSE），请求体为 `AgentRequest`：`sessionId` / `message` / `profile`（即域）/ `tenantId` / `userId`。
+`AgentService` 是内核契约，SDK 内部持有其远程实现；消费侧入口只有 `StringerAgent`。
+
+---
+
+## 6 路线图（未实施）
 
 | 项 | 内容 | 依赖 |
 | --- | --- | --- |
-| **域 S4 装配接管** | 模型/提示词/知识/记忆从全局迁入域；全局值降级为 `default` 域装配初值 | S1/S2（已具备） |
-| **域 S5 域内选择与覆盖** | 域 `include`/`exclude` + 交集 + 覆盖审批/超时/配额；越界发布即失败 | S4 |
-| **重写 example 示例** | `stringer-example` 已移除，需重新编写接入示例（含演示工具与联调语料） | 独立 |
-| **T1 / T2(数据面) / T4 / T5(后段) / T6 / T7 / T8 / T9(后段)** | 见 §3 状态列 | 各主题自述 |
-| **skill 系统** | 形态（`@Skill` 注解 vs `skills/*.md`）+ 归属（域构件/跨域 `{"*"}`）— **已确认暂缓**，1.0 后定 | — |
-| **项目改名** | 候选已给（Strata/Thalamus/Sigil/Rein/…），**用户明确暂缓**，选名后按 10 类影响面清单执行 | — |
-
-### 4.3 明确不做（本期）
-
-- 可视化拖拽编排（与「代码即配置」冲突，且 Dify/FastGPT 已覆盖）；
-- SaaS 计费与订单系统（先做成本**归集**，计费留上层）；
-- 多语言 SDK（用 MCP 覆盖非 Java 生态）；
-- 跨集群联邦与全局调度；
-- 通用多 Agent 编排框架（价值取决于工具/检索质量）；
-- 域分层/基层域继承、`excludeBase()` 调用参数形态、`@DomainBinding` 注解式绑定（已被 `forDomain` 注入取代）、知识库改自动注入（会绕过域判定）；
-- 多租户强校验与域授权、MCP 协议适配、多 Agent、状态外置——作为**独立主题**留在路线图，不混入域改造。
-
----
-
-## 5 开放决策（仍待拍板 / 待发起）
-
-| # | 决策 | 现状与建议 |
-| --- | --- | --- |
-| ~~D3 配置是否一次扁平化~~ | **已裁定并落地**：一次全改 + **不兼容旧键**（旧键直接删除，无映射无别名）；兼容层推迟到 1.0 正式版 |
-| S4/S5 | 装配接管与域内覆盖的优先级 | 建议先 S4（按域装配）再 S5（覆盖/审批/配额） |
-| T4 | 多 LLM 落地节奏 | 设计已就绪（`MULTI-LLM-DESIGN.md`）；建议与 S4 同批做（域绑模型档案） |
-| T3 | 其余 SPI 范围 | 坚持「只抽当前有两处以上实现的点」；先 `FusionStrategy` 验证模式，再扩 `MemoryStore`/`CheckpointStore`/`ModelProvider` |
-| T8 | 契约版本化时机 | 建议 B 阶段开始时一并引入 `schemaVersion` + v2 前缀，避免后期破坏性升级 |
-| 改名 | 项目是否改名 | **暂缓**（用户决定）。候选见记忆；选名后按 10 类影响面执行 |
-
----
-
-## 附：四份草稿 → 本文的归并关系
-
-| 原草稿 | 在本文的位置 | 处理方式 |
-| --- | --- | --- |
-| `REDESIGN-PLAN.md` | §0 / §3（T1–T9、三阶段、决策） | 战略路线图主体，更新状态后归档 |
-| `DOMAIN-MODEL.md` | §1（域模型定稿，已校正入口形态） | 核心抽象主体，校正 `@DomainBinding`/`DomainAgent` 偏差后归档 |
-| `DOMAIN-REFACTOR-PLAN.md` | §1.2–1.4 / §4.1（S1–S3 已落地记录） | 执行计划，已落地部分并入状态矩阵，剩余 S4/S5 进路线图后归档 |
-| `SDK-REDESIGN.md` | §2（SDK 注解面、调用侧、schema、自检） | 消费侧设计，剔除未落地建议（D3 待做、D4 已被 P0 实现），归档 |
-
-> 归档后，跨文档引用（`SDK-CONTRACT.md`、`MULTI-LLM-DESIGN.md`）已改为指向本文对应章节。
+| **域 S4 装配接管** | 模型 / 提示词 / 知识 / 记忆从全局迁入域；全局值降级为 `default` 域装配初值 | 已具备 |
+| **域 S5 域内选择与覆盖** | 域 `include` / `exclude` + 覆盖审批 / 超时 / 配额 | S4 |
+| **T4 多 LLM** | 模型档案 + 域绑别名 + 降级熔断（设计见 `MULTI-LLM-DESIGN.md`） | 建议与 S4 同批 |
+| **T3 扩展点** | 检索 / 记忆 / 检查点 SPI（`FusionStrategy` 已可插拔） | — |
+| **T8 契约演进** | 错误码接口化、事件加 usage/node、HTTP 版本化、幂等键 | — |
+| **T1 / T2 / T5 / T6 / T7 / T9** | 状态外置、租户数据面、检索深化、编排升级、MCP、可观测 | 见各自主题 |
+| **重写 example** | 接入示例待重新编写 | — |
+| **skill 系统** | 能力包形态待 1.0 后定（暂缓） | — |

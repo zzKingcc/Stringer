@@ -95,7 +95,7 @@ class SchemaUnificationTest {
         assertTrue(properties.path("addresses").path("items").path("properties").has("province"));
         assertTrue(properties.path("addresses").path("items").path("properties").has("city"));
 
-        // ⑤ 数组（List<String>）：元素类型也保留（对比旧实现直接退化成字符串）
+        // ⑤ 数组（List<String>）：元素类型一并保留
         assertEquals("array", properties.path("tags").path("type").asText());
         assertEquals("string", properties.path("tags").path("items").path("type").asText());
     }

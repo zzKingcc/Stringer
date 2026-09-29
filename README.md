@@ -263,7 +263,7 @@ stringer-server
 - [设计文档](docs/DESIGN.md) —— 形态与模块、域与工具可见性、工具体系、存储与模型配置、并发模型、配置项总表
 - [API 文档](docs/API.md) —— 全部 HTTP 端点、SSE 事件契约、错误码总表、starter 与工具实例 SDK
 - [实例文档](docs/INSTANCE.md) —— 配置与接入实操：服务端配置、客户端 starter 接入、工具实例 SDK、本地 Bean 工具、域机制、端到端跑通
-- [SDK 使用手册](docs/SDK-USAGE.md) —— 注解与对话 SDK 的可复制示例：最小工具、`@ToolParam`/`@ToolDomains`/`@ToolAdvanced`、审批恢复、事件流、SSE 裸调、旧注解迁移
+- [SDK 使用手册](docs/SDK-USAGE.md) —— 注解与对话 SDK 的可复制示例：最小工具、`@ToolParam`/`@ToolDomains`/`@ToolAdvanced`、审批恢复、事件流、SSE 裸调
 
 ## License
 

@@ -99,7 +99,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ### 5.1 注解契约（`stringer-api/annotation`）
 
-工具注解只有一个入口：**`@Tool` 全家桶**。旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**——不再被扫描器识别，写了也不会注册。迁移对照见 [SDK 使用手册 §1.6](SDK-USAGE.md)。
+工具注解只有一个入口：**`@Tool` 全家桶**（`@Tool` / `@ToolParam` / `@ToolDomains` / `@ToolAdvanced`）。
 
 | 注解 | 目标 | 字段 | 默认值 |
 | --- | --- | --- | --- |
@@ -255,13 +255,12 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 > 过滤必须下推到通道内：两路各回 Top-N，混进其他域的文档会把本域结果挤掉，
 > 融合后再过滤就只剩一两条 —— 检索"成功了"但召回塌陷，而且不报错。
-> 历史文档（本功能上线前入库、无 `domains` 字段）按全域可见处理，避免升级后凭空消失。
 
 ---
 
 ## 9 模型配置
 
-模型接入分两层：**内置 `default`**（管控台「模型设置」页那一套，单文本模型＋单向量模型）与**多 LLM 模型档案**（域可绑定到不同 OpenAI 兼容端点的档案）。未绑定任何档案的域统一走内置 `default`，行为与升级前完全一致。
+模型接入分两层：**内置 `default`**（管控台「模型设置」页那一套，单文本模型＋单向量模型）与**多 LLM 模型档案**（域可绑定到不同 OpenAI 兼容端点的档案）。未绑定任何档案的域统一走内置 `default`。
 
 ### 9.1 模型档案（多 LLM，`config/models.json`）
 

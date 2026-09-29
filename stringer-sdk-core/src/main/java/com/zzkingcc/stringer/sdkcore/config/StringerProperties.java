@@ -17,10 +17,6 @@ import java.net.URI;
  * <p>对话 SDK 与工具 SDK 读的是同一份前缀：服务端只有一个账号、工具注册表也只有一份，
  * 因此不存在"对话连一个服务端、工具实例连另一个"的用法 —— 地址与账号只写一份。</p>
  *
- * <p><b>测试版不做兼容</b>：旧键 {@code stringer.server.host} / {@code stringer.server.port} /
- * {@code stringer.server.username} / {@code stringer.server.password} 与
- * {@code stringer.tool-instance.enabled} 已<b>直接删除</b>，不再识别、也不再有别名映射。
- * 兼容层留到 1.0 正式版统一补。</p>
  *
  * @author zzkingcc
  */

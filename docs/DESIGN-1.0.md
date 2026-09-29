@@ -191,7 +191,7 @@ Flux<AgentEvent> ev= agent.events(sessionId, question, tenantId, userId); // ③
 | --- | --- | --- |
 | **域 S4 装配接管** | 模型/提示词/知识/记忆从全局迁入域；全局值降级为 `default` 域装配初值 | S1/S2（已具备） |
 | **域 S5 域内选择与覆盖** | 域 `include`/`exclude` + 交集 + 覆盖审批/超时/配额；越界发布即失败 | S4 |
-| **D3 配置扁平化** | 消费侧 13→4 项（`server` URL / `username` / `password` / `domains` / `tools`）+ 旧键映射 | 独立 |
+| **D3 配置扁平化** | 消费侧 14→3 项（`server` URL / `username` / `password` / `tools`，`tools` **默认关闭**；**不引入 `domains` 配置键**，域存在性由运行时服务端校验）+ 旧键映射。详见 `DESIGN-D3-CONFIG.md` | 独立 |
 | **T1 / T2(数据面) / T4 / T5(后段) / T6 / T7 / T8 / T9(后段)** | 见 §3 状态列 | 各主题自述 |
 | **skill 系统** | 形态（`@Skill` 注解 vs `skills/*.md`）+ 归属（域构件/跨域 `{"*"}`）— **已确认暂缓**，1.0 后定 | — |
 | **项目改名** | 候选已给（Strata/Thalamus/Sigil/Rein/…），**用户明确暂缓**，选名后按 10 类影响面清单执行 | — |

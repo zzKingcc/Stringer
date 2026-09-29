@@ -1,6 +1,6 @@
 # SDK 契约表（注解与门面的完整参数）
 
-> 用途：评审用。**这是设计稿，尚未实现** —— 现状对照见 §7。
+> 用途：契约说明。**§1~§6 的形态已实现**（进度与残留缺口见 §9）；§7 的"现状对照"保留为改造前的快照，不代表当前实现。
 > 来源：`SDK-REDESIGN.md` §3 与 §8（收敛后的形态）。
 > 记法：**必填**列里标「是」的只有一个字段 —— 这轮收敛的目标就是"只有一个必填"。
 
@@ -47,7 +47,7 @@
 
 > **两个载体、一个优先级**：形参注解 **>** 字段注解（就近覆盖）。
 > 1~2 个简单参数用形参；3+ 参数、被多个工具复用、或有嵌套结构 → 用 `record` DTO 的字段注解（只写一次）。
-> ⚠️ 字段载体在服务端本地 Bean 路径**尚未实现**（现状见 §7）。
+> ✅ 两个载体**都已实现**：服务端本地 Bean 走 `ParamSchemaResolver`（record 组件 + 普通类字段），工具实例侧走自己的 `schema()`；DTO 也会递归展开成嵌套 `object`。
 
 ---
 
@@ -79,7 +79,10 @@
 | --- | --- | --- |
 | `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 兜底域 `default`；返回的实例**可缓存复用**（线程安全） |
 
-> 删掉了现有的 `DomainAgentFactory`（并进这里）与 `@DomainBinding`（与 `forDomain` 语义重复）。
+> 落地情况（2026-09-28）：**本节形态已实现** —— `StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
+> （实现 `DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`StringerAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
+> 中间名 `DomainAgentFactory` / `DomainAgent` 已按本节设想**合并删除**；底层的 `AgentServiceClient` 不再作为 Bean 暴露。
+> `@DomainBinding` **从未落地**，也不再计划做（与 `forDomain` 语义重复）。
 
 ### 5.2 `StringerAgent` 方法
 
@@ -146,10 +149,11 @@
 | `@ToolAdvanced` | ❌ 无 | 新增（承接 `example` / `allowValues` / `sensitive`） |
 | `Effect` 枚举 | ✅ `StringerTool.SideEffect` | 更名为 `Effect`（值不变） |
 | `StringerAgent` | ❌ 无 | 新增门面（`ask` / `stream` / `events` / `resume` / `stop`） |
-| `StringerAgentFactory` | ⚠️ 有 `DomainAgentFactory` | 合并并更名 |
-| `@DomainBinding` | ✅ 已有（类/方法级） | **移除**（与 `forDomain` 重复） |
+| `StringerAgentFactory` | ❌ 无（曾用 `DomainAgentFactory`） | ✅ 已落地：合并并更名，`forDomain` 是唯一域绑定入口 |
+| `@DomainBinding` | ❌ **从未落地**（设计中的注解式入口） | **不做** —— 与注入式 `forDomain` 语义重复，代理/继承/类级优先级的复杂度不划算 |
 | `ApprovalRequiredException` | ❌ 无（只能自己过滤 `INTERRUPT` 事件） | 新增 |
-| `AgentService` / `AgentRequest` / `CallerContext` | ✅ 已有 | 保留为内部实现；`AgentService.forDomain` 作为兼容入口 |
+| `AgentService` / `AgentRequest` / `CallerContext` | ✅ 已有 | 降为**内部/HTTP 契约**：服务端实现 `AgentService`，SDK 内部持有远程实现；`AgentRequest`/`CallerContext` 只在裸 HTTP 与内核层出现，不再是消费侧入口 |
+| `DomainAgent` / `DomainAgentFactory` | ✅ 曾补齐实现，随后**已删除** | 能力并入 `StringerAgent` / `StringerAgentFactory`（一个入口，不留中间名） |
 
 ---
 
@@ -163,31 +167,35 @@
 
 ---
 
-## 9 实现进度（2026-09-27）
+## 9 实现进度（2026-09-28）
 
 ### 9.1 已实现
 
 | 元素 | 状态 |
 | --- | --- |
-| `@Tool` | ✅ 新增（`desc` 唯一必填 + `value` / `domains` / `effect` / `approval` / `approvalReason`） |
-| `@ToolDomains` | ✅ 新增（类级默认域，方法级 `domains` 优先） |
-| `@ToolAdvanced` | ✅ 新增（`example` / `allowValues` / `sensitive`，按参数名对应） |
-| `@ToolParam` | ✅ 收敛：`value()` 为主，`description()` 降为弃用别名；`example` / `allowValues` / `sensitive` 标记弃用 |
+| `@Tool` | ✅ `desc` 唯一必填 + `value` / `domains` / `effect` / `approval` / `approvalReason` |
+| `@ToolDomains` | ✅ 类级默认域，方法级 `domains` 优先 |
+| `@ToolAdvanced` | ✅ **已接入**：`example` → `Param.example` + 追加进参数说明；`allowValues` → schema 的 `enum`；`sensitive` → `Param.sensitive` + 工具调用事件与审批 payload 的值掩码。一律 `参数名=值`，名字可命中 DTO 展开出的字段名 |
+| `@ToolParam` | ✅ 只剩 `value` / `name` / `required`；`description` / `example` / `allowValues` / `sensitive` 四个废弃别名**已删除** |
 | `ToolDescriptor.Param` | ✅ 增加 `properties`（`type=object` 的子字段）；保留七参构造，既有调用点无需改动 |
-| `ParamSchemaResolver` | ✅ 新增（**放在 `stringer-api`**，两端共用）：DTO 递归展开、深度上限 5、循环引用检测、形参/字段两种载体、UUID/Temporal/Date 识别 |
-| 服务端扫描器 | ✅ 认 `@Tool` 与 `@StringerTool`；参数走共用解析器；**DTO 从"退化成 string"改为展开成 object** |
-| 工具实例扫描器 | ✅ 认 `@Tool`；`@ToolParam` 的 `value()` 生效；类级 `@ToolDomains` 生效 |
-| 测试 | ✅ 新增 `ToolAnnotationScanTest`（4 个用例）+ `DomainSemanticsTest`（7 个）；全量 36 个测试通过 |
+| `ParamSchemaResolver` | ✅ 放在 `stringer-api`、两端共用：DTO 递归展开、深度上限 5、循环引用检测、形参/字段两种载体、UUID/Temporal/Date 识别；`ParamOverrides`（`@ToolAdvanced` 的索引视图）也是公开共用的 |
+| 服务端扫描器 | ✅ 只认 `@Tool`；参数走共用解析器；**DTO 从"退化成 string"改为展开成 object** |
+| 工具实例扫描器 | ✅ 只认 `@Tool`；`@ToolParam.value()` 生效；类级 `@ToolDomains` 生效；`@ToolAdvanced` 随 schema 上报（含 `x-sensitive`） |
+| 远端工具描述符 | ✅ `ToolParamSchema#toParams` 改为**递归**，远端不再是"只有顶层、嵌套被拍平" |
+| 敏感掩码 | ✅ 新增 `SensitiveMasker`（按名递归掩码，只改给人看的文本） |
+| **唯一入口 `StringerAgent`** | ✅ **已实现**：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`（`ask` / `ask(tenant,user)` / `stream` / `events` / `resume` / `stop` / `domainId`）。三种消费方式共用同一条事件流；`ask`/`stream` 遇审批抛 `ApprovalRequiredException`、遇 `ERROR` 抛携带 `ErrorCode` 的 `StringerException`。`DomainAgent*` 已删除，`AgentService` 降为内部通道 |
+| 测试 | ✅ 全量 53 个测试通过（含 `DefaultStringerAgentTest` 8 个、`SensitiveMaskerTest`、`ToolAnnotationScanTest`、`AnnotatedToolScannerTest`、`ToolParamSchemaTest`） |
 
-### 9.2 这次顺带修掉的一个真实缺陷
+### 9.2 顺带修掉的两个真实缺陷
 
-旧实现里，服务端本地 Bean 的 **DTO / record 参数会被退化成 `type: string`** —— 模型看到的是一个字符串参数，产出的也是字符串，反序列化到 DTO 必然失败，**工具永远拿不到参数**。现在展开为嵌套 `object`。
+1. 服务端本地 Bean 的 **DTO / record 参数曾退化成 `type: string`** —— 模型看到的是字符串参数，产出的也是字符串，反序列化到 DTO 必然失败，**工具永远拿不到参数**。现已展开为嵌套 `object`。
+2. **远端工具的嵌套参数曾被拍平**：`ToolParamSchema#toParams` 只读顶层，于是"同一段工具代码"在本地部署与远端实例两种形态下描述符不一致（远端看不到 DTO 子字段，也就看不到声明在子字段上的示例/白名单/敏感）。现已递归。
 
 ### 9.3 尚未实现
 
 | 元素 | 说明 |
 | --- | --- |
-| `StringerAgent` / `StringerAgentFactory` / `ApprovalRequiredException` | 门面层，下一步 |
 | 配置项扁平化（`server` URL 等） | 下一步 |
 | 启动自检清单 | 下一步 |
-| **两端 schema 生成的完全统一** | ⚠️ 仍在做：目前两端都认同一套注解、字段载体与域解析，但**参数 schema 的产出仍是两套代码**（服务端：`ParamSchemaResolver` → langchain4j Schema；工具实例：自有 `schema()` → 上报 JSON）。要彻底统一需重写工具实例侧的 schema 生成，属独立改动项 |
+| **两端 schema 生成的完全统一** | ⚠️ 仍在做：两端已共用同一套注解、同一份 `ParamOverrides`（示例/白名单/敏感）与同一段说明文本，但**参数树的产出仍是两套代码**（服务端：`ParamSchemaResolver` → langchain4j Schema；工具实例：自有 `schema()` → 上报 JSON）。要彻底统一需重写工具实例侧的 schema 生成，属独立改动项 |
+| `sensitive` 的覆盖面 | 目前只掩码工具调用事件与审批 payload 两处；**日志与工具自身回显**未覆盖（工具实例侧不应把敏感值写进返回值/异常） |

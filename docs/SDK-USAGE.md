@@ -11,7 +11,7 @@
 
 - **依赖**：`stringer-agent-client`（消费侧唯一坐标）。
 - **配置**：`stringer.server.*`（服务端地址与账号，对话 SDK 与工具实例 SDK 共用一份）。
-- **对话主入口**：`AgentService`（`chat` / `resume` / `stop`），由 starter 自动装配，直接注入即可。
+- **对话主入口**：`StringerAgentFactory`（`forDomain(...)` → `StringerAgent`：`ask` / `stream` / `events` / `resume` / `stop`），由 starter 自动装配，直接注入即可。
 - **工具注解**：`com.zzkingcc.stringer.api.annotation` 包下的 `@Tool` / `@ToolParam` / `@ToolDomains` / `@ToolAdvanced`。
 
 ```yaml
@@ -123,23 +123,30 @@ public class RefundTools {
 
 ### 1.5 高级可选：`@ToolAdvanced`（多数工具永不需要）
 
-承接"偶尔要写、但不该默认出现在每个工具上"的字段。**按参数名对应，不做位置对齐**。
+承接"偶尔要写、但不该默认出现在每个工具上"的字段。三个字段一律 `参数名=值`，**不做位置对齐**（位置对齐在参数增删或调序时会静默错位，编译器不会提醒）。
+
+名字既可以是方法形参名，也可以是参数 DTO 展开后的**字段名**。
 
 ```java
 @Tool(desc = "查询订单")
 @ToolAdvanced(example = {"orderNo=FR2024001"},        // 参数示例
               allowValues = {"status=PAID|REFUNDED"},  // 枚举白名单
-              sensitive = {"idCard"})                  // 脱敏参数名（日志/事件/审批payload 只显掩码）
+              sensitive = {"idCard"})                  // 该参数的值在事件/审批 payload 里显示为 ***
 public OrderVO query(String orderNo, String status, String idCard) { ... }
 ```
 
-- `example`：`参数名=示例值`。
-- `allowValues`：`参数名=值1|值2`。
-- `sensitive`：需要脱敏的参数名清单。
+| 字段 | 落点（也就是"写了会不会真生效"） |
+| --- | --- |
+| `example` | 进 `Param.example`，并以「（示例：xxx）」追加到**参数说明**末尾 —— 底层模型 schema 只有 `description` 一个自由文本位，没有独立的 example 槽，不并进说明就到不了模型眼前。说明里已含同一示例时不重复追加。 |
+| `allowValues` | 成为模型可见 schema 的 `enum` 白名单，比用自然语言描述取值可靠得多。 |
+| `sensitive` | 该参数的**值**在工具调用事件与审批 payload 里显示为 `***`。掩码的是值不是参数名；执行时用的仍是原值。 |
 
-### 1.6 旧注解迁移（`@StringerTool` / `@ToolPolicy` → `@Tool`）
+> 名字写错**不报错、只静默不生效**；只有"不是 `参数名=值` 形式"的条目会在启动期打 WARN。改参数名时记得同步改这里。
+> 同名参数（例如两个 DTO 都有 `status`）会一起命中，参数名保持唯一最稳妥。
 
-`@StringerTool` 与 `@ToolPolicy` **仍被扫描器识别（向后兼容）**，但新代码请改用 `@Tool`。对照：
+### 1.6 旧注解已删除（`@StringerTool` / `@ToolPolicy` / `@ToolParam` 的废弃字段）
+
+`@StringerTool` 与 `@ToolPolicy` **已从 SDK 移除，不再被扫描器识别**——写了不会注册，也不会报错。迁移到 `@Tool` 的对照：
 
 | 旧写法 | 新写法 |
 | --- | --- |
@@ -147,66 +154,101 @@ public OrderVO query(String orderNo, String status, String idCard) { ... }
 | `@StringerTool(sideEffect = StringerTool.SideEffect.WRITE)` | `@Tool(effect = Tool.Effect.WRITE)` |
 | `@ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "…"))` | `@Tool(approval = Tool.Approval.ALWAYS, approvalReason = "…")` |
 | `@ToolParam(description = "…")` | `@ToolParam(value = "…")` 或直接 `@ToolParam("…")` |
+| `@ToolParam(example = …)` / `allowValues = …` / `sensitive = …` | 移到方法级 `@ToolAdvanced`（写法变成 `参数名=值`） |
 | `profiles = {"c"}`（旧字段） | `domains = {"c"}` |
 | `version` / `idempotent` / `toModel` / `category` | 不再需要（默认即可） |
 
-> 注意：`@Tool` 的 `approval` 只有 `NONE` / `ALWAYS`。旧 `@ToolPolicy.Approval` 的 `CONDITIONAL` / `ONCE_PER_SESSION` 在当前实现中等价于 `ALWAYS`，收敛后不再暴露。
+> `@ToolParam` 现在**只剩 `value` / `name` / `required` 三个字段**，那四个废弃别名已彻底删除（写了编译不过）。
+> `@Tool` 的 `approval` 只有 `NONE` / `ALWAYS`——条件式审批（`CONDITIONAL`）与会话内免确认（`ONCE_PER_SESSION`）都未落地，不再暴露。
+> 编程式注册侧同一批改名的还有 `ToolSpec.withProfiles(..)` → `withDomains(..)`（旧名保留为 `@Deprecated` 别名转调）。
 
 ---
 
-## 2 对话 SDK 使用方式（`AgentService`）
+## 2 对话 SDK 使用方式（`StringerAgent`）
 
-`AgentService` 是对话契约的全部入口。一轮对话发起 `chat`，审批挂起后 `resume`，运行中 `stop`。返回都是 Reactor 的 `Flux<AgentEvent>`（事件流）。
+SDK 只提供**一个入口**：`StringerAgentFactory.forDomain(...)` 拿到已绑定域的 `StringerAgent`。
+方法按使用频度分三层 —— `ask`（只要答案）／`stream`（逐字）／`events`（完整事件），再加 `resume` 与 `stop`。
+**域在取门面时就已确定**，所以下面所有方法签名里都没有域参数。
 
-### 2.1 注入与发起一轮对话
+### 2.1 注入与三种调用方式
 
 ```java
 @Service
 public class MyService {
-    private final AgentService agentService;
+    private final StringerAgent agent;                // 已绑定 customer 域，可缓存复用（线程安全）
 
-    public MyService(AgentService agentService) {   // starter 自动装配，无需任何注解
-        this.agentService = agentService;
+    public MyService(StringerAgentFactory factory) {   // starter 自动装配，无需任何注解
+        this.agent = factory.forDomain("customer");    // null / 空白 → 兜底域 default
     }
 
-    /** 发起一轮对话，返回事件流 */
-    public Flux<AgentEvent> ask(String sessionId, String question) {
-        AgentRequest request = AgentRequest.of(sessionId, question, "customer");
-        return agentService.chat(request);
+    /** 只要最终答案（约七成场景） */
+    public String ask(String sessionId, String question) {
+        return agent.ask(sessionId, question);
     }
 
-    /** 带归属信息的完整构造 */
-    public Flux<AgentEvent> askWithContext(String sessionId, String question,
-                                           String tenantId, String userId) {
-        AgentRequest request = AgentRequest.builder()
-                .sessionId(sessionId)
-                .message(question)
-                .profile("customer")          // 域：必填，决定模型可见的工具与提示词
-                .tenantId(tenantId)            // 审计字段
-                .userId(userId)
-                .attribute("source", "app")    // 附加属性
-                .build();
-        return agentService.chat(request);
+    /** 逐字输出 */
+    public Flux<String> stream(String sessionId, String question) {
+        return agent.stream(sessionId, question);
+    }
+
+    /** 完整事件流：工具调用 / 审批中断 / 错误码 */
+    public Flux<AgentEvent> events(String sessionId, String question) {
+        return agent.events(sessionId, question);
     }
 }
 ```
 
-- `sessionId` 由调用方生成并保持稳定 —— 同一会话复用同一个，它是记忆与检查点的唯一键。
-- `profile`（域）为空会回落兜底域 `default`；该域不存在被拒（错误码 `10004`）。
+| 方法 | 返回 | 说明 |
+| --- | --- | --- |
+| `ask(sessionId, question)` | `String` | 内部消费完整条事件流并把 `TOKEN` 拼成整段文本；**阻塞**（受 `stringer.client.read-timeout` 约束） |
+| `stream(sessionId, question)` | `Flux<String>` | 只出模型文本增量 |
+| `events(sessionId, question)` | `Flux<AgentEvent>` | 原样事件流，冷流（订阅后执行），自行控制超时与背压 |
+| `resume(sessionId, approved)` | `Flux<AgentEvent>` | 审批恢复；域由门面自动带上 |
+| `stop(sessionId)` | `boolean` | 幂等停止 |
+| `domainId()` | `String` | 本实例绑定的域，永不为空 |
 
-### 2.2 消费事件流
+- 三种方式都有带归属的重载：`(sessionId, question, tenantId, userId)`。
+- `forDomain(null)` / `forDomain("  ")` → 兜底域 `default`；**同一域永远拿到同一个门面**（归一化后按域缓存，首尾空白不会造出第二个）。
+- `sessionId` 由调用方生成并保持稳定 —— 同一会话复用同一个，它是记忆与检查点的唯一键。
+- 域在服务端不存在 → `StringerException`（`10004`）。**不需要**在启动期预先校验域：写错了第一次调用就会带着明确的码报出来。
+
+### 2.2 只要答案：`ask`
+
+```java
+String answer = agent.ask("s-001", "我的订单 FR2024001 到哪了");
+```
+
+两种"非正常结束"由异常表达，而不是让你在文本里猜：
+
+| 情况 | 行为 |
+| --- | --- |
+| 命中人工审批（`INTERRUPT`） | 抛 `ApprovalRequiredException`（见 §2.5） |
+| 服务端返回 `ERROR` 事件 | 抛 `StringerException`，携带 `ErrorCode` 与 `traceId` |
+| 被 `stop` 主动停止 | **返回已产出的部分文本**（不是错误） |
+
+### 2.3 逐字输出：`stream`
+
+```java
+agent.stream("s-001", "讲讲退款政策")
+     .doOnNext(chunk -> out.print(chunk))
+     .blockLast();
+```
+
+命中审批或错误时，流以对应的异常终止（`ApprovalRequiredException` / `StringerException`）。
+
+### 2.4 完整事件：`events`
 
 事件类型：`TOKEN`（增量文本）/ `TOOL_CALL`（即将调用某工具）/ `TOOL_RESULT`（工具结果）/ `INTERRUPT`（待审批，挂起）/ `STOPPED`（被停止）/ `ERROR`（异常）/ `DONE`（结束）。
 
 ```java
-agentService.chat(request)
+agent.events("s-001", "帮我查订单")          // 需要归属时用 events(sessionId, question, tenantId, userId)
     .doOnNext(event -> {
         switch (event.getType()) {
             case TOKEN       -> out.print(event.getContent());          // 流式拼字
             case TOOL_CALL   -> log.info("调用工具 {} 参数 {}",
                                          event.getContent(), event.getPayload());
             case TOOL_RESULT -> log.info("工具 {} 返回", event.getContent());
-            case INTERRUPT   -> handleInterrupt(event);                  // 见 §2.3
+            case INTERRUPT   -> handleInterrupt(event);                  // 见 §2.5
             case STOPPED     -> log.info("会话 {} 已停止", event.getSessionId());
             case ERROR       -> log.error("[{}] {} traceId={}",
                                          event.getCodeName(), event.getContent(), event.getTraceId());
@@ -216,67 +258,54 @@ agentService.chat(request)
     .blockLast();   // 阻塞到流结束；WebFlux 环境用 subscribe 而非 block
 ```
 
-> 错误通过**事件**表达，不会抛异常，HTTP 状态仍是 200。调用方必须显式处理 `ERROR` 事件。
+> 走 `events` 时错误通过**事件**表达，不会抛异常，HTTP 状态仍是 200 —— 调用方必须显式处理 `ERROR` 事件；`ask` / `stream` 已经替你把它翻成了异常。
 
-### 2.3 人工审批中断与恢复（HITL）
+### 2.5 人工审批中断与恢复（HITL）
 
-工具声明了 `approval = ALWAYS` 时，`chat` 会在真正执行前吐出 `INTERRUPT` 事件，本轮挂起。`payload` 是待审批工具清单的 JSON（`ToolCallPayload`）。处理完（批准/拒绝）后调用 `resume`，**域须与中断时一致**。
+工具声明了 `approval = ALWAYS` 时，会在真正执行前挂起。用 `ask` / `stream` 时表现为 `ApprovalRequiredException`，里面就是待审批清单：
 
 ```java
-ObjectMapper mapper = new ObjectMapper();
-
-agentService.chat(request)
-    .flatMapMany(event -> {
-        if (event.getType() != AgentEventType.INTERRUPT) {
-            return Flux.just(event);
-        }
-        // 解析待审批工具清单（可选：展示给审批人）
-        try {
-            ToolCallPayload pending = mapper.readValue(
-                    event.getPayload(), ToolCallPayload.class);
-            for (ToolCall t : pending.getTools()) {
-                log.info("待审批: {} 参数 {}", t.getName(), t.getArguments());
-            }
-        } catch (Exception e) {
-            log.warn("解析中断 payload 失败", e);
-        }
-        // 真实场景：弹确认框让用户决定 approved 取 true / false
-        // 这里示例直接批准；caller 的域必须与 chat 时一致
-        CallerContext caller = CallerContext.from(request);
-        return agentService.resume(request.getSessionId(), true, caller);
-    })
-    .subscribe();
+try {
+    return agent.ask(sessionId, question);
+} catch (ApprovalRequiredException e) {
+    // 直接渲染确认框：e.getTools() 是 List<ToolCall>（name / arguments / requireApproval）
+    for (ToolCall tool : e.getTools()) {
+        log.info("待审批: {} 参数 {}", tool.getName(), tool.getArguments());
+    }
+    // 用户点完 → 批准/拒绝继续本轮
+    return waitForApproval(e.getSessionId())            // 业务自己的确认流程
+            ? agent.resume(e.getSessionId(), true)
+            : agent.resume(e.getSessionId(), false);
+}
 ```
 
-- `resume(sessionId, approved, caller)`：批准 → 内核注入确认继续；拒绝 → 注入拒绝反馈让模型重新决策。
-- 域不一致会被拒（错误码 `30002`）。`CallerContext.from(request)` 可安全复用 chat 时的身份。
-- `ToolCall` 字段：`name` / `arguments` / `requireApproval`（getter 为 `isRequireApproval()`）。
+- `ApprovalRequiredException` 带 `sessionId` / `domainId` / `tools` / `traceId`；**域由门面绑定**，`resume` 时自动带上，不会出现"换域恢复"（换域会被服务端以 `30002` 拒绝）。
+- 批准 → 内核注入确认继续；拒绝 → 注入拒绝反馈让模型重新决策。
+- 想自己处理中断事件（而不是挨异常）就用 `events` 看 `INTERRUPT`，其 `payload` 是 `ToolCallPayload` JSON。
 
-### 2.4 停止任务
+### 2.6 停止任务
 
 ```java
-// 请求停止，幂等。true=本次设置成功；false=该会话已处于停止状态
-boolean triggered = agentService.stop(sessionId);
+// 请求停止，幂等。true=本次设置成功；false=已处于停止状态或被拒
+boolean triggered = agent.stop(sessionId);
 ```
 
 语义：仅置取消标志，编排层在下一个检查点结束本轮，非抢占式。
 
-### 2.5 多租户与归属（tenantId / userId / attributes）
+### 2.7 多租户与归属（tenantId / userId）
 
 ```java
-AgentRequest request = AgentRequest.builder()
-        .sessionId(sessionId)
-        .message(question)
-        .profile(deriveProfileFromRole(user))   // 从当前登录角色推导域，不要信任前端字符串
-        .tenantId(tenantId)                       // 多租户计量 / 审计
-        .userId(user.getId())
-        .attribute("channel", "web")
-        .build();
+// 域从当前登录角色推导，不要信任前端字符串
+StringerAgent agent = factory.forDomain(deriveProfileFromRole(user));
+
+agent.ask(sessionId, question, tenantId, user.getId());
+agent.events(sessionId, question, tenantId, user.getId());
 ```
 
 > 域是**调用方自行声明、平台信任**的治理机制（防止模型误用工具、防止提示词与工具集错位），**不是安全边界**。终端用户身份与授权属于宿主自己的 IAM。
+> `attributes` 扩展属性目前只走裸 HTTP（§2.8）—— SDK 侧没有它的入口。
 
-### 2.6 裸 HTTP / SSE 调用（不走 SDK）
+### 2.8 裸 HTTP / SSE 调用（不走 SDK）
 
 `chat` / `resume` / `stop` 都是标准 HTTP，事件以 `text/event-stream` 下发。无 Java SDK 的客户端（前端、其他语言）直接调。
 
@@ -330,27 +359,23 @@ curl -N -X POST "http://localhost:9527/api/agent/resume?sessionId=s-001&approved
 
 完整端点、鉴权与错误码见 [`API.md`](API.md) §2 / §5。
 
-### 2.7 规划中的门面 `StringerAgent`（目标形态，尚未实现）
+---
 
-> 当前对话 SDK = `AgentService` + `AgentRequest`（§2.1~§2.6，已实现可用）。
-> 下方是 [`SDK-CONTRACT.md`](SDK-CONTRACT.md) 规划的统一门面，**门面层尚未实现**，仅作目标形态参考，请勿当运行代码使用。
+## 3 常见坑
 
-```java
-// 目标形态：域绑定入口，返回可缓存复用的线程安全实例
-StringerAgent agent = StringerAgentFactory.forDomain("customer");
-
-agent.ask(sessionId, "我的订单到哪了");        // 同步取最终答案（~70% 场景）
-agent.stream(sessionId, "讲讲退款政策");         // Flux<String> 逐字输出
-agent.events(sessionId, "帮我退款");             // Flux<AgentEvent> 完整事件
-agent.resume(sessionId, true);                  // 审批恢复
-agent.stop(sessionId);                          // 停止
-```
+- **域为空**：SDK 侧用 `forDomain(...)` 在绑定时就定好域，`ask` / `stream` / `events` 的签名里没有域参数，传不出空值；只有裸 HTTP（§2.8）才会把空域归一到 `default`。域不存在被拒（`10004`）—— 不需要启动期预先校验域，第一次调用就会报清楚。
+- **`sessionId` 不稳定**：同一会话必须复用同一个 `sessionId`，否则记忆与检查点断裂、看起来"失忆"。
+- **只处理 `TOKEN`**：忽略 `TOOL_CALL` / `TOOL_RESULT` 会看不到工具行为；走 `events` 时忽略 `ERROR` 事件则故障被静默吞掉（HTTP 200）。用 `ask` / `stream` 则错误会以异常形式抛出。
+- **`resume` 域不一致**：必须与中断时相同，否则 `30002`。门面已绑定域，正常路径下不会发生。
+- **`ask` 是阻塞的**：它内部会消费完整条流，受 `stringer.client.read-timeout` 约束；长任务请用 `events`（冷流，可自行超时/背压）。
+- **`blockLast()` vs `subscribe()`**：阻塞式入口可用 `blockLast()`；WebFlux / 异步入口用 `subscribe()`，不要混用。
+- **工具重名**：同名工具全局只能有一个；多副本请走工具实例注册（同名多实例），见 [`INSTANCE.md`](INSTANCE.md)。
 
 ---
 
 ## 3 常见坑
 
-- **域为空**：`chat` 的 `profile` 留空会回落 `default`；若该域被判定缺失会被拒（`10004`）。显式传域最稳。
+- **域为空**：走 SDK 时 `AgentRequest` **不接受空域**（`of(...)` / `builder().build()` 直接抛 `IllegalArgumentException`）；只有裸 HTTP（§2.6）才会把空域归一到 `default`。域不存在被拒（`10004`）。推荐用 `forDomain(...)` 绑定一次，从源头上不用操心这事。
 - **`sessionId` 不稳定**：同一会话必须复用同一个 `sessionId`，否则记忆与检查点断裂、看起来"失忆"。
 - **只处理 `TOKEN`**：忽略 `TOOL_CALL` / `TOOL_RESULT` 会看不到工具行为；忽略 `ERROR` 事件则故障被静默吞掉（HTTP 200）。
 - **`resume` 域不一致**：必须与 `chat` 时相同，否则 `30002`。用 `CallerContext.from(request)` 复用最省心。

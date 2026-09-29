@@ -12,8 +12,8 @@ Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对�
 | 交付物 | 模块 | 角色 | 你做什么 |
 |---|---|---|---|
 | 服务端 jar | `stringer-server` | 承载编排 / 工具注册表 / 知识库 / ES·Redis·LLM 连接，暴露 HTTP+SSE | 自部署，通过管控台配置 |
-| 客户端 starter | `stringer-agent-client` | 极薄，只把调用转发到服务端 | 注入 `AgentService` 调 AI |
-| 工具实例 SDK | `stringer-tool-provider` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@Tool`（或旧 `@StringerTool`，两者都被识别；或实现 `ToolInstanceContributor`）声明工具 |
+| 客户端 starter | `stringer-agent-client` | 极薄，只把调用转发到服务端 | 注入 `StringerAgent`（用 `StringerAgentFactory.forDomain(...)` 取） |
+| 工具实例 SDK | `stringer-tool-provider` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@Tool`（或实现 `ToolInstanceContributor` 编程式声明） |
 
 starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-provider` 保留独立坐标，供只想当工具方的进程单独使用。
 
@@ -25,8 +25,8 @@ starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter
 
 | 得到的能力 | 怎么用 |
 |---|---|
-| 调 AI：发起对话、订阅事件流 | 注入 `AgentService`，配 `stringer.server.*`（见 §3） |
-| 当工具方：把本进程的方法交给 Agent 调用 | 方法上写 `@StringerTool`，打开 `stringer.tool-instance.enabled`（见 §4） |
+| 调 AI：发起对话、拿答案 / 事件流 | 注入 `StringerAgentFactory`，`forDomain(...)` 取门面后用 `ask`/`stream`/`events`，配 `stringer.server.*`（见 §3） |
+| 当工具方：把本进程的方法交给 Agent 调用 | 方法上写 `@Tool`，打开 `stringer.tool-instance.enabled`（见 §4） |
 | 公共异常与输入安全 | 复用 `ErrorCode` / `BaseException` / `InputSanitizer` 等 |
 
 - **工具能力默认关闭**：`stringer.tool-instance.enabled` 默认 `false`。未打开时不注册回调端点、不启动心跳、不建任何工具实例 Bean，只想调 AI 的应用不受影响。
@@ -200,54 +200,50 @@ stringer:
 | `stringer.client.connect-timeout` | `5s` | HTTP 连接超时 |
 | `stringer.client.read-timeout` | `10min` | HTTP 读超时（SSE 长连接，0＝不超时） |
 
-### 3.3 注入 AgentService 并调用
+### 3.3 注入 StringerAgent 并调用（唯一入口）
 
-`AgentService` 是唯一的对外契约，注入它即可，不用碰任何实现类。
+消费侧只有一个入口：`StringerAgentFactory.forDomain(...)` 拿到已绑定域的 `StringerAgent`。
+**域是接线动作**，不在每次调用的参数里 —— 所以"忘传域"写不出来。
 
 ```java
-@RestController
-@RequestMapping("/api/agent")
-public class MyAgentController {
+@Service
+public class OrderService {
+    private final StringerAgent agent;                 // 已绑定域，可缓存复用（线程安全）
 
-    private final AgentService agentService;          // 直接注入，SDK 已注册远程实现
-    public MyAgentController(AgentService agentService) { this.agentService = agentService; }
+    public OrderService(StringerAgentFactory factory) {
+        this.agent = factory.forDomain("customer");     // null / 空白 → 兜底域 default
+    }
 
-    @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<AgentEvent> chat(@RequestBody ChatDto dto) {
-        AgentRequest request = AgentRequest.builder()
-                .sessionId(dto.sessionId())            // 必填：记忆与检查点 key
-                .message(dto.message())                // 必填：本轮用户输入
-                .profile(dto.profile())                // 必填：本轮所处的域（场景）
-                .tenantId(dto.tenantId())              // 选填：日志/审计
-                .userId(dto.userId())                  // 选填：日志/审计
-                .build();
-        return agentService.chat(request);             // 返回冷流，订阅后才执行
+    /** 只要最终答案（大多数场景） */
+    public String ask(String sessionId, String question) {
+        return agent.ask(sessionId, question);
+    }
+
+    /** 逐字输出 */
+    public Flux<String> stream(String sessionId, String question) {
+        return agent.stream(sessionId, question);
     }
 }
 ```
 
-### 3.4 AgentRequest 字段
+三种方法都有带归属的重载（`ask/stream/events(sessionId, question, tenantId, userId)`）。
+审批命中时 `ask` / `stream` 抛 `ApprovalRequiredException`，`getTools()` 就是待审批清单，可直接渲染成确认框。
 
-```java
-AgentRequest.of(sessionId, message, profile);   // 仅含三个必填项的快捷构造
-AgentRequest.builder().sessionId(..).message(..).profile(..).tenantId(..).userId(..).attributes(..).build();
-```
+### 3.4 三种消费方式怎么选
 
-| 字段 | 必填 | 作用 |
+| 方法 | 返回 | 适用场景 |
 |---|---|---|
-| `sessionId` | ✅ | 会话 ID，同时作为记忆与检查点的 key。同一 sessionId 不要并发订阅 |
-| `message` | ✅ | 用户本轮输入 |
-| `profile` | ✅ | **域（场景）**。决定可见工具集与提示词。为空直接报错（不默认给域）；域在注册表里没被任何工具声明 → 报 `10004` |
-| `tenantId` | ❌ | 租户标识，当前仅用于日志与审计，尚未参与会话隔离 |
-| `userId` | ❌ | 用户标识，同 `tenantId` |
-| `attributes` | ❌ | 扩展属性，承载调用方自定义上下文 |
+| `ask` | `String` | 只要最终答案（约七成场景）。内部把 `TOKEN` 增量拼成整段文本；被 `stop` 时返回已产出的部分；**阻塞**，受 `stringer.client.read-timeout` 约束 |
+| `stream` | `Flux<String>` | 逐字上屏（只含模型文本增量） |
+| `events` | `Flux<AgentEvent>` | 要看工具调用 / 审批中断 / 错误码，或自行控制超时与背压（长任务优先用它） |
 
-> ⚠️ 用 `toBuilder()` 加工请求时**务必带上 `profile`**：漏传会静默丢掉域，是最难排查的一类错误。
+> 底层的 `AgentRequest` / `CallerContext` 是**裸 HTTP 契约**（见 `API.md` §2），SDK 使用者不需要直接构造它们；
+> 需要无 SDK 接入时（非 Java 应用、网关联调）才用得上。**`attributes` 扩展属性只在裸 HTTP 通道可用**。
 
 ### 3.5 订阅事件流（AgentEvent）
 
 ```java
-agentService.chat(request).subscribe(event -> {
+agent.events(sessionId, question).subscribe(event -> {
     switch (event.getType()) {
         case TOKEN     -> out.append(event.getContent());     // 模型增量输出，需自行拼接
         case TOOL_CALL -> showToolCalling(event.getContent());// content=工具名，payload=参数JSON
@@ -260,6 +256,8 @@ agentService.chat(request).subscribe(event -> {
 });
 ```
 
+> 只想拼文本，用 `agent.ask(...)` 或 `agent.stream(...)` 更省事（见 §3.4）；`events` 是"要自己处理全部事件"时的入口。
+
 **事件类型（AgentEventType）：**
 
 | 类型 | content | payload | 含义 / 调用方动作 |
@@ -267,7 +265,7 @@ agentService.chat(request).subscribe(event -> {
 | `TOKEN` | 增量文本 | — | 模型增量输出，拼接后展示 |
 | `TOOL_CALL` | 工具名 | 参数 JSON | 模型要调工具，仅展示用 |
 | `TOOL_RESULT` | 工具名 | 结果文本 | 工具执行完毕，结果已回喂模型 |
-| `INTERRUPT` | — | 待授权工具列表 JSON | **挂起等人审**。引导用户确认后调 `resume(sessionId, approved, caller)` |
+| `INTERRUPT` | — | 待授权工具列表 JSON | **挂起等人审**。引导用户确认后调 `resume(sessionId, approved)` |
 | `STOPPED` | — | — | 被 `stop()` 主动停止，不可恢复 |
 | `ERROR` | 可读文案 | — | **只有 ERROR 带 `code`**，前端据此决定行动；`traceId` 用于上报排障 |
 | `DONE` | — | — | 本轮正常结束 |
@@ -278,14 +276,15 @@ agentService.chat(request).subscribe(event -> {
 
 ```java
 // 用户批准/拒绝后恢复被 INTERRUPT 挂起的会话
-// caller 必填：域必须原样透传，resume 会据此重新校验待执行工具是否仍可见
-agentService.resume(sessionId, approved, CallerContext.of(profile, tenantId, userId));
+// 域由门面绑定，自动原样带上；resume 会据此重新校验待执行工具是否仍可见
+agent.resume(sessionId, approved);
 
-// 主动停止（不可恢复）；返回 false = 该会话已停止（幂等）
-boolean triggered = agentService.stop(sessionId);
+// 主动停止（不可恢复）；返回 false = 该会话已被停止或被拒（幂等）
+boolean triggered = agent.stop(sessionId);
 ```
 
-`CallerContext` 是 `record(profile, tenantId, userId)`：**`profile` 必填**，是唯一直正影响行为的字段。平台信任调用方声明的域，越权判断（角色→域）在宿主侧做。
+不进 `StringerAgent` 的两件事：`CallerContext`（谁在调）与 `AgentRequest`（本轮请求原文）属于**裸 HTTP 契约**。
+平台信任调用方声明的域，越权判断（角色→域）在宿主侧做 —— 取得门面时的那个域字符串，就是宿主自己做鉴权后得出的结论。
 
 ---
 
@@ -294,7 +293,7 @@ boolean triggered = agentService.stop(sessionId);
 工具即「给一段参数 JSON，还一段结果文本」的无状态能力。两种方式任选：
 
 - **远程（推荐，接入方用）**：在本进程用 `stringer-tool-provider` SDK 周期注册，服务端回调你暴露的 `/stringer/invoke` 执行。
-- **本地（服务端自带）**：工具随服务端进程部署，用 `@StringerTool` 注解声明、由 `AnnotatedToolScanner` 扫描。见 §5。
+- **本地（服务端自带）**：工具随服务端进程部署，用 `@Tool` 注解声明、由 `AnnotatedToolScanner` 扫描。见 §5。
 
 ### 4.1 引入依赖
 
@@ -334,8 +333,8 @@ stringer:
 | `stringer.server.username` / `password` | `stringer` | 接入账号（同服务端账号），用于登录换凭证 |
 | `instance-id` | — | 实例标识。**重连必须沿用同一个**，否则服务端留下摘不掉的旧副本 |
 | `endpoint` | 自动推导 | 工具调用回流地址：服务端 POST 到这里执行工具。留空时推导为 `http://localhost:{本进程端口}/stringer/invoke`（端口取 `local.server.port`，缺失则取 `server.port`）；**路径必须是 `/stringer/invoke`** |
-| `heartbeat-interval-seconds` | `10` | 心跳周期。服务端判死窗默认是它的 3 倍 |
-| `max-backoff-seconds` | `60` | 心跳连续失败时的退避上限（指数退避，避免重启风暴） |
+| `heartbeat-interval-seconds` | `5` | 心跳周期。服务端判死窗默认 `35s`（≈心跳×7），退避上限必须小于它 |
+| `max-backoff-seconds` | `20` | 心跳连续失败时的退避上限（指数退避：5→10→20 封顶，避免重启风暴）。**必须小于判死窗**，否则会出现"退避还没到就已被判死" |
 | `request-timeout-millis` | `10000` | 单次 HTTP 超时 |
 
 **关于 `endpoint` 的自动推导**：进程只能知道自己的端口，无法知道自己"从服务端看过去"是什么地址（NAT、容器网络、网关前缀都在它的视野之外），所以推导只假设**服务端与工具实例同机**，得出 `http://localhost:{端口}/stringer/invoke`。
@@ -346,26 +345,26 @@ stringer:
 
 ### 4.3 声明工具：注解式（推荐）
 
-在任意 Spring Bean 的方法上写 `@StringerTool`，SDK 在装配期扫描并注册。方法签名即参数 schema，注解即治理策略，方法体即执行逻辑——三者不再分离：
+在任意 Spring Bean 的方法上写 `@Tool`，SDK 在装配期扫描并注册。方法签名即参数 schema，注解即治理策略，方法体即执行逻辑——三者不再分离：
 
 ```java
 @Component
 public class OrderTools {
 
     // ① 只读：客服域可见，参数 schema 由签名推导
-    @StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问自己订单的发货/物流情况时调用",
-            profiles = {"customer"}, category = "订单")
-    public String queryOrder(@ToolParam(description = "订单号，如 FR2024001", example = "FR2024001") String orderNo) {
+    @Tool(desc = "按订单号查询订单状态。用户追问自己订单的发货/物流情况时调用",
+            value = "queryOrder", domains = {"customer"})
+    public String queryOrder(@ToolParam("订单号，如 FR2024001") String orderNo) {
         return orderService.statusOf(orderNo);
     }
 
     // ② 写操作：声明副作用 + 每次调用前中断等人工确认
-    @StringerTool(name = "refundOrder", description = "按订单号退款。仅在用户明确要求退款时调用",
-            profiles = {"admin"}, category = "订单",
-            sideEffect = StringerTool.SideEffect.WRITE)
-    @ToolPolicy(approval = @ToolPolicy.Approval(mode = ToolPolicy.Approval.Mode.ALWAYS, reason = "退款需人工确认"))
-    public String refundOrder(@ToolParam(description = "订单号") String orderNo,
-                              @ToolParam(description = "退款金额，单位：元，必须 ≤ 订单实付金额") BigDecimal amount) {
+    @Tool(desc = "按订单号退款。仅在用户明确要求退款时调用",
+            value = "refundOrder", domains = {"admin"},
+            effect = Tool.Effect.WRITE,
+            approval = Tool.Approval.ALWAYS, approvalReason = "退款需人工确认")
+    public String refundOrder(@ToolParam("订单号") String orderNo,
+                              @ToolParam("退款金额，单位：元，必须 ≤ 订单实付金额") BigDecimal amount) {
         return orderService.refund(orderNo, amount);
     }
 }
@@ -377,7 +376,10 @@ public class OrderTools {
 - **参数名来源**：优先 `@ToolParam.name`，其次编译期元数据。Spring Boot 父 pom 默认开了 `-parameters`；普通 Maven 工程没开时**启动期直接报错**并提示补 `@ToolParam(name=...)`——用 `arg0` 注册出去只会让模型拿错 key，这种错必须留在启动期。
 - **返回值**：`String` 原样回喂模型，其余类型序列化成 JSON。
 - **开关**：`stringer.tool-instance.scan-annotated`（默认 `true`）。关掉则只认 §4.4 的编程式注册。
-- 注解字段语义与 `ToolSpec` 完全一致，见 §4.5；`@ToolParam` / `@ToolPolicy` 字段见 §5 的注解表。
+- 注解字段语义与 `ToolSpec` 完全一致，见 §4.5；`@ToolParam` / `@ToolAdvanced` 字段见 §5 的注解表。
+- **高级可选**写在方法级 `@ToolAdvanced` 上，一律 `参数名=值`、不做位置对齐：
+  `@ToolAdvanced(example = {"orderNo=FR2024001"}, allowValues = {"channel=SMS|APP"}, sensitive = {"phone"})`。
+  三者分别让模型看到示例、把渠道约束成枚举、把手机号的值在事件与审批 payload 里掩码成 `***`。
 
 ### 4.4 声明工具：编程式（工具清单要在启动期动态拼装时用）
 
@@ -472,12 +474,10 @@ public interface ToolHandler {
 @Component
 public class LocalTools {                                  // 任意 Spring Bean 即可
 
-    @StringerTool(
-        name = "queryOrder",
-        description = "按订单号查询订单状态",
-        domains = {"customer"},                  // 可用域；留空＝只属于兜底域 default
-        sideEffect = SideEffect.READ)
-    public String queryOrder(@ToolParam(name="orderNo", description="订单号", required=true) String orderNo) {
+    @Tool(desc = "按订单号查询订单状态",
+        value = "queryOrder",
+        domains = {"customer"})                  // 可用域；留空＝只属于兜底域 default
+    public String queryOrder(@ToolParam(name = "orderNo", value = "订单号", required = true) String orderNo) {
         return "...";
     }
 }
@@ -490,15 +490,16 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 | 注解 / 字段 | 作用 |
 |---|---|
-| `@StringerTool.name` | 工具名，留空取方法名，全局唯一 |
-| `@StringerTool.description` | 给 LLM 的用途说明（必填） |
-| `@StringerTool.category` | 管理页分类（不参与过滤） |
-| `@StringerTool.domains` | 可用域（授权边界），留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用。旧名 `profiles` 仍兼容但已废弃 |
-| `@StringerTool.sideEffect` | `READ`/`WRITE`/`DESTRUCTIVE` |
-| `@StringerTool.idempotent` | 是否幂等（默认 `true`） |
-| `@StringerTool.toModel` | 结果是否回填 LLM（默认 `true`） |
-| `@ToolParam(description, required, example, allowValues, sensitive)` | 参数语义。`allowValues` 写枚举白名单比自然语言约束更可靠；`sensitive` 当前只登记展示，真正脱敏靠不在结果里回显 |
-| `@ToolPolicy` → `@Approval(mode, condition, reason, approverRoles, timeoutSeconds, onTimeout, payloadFields)` | 二次确认策略。**只有 `@Approval#mode` 非 `NONE` 才生效**；`CONDITIONAL`/`ONCE_PER_SESSION` 当前与 `ALWAYS` 等价（每次都中断等授权）。需要「金额超阈值才审批」请直接用 `ALWAYS` |
+| `@Tool#desc` | 给 LLM 的用途说明（**唯一必填**） |
+| `@Tool#value` | 工具名，留空取方法名，全局唯一 |
+| `@Tool#domains` | 可用域（授权边界），留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用（须显式写出） |
+| `@Tool#effect` | `Effect.READ` / `WRITE` / `DESTRUCTIVE` |
+| `@Tool#approval` + `approvalReason` | 二次确认：`NONE`（默认）/ `ALWAYS`。`ALWAYS` 时**每次调用前中断等授权**；需「金额超阈值才审批」的条件式审批尚未落地 |
+| `@ToolParam(value, name, required)` | 参数语义：`value` 是参数说明（推荐写法），`name` 覆盖参数名，`required` 默认 `true` |
+| `@ToolDomains` | 类级默认域；方法级 `domains` 就近覆盖 |
+| `@ToolAdvanced(example, allowValues, sensitive)` | 写法一律 `参数名=值`，**不做位置对齐**：`example` 进参数说明（模型据此更会构造参数）；`allowValues` 成为模型可见 schema 的 `enum` 白名单（比自然语言约束可靠）；`sensitive` 让该参数的**值**在工具调用事件与审批 payload 里显示为 `***`（执行仍用原值） |
+
+> 旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**，写了不会被扫描到；字段对照见 [`SDK-USAGE.md` §1.6](SDK-USAGE.md)。
 
 > 参数结构靠反射推导（类型→JSON Schema），语义靠 `@ToolParam` 补。建议每个工具收一个 record DTO 入参，参数注解集中落在 DTO 上，签名与 schema 都更规整。
 
@@ -508,9 +509,9 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 域是「一次对话的场景」，同时绑定**工具集 + 提示词**。
 
-- 工具可见性**唯一维度**就是域：`@StringerTool.domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里（旧名 `profiles` / `withProfiles` 仍兼容但已废弃）。
-- 域由工具声明**派生**：写下 `profiles="customer"` 即创建了 `customer` 域，不用先去管控台建域。工具全下线后域会消失（配置里可能留下孤儿条目，不自动清理）。
-- `profile` 在每次请求**必须显式传入**且**必须真实存在**（有工具声明它），否则报 `10004`——绝不静默回退成全量工具。
+- 工具可见性**唯一维度**就是域：`@Tool#domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里（旧名 `profiles` 已废弃，编程式的 `withProfiles` 保留为 `@Deprecated` 别名）。
+- 域有**三个来源**：内置兜底域 `default`（不可删）、管控台**人工创建**（可删）、工具声明**派生**。派生域**一经声明即常驻**——工具被断开后域仍在，只是该域下暂无工具；写下 `domains = {"customer"}` 即创建了 `customer` 域，不用先去管控台建域。
+- 每次请求的域**留空则回落兜底域 `default`**；非空但不存在才报 `10004`——绝不静默回退成全量工具。
 - 越权判断（角色→域映射）在宿主侧：平台信任调用方声明的域，只校验「域是否存在」。
 
 ---
@@ -518,7 +519,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 ## 7. 端到端最小跑通（参考 `stringer-example`）
 
 1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527）。
-2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool`（旧 `@StringerTool` 仍兼容）声明，两者都被识别）周期注册给服务端。
+2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool` 声明）周期注册给服务端。
 3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `customer`、管理员 `admin`）演示域差异；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
 5. 想顺手验证知识库：`stringer-example/src/main/resources/ragDatabase/` 下有 4 篇「鲜果时光」语料（公司简介与配送范围 / 退款与售后政策 / 会员与订阅规则 / 常见问题 FAQ），在管控台「知识库」页上传即可检索。**它们不参与示例启动**，只是联调用的现成语料。

@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 AgentService 就能调 AI，方法上加 @Tool（旧 @StringerTool 仍兼容）就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
+  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 StringerAgent 就能调 AI，方法上加 @Tool 就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
 </p>
 
 <p align="center">
@@ -54,9 +54,9 @@
 | --- |---------------------------------------| --- | --- |
 | 形态 | **独立服务端 + 薄 starter**                 | 独立平台（容器部署） | 库，随业务进程 |
 | 技术栈 | Java 21 / Spring Boot                 | Python 为主 | Java |
-| 工具怎么写 | 你现有的 Spring Bean：方法上加 `@Tool`（旧 `@StringerTool` 仍兼容） | 平台内配置 / 插件市场 | 写代码，自己接路由 |
+| 工具怎么写 | 你现有的 Spring Bean：方法上加 `@Tool` | 平台内配置 / 插件市场 | 写代码，自己接路由 |
 | 工具在哪跑 | **你的进程内**，复用事务、权限与 `@Service`         | 平台进程，跨系统 HTTP 调用 | 你的进程内 |
-| 业务代码改动 | 注入 `AgentService` 调 AI 即可，零改动         | 另起进程，走 REST / iframe | 编排与状态代码写进业务工程 |
+| 业务代码改动 | 注入 `StringerAgent` 调 AI 即可，零改动         | 另起进程，走 REST / iframe | 编排与状态代码写进业务工程 |
 | 编排与状态 | 图编排 + Redis 检查点，**中断后可跨实例恢复**         | 可视化工作流 | 需自行实现 |
 | 工具治理 | **域可见性 + 审批中断 + 多实例注册中心**             | 插件 / 工具市场 | 无内置治理，需自行实现 |
 | 运维界面 | 内置 8 页管控台 + 运行指标快照                    | 自有可视化界面 | 无 |
@@ -134,7 +134,7 @@ http://localhost:9527/admin.html      # 默认账号 stringer / stringer
 </dependency>
 ```
 
-> **一个依赖就够。** `stringer-agent-client` 同时带来三件事：调 AI（`AgentService`）、把本进程的方法作为工具交给 Agent（工具实例 SDK，**默认关闭**，需要时打开 `stringer.tool-instance.enabled`）、公共异常与输入安全。Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。只想当工具方（工具微服务、非 Java 应用）可只引 `stringer-tool-provider`。详见[实例文档 §1.1](docs/INSTANCE.md#11-一个依赖跑起来)。
+> **一个依赖就够。** `stringer-agent-client` 同时带来三件事：调 AI（`StringerAgent`，用 `StringerAgentFactory.forDomain(...)` 取）、把本进程的方法作为工具交给 Agent（工具实例 SDK，**默认关闭**，需要时打开 `stringer.tool-instance.enabled`）、公共异常与输入安全。Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。只想当工具方（工具微服务、非 Java 应用）可只引 `stringer-tool-provider`。详见[实例文档 §1.1](docs/INSTANCE.md#11-一个依赖跑起来)。
 
 ```yaml
 stringer:
@@ -149,24 +149,39 @@ stringer:
 >
 > 凭证不设有效期，正常路径下登录只发生一次；服务端改过密码后客户端会自动重登一次，仍失败则中断启动并提示原因。
 
-### 第三步：注入一个 Bean，发起一轮对话
+### 第三步：注入一个 Bean，问一句话
+
+SDK 只提供一个入口 `StringerAgent`：**先绑域，再调用**。
 
 ```java
 @Service
 public class MyService {
-    private final AgentService agentService;
+    private final StringerAgent agent;                // 已绑定 customer 域，可缓存复用
 
-    public MyService(AgentService agentService) {   // starter 自动装配，不需要任何注解
-        this.agentService = agentService;
+    public MyService(StringerAgentFactory factory) {  // starter 自动装配，不需要任何注解
+        this.agent = factory.forDomain("customer");
     }
 
-    public Flux<AgentEvent> ask(String sessionId, String question) {
-        return agentService.chat(AgentRequest.of(sessionId, question, "customer"));
+    /** 只要最终答案（大多数场景）：内部把 TOKEN 增量拼成整段文本 */
+    public String ask(String sessionId, String question) {
+        return agent.ask(sessionId, question);
+    }
+
+    /** 要逐字输出 */
+    public Flux<String> stream(String sessionId, String question) {
+        return agent.stream(sessionId, question);
+    }
+
+    /** 要完整事件流（工具调用 / 审批中断 / 错误码） */
+    public Flux<AgentEvent> events(String sessionId, String question) {
+        return agent.events(sessionId, question);
     }
 }
 ```
 
-第三个参数是**域**：平台据此决定模型能看到哪些工具、用哪份提示词。
+命中人工审批时 `ask` / `stream` 抛 `ApprovalRequiredException`（带待审批工具清单），用户确认后 `agent.resume(sessionId, true)` 继续。
+
+**域**决定模型能看到哪些工具、用哪份提示词：`forDomain(null)` / 空白 → 兜底域 `default`，同一域永远拿到同一个门面。三个方法的签名里都**没有域参数**，所以"忘传域"写不出来。
 
 ### 第四步：方法上加个注解，把业务方法变成工具
 
@@ -189,8 +204,6 @@ public String refundOrder(@ToolParam("订单号") String orderNo,
 
 方法签名即参数 schema、注解即治理策略、方法体即执行逻辑——三件事写在同一个地方。更多注解与对话 SDK 的完整示例（参数 DTO、`@ToolDomains`、`@ToolAdvanced`、审批恢复、SSE 裸调）见 [SDK 使用手册](docs/SDK-USAGE.md)。
 
-> `@StringerTool` 与 `@ToolPolicy` 仍被扫描器识别（向后兼容），新代码推荐用上面的 `@Tool` 全家桶（`desc` 唯一必填）。
-
 工具清单需要在启动期动态拼装时，改用 `ToolInstanceContributor` 编程式注册（重名以编程式为准），见[实例文档 §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用)。
 
 > 域有**三个来源**：管控台**人工创建**（可删，落盘 `config/domains.json`）、**工具声明派生**（写下 `domains` 即创建）、以及内置兜底域 **`default`**（工具声明留空、调用未指定域都落到它，不可删）。声明留空＝**只属于 `default`**；要全域可用须显式写 `{"*"}`。
@@ -199,7 +212,7 @@ public String refundOrder(@ToolParam("订单号") String orderNo,
 
 ### 联调示例
 
-仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@Tool`（旧 `@StringerTool` 仍兼容）声明——并以"工具实例"身份注册给服务端）：
+仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@Tool` 声明——并以"工具实例"身份注册给服务端）：
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -210,7 +223,7 @@ mvn -pl stringer-example spring-boot:run
 ## 架构
 
 ```
-业务系统（引入 starter，注入 AgentService）
+业务系统（引入 starter，注入 StringerAgent）
    │  HTTP + SSE
    ▼
 stringer-server
@@ -227,19 +240,19 @@ stringer-server
 
 | 模块 | 说明 |
 | --- | --- |
-| `stringer-api` | 对外契约：`AgentService` / 注解 / 事件 / 工具描述符 / 错误码 |
+| `stringer-api` | 对外契约：`StringerAgent` / 注解 / 事件 / 工具描述符 / 错误码 |
 | `stringer-common` | 公共支撑：异常体系 / 输入安全 |
 | `stringer-domain` | 领域能力：知识检索 / 混合检索与融合排序 / 记忆策略 |
 | `stringer-infrastructure` | 基础设施：ES 检索与索引管理 / 文档摄取切片 / Redis / 向量化 |
 | `stringer-runtime` | Agent 运行时内核：图编排 / 工具注册表与路由 / 实例注册表 / 流式 / 提示词 |
 | `stringer-server` | **服务端**：可独立部署，承载全部重逻辑与管控台 |
-| `stringer-agent-client` | **消费侧唯一坐标**：远程调用 + 工具实例 SDK + 公共异常与输入安全 |
+| `stringer-agent-client` | **消费侧唯一坐标**：`StringerAgent`（`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`）+ 工具实例 SDK + 公共异常与输入安全 |
 | `stringer-tool-provider` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
 | `stringer-example` | 接入示例与联调 |
 
 ## 接口
 
-业务系统通过 `AgentService` 调用，无需拼 HTTP；需要裸 HTTP 时看这几个：
+业务系统通过 `StringerAgent` 调用，无需拼 HTTP；需要裸 HTTP 时看这几个：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

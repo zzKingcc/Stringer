@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>An AI agent runtime middleware for the Java ecosystem.<br>Add one starter: inject AgentService to call AI, annotate a method with @StringerTool to let AI call you. Orchestration, tool governance, knowledge base and the ops console all live in the server.</strong>
+  <strong>An AI agent runtime middleware for the Java ecosystem.<br>Add one starter: inject StringerAgent to call AI, annotate a method with @Tool to let AI call you. Orchestration, tool governance, knowledge base and the ops console all live in the server.</strong>
 </p>
 
 <p align="center">
@@ -54,9 +54,9 @@
 | --- | --- | --- | --- |
 | Form factor | **Standalone server + thin starter** | Standalone platform (container-deployed) | Library, inside your process |
 | Stack | Java 21 / Spring Boot | Mostly Python | Java |
-| How you write a tool | Your existing Spring bean: annotate a method with `@StringerTool` | Configure it in the platform / plugin marketplace | Write code and wire the routing yourself |
+| How you write a tool | Your existing Spring bean: annotate a method with `@Tool` | Configure it in the platform / plugin marketplace | Write code and wire the routing yourself |
 | Where tools run | **Inside your process**, reusing your transactions, permissions and `@Service`s | In the platform process, called over HTTP across systems | Inside your process |
-| Business code change | Inject `AgentService` to call the agent — none | Separate process, integrate over REST / iframe | Orchestration and state code lands in your business project |
+| Business code change | Inject `StringerAgent` to call the agent — none | Separate process, integrate over REST / iframe | Orchestration and state code lands in your business project |
 | Orchestration & state | Graph orchestration + Redis checkpoints, **resumable across instances** | Visual workflows | Build it yourself |
 | Tool governance | **Profile visibility + approval interrupts + a multi-instance registry** | Plugins / tool marketplace | None built in; build it yourself |
 | Ops console | Built-in, 8 pages, plus a runtime metrics snapshot | Its own visual UI | None |
@@ -134,7 +134,7 @@ Enter the chat and embedding models under "Models", and the ES / Redis connectio
 </dependency>
 ```
 
-> **One dependency is enough.** `stringer-agent-client` brings three things at once: calling the agent (`AgentService`), handing your own methods to the agent as tools (tool instance SDK, **off by default** — set `stringer.tool-instance.enabled` to turn it on), and the shared exception / input-sanitization support. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. Tool-provider-only deployments (tool microservices, non-Java apps) can depend on `stringer-tool-provider` alone. See [instance doc §1.1](docs/INSTANCE.md#11-一个依赖跑起来).
+> **One dependency is enough.** `stringer-agent-client` brings three things at once: calling the agent (`StringerAgent`, obtained via `StringerAgentFactory.forDomain(...)`), handing your own methods to the agent as tools (tool instance SDK, **off by default** — set `stringer.tool-instance.enabled` to turn it on), and the shared exception / input-sanitization support. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. Tool-provider-only deployments (tool microservices, non-Java apps) can depend on `stringer-tool-provider` alone. See [instance doc §1.1](docs/INSTANCE.md#11-一个依赖跑起来).
 
 ```yaml
 stringer:
@@ -149,50 +149,68 @@ stringer:
 >
 > Credentials do not expire. On the normal path the login happens once; if the server password changed, the client logs in once more automatically, and aborts startup with an explanation if that also fails.
 
-### Step 3: Inject a bean, run a turn
+### Step 3: Inject a bean, ask a question
+
+The SDK exposes exactly one entry point, `StringerAgent`: bind a domain first, then call.
 
 ```java
 @Service
 public class MyService {
-    private final AgentService agentService;
+    private final StringerAgent agent;                // bound to the "customer" domain, reusable
 
-    public MyService(AgentService agentService) {   // auto-configured by the starter; no annotation needed
-        this.agentService = agentService;
+    public MyService(StringerAgentFactory factory) {  // auto-configured by the starter; no annotation needed
+        this.agent = factory.forDomain("customer");
     }
 
-    public Flux<AgentEvent> ask(String sessionId, String question) {
-        return agentService.chat(AgentRequest.of(sessionId, question, "customer"));
+    /** Just the final answer (~70% of cases): TOKEN deltas are concatenated internally */
+    public String ask(String sessionId, String question) {
+        return agent.ask(sessionId, question);
+    }
+
+    /** Token-by-token output */
+    public Flux<String> stream(String sessionId, String question) {
+        return agent.stream(sessionId, question);
+    }
+
+    /** The full event stream (tool calls / approval interrupts / error codes) */
+    public Flux<AgentEvent> events(String sessionId, String question) {
+        return agent.events(sessionId, question);
     }
 }
 ```
 
-The third argument is the **profile**: it determines which tools the model can see and which prompt it receives.
+When human approval is required, `ask` / `stream` throw `ApprovalRequiredException` carrying the pending tool calls; once the user confirms, continue with `agent.resume(sessionId, true)`.
+
+The **domain** decides which tools the model can see and which prompt it receives: `forDomain(null)` / blank falls back to the `default` domain, and the same domain always yields the same instance. None of the three methods takes a domain argument, so "forgetting to pass the domain" is unwritable.
 
 ### Step 4: Annotate a method, turn it into a tool
 
 Set `stringer.tool-instance.enabled=true`, then declare on any Spring bean method:
 
 ```java
-// Read-only: visible in the customer profile; the parameter schema is derived from the signature
-@StringerTool(name = "queryOrder", description = "Look up an order by number. Call when the user asks about shipping or logistics",
-        domains = {"customer"})
-public String queryOrder(@ToolParam(description = "Order number, e.g. FR2024001") String orderNo) { ... }
+// Read-only: visible in the customer domain; the parameter schema is derived from the signature
+@Tool(desc = "Look up an order by number. Call when the user asks about shipping or logistics",
+        value = "queryOrder", domains = {"customer"})
+public String queryOrder(@ToolParam("Order number, e.g. FR2024001") String orderNo) { ... }
 
 // Write: side effect declared + interrupts for human approval before every call
-@StringerTool(name = "refundOrder", description = "Refund an order. Call only when the user explicitly asks for a refund",
-        domains = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
-@ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "Refunds need human sign-off"))
-public String refundOrder(@ToolParam(description = "Order number") String orderNo,
-                          @ToolParam(description = "Refund amount, in CNY") BigDecimal amount) { ... }
+@Tool(desc = "Refund an order. Call only when the user explicitly asks for a refund",
+        value = "refundOrder", domains = {"admin"},
+        effect = Tool.Effect.WRITE,
+        approval = Tool.Approval.ALWAYS, approvalReason = "Refunds need human sign-off")
+public String refundOrder(@ToolParam("Order number") String orderNo,
+                          @ToolParam("Refund amount, in CNY") BigDecimal amount) { ... }
 ```
 
 The signature is the parameter schema, the annotation is the governance policy, the body is the implementation — all three in one place. When the tool list has to be assembled dynamically at startup, register programmatically with `ToolInstanceContributor` instead (programmatic wins on name conflicts) — see [instance doc §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用).
 
-> A profile is created by a tool declaring it — nothing to register in advance. It is also a **caller-declared, platform-trusted** governance mechanism (it keeps the model from misusing tools and keeps prompts aligned with the visible tool set), **not a security boundary**: the client picks the profile and the platform cannot verify it. End-user identity and authorization remain the host's own IAM.
+> A domain has **three sources**: created manually in the ops console (deletable, persisted to `config/domains.json`), derived from a tool declaration (writing `domains` creates it), and the built-in fallback domain **`default`** (tools with no declaration and calls with no domain land here; it cannot be deleted). An empty declaration means **`default` only**; to be usable in every domain you must write `{"*"}` explicitly.
+>
+> It is also a **caller-declared, platform-trusted** governance mechanism (it keeps the model from misusing tools and keeps prompts aligned with the visible tool set), **not a security boundary**: the client picks the domain and the platform cannot verify it. End-user identity and authorization remain the host's own IAM.
 
 ### Demo
 
-The repository includes `stringer-example` (a client integration demo on port 8080, shipping six demo tools — all declared with `@Tool` (the older `@StringerTool` still works) — registered as a tool instance):
+The repository includes `stringer-example` (a client integration demo on port 8080, shipping six demo tools — all declared with `@Tool` — registered as a tool instance):
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -203,7 +221,7 @@ Open `http://localhost:8080/test.html` to walk the full path (including an appro
 ## Architecture
 
 ```
-Business system (starter added, AgentService injected)
+Business system (starter added, `StringerAgent` injected)
    │  HTTP + SSE
    ▼
 stringer-server
@@ -220,7 +238,7 @@ Tool provider (tool-provider SDK, or your own HTTP implementation)
 
 | Module | Description |
 | --- | --- |
-| `stringer-api` | Contracts: `AgentService` / annotations / events / tool descriptors / error codes |
+| `stringer-api` | Contracts: `StringerAgent` / annotations / events / tool descriptors / error codes |
 | `stringer-common` | Common support: exceptions / input security |
 | `stringer-domain` | Domain capabilities: knowledge retrieval / hybrid search with score fusion / memory policy |
 | `stringer-infrastructure` | Infrastructure: ES retrieval and index management / document ingestion and splitting / Redis / embedding |
@@ -232,7 +250,7 @@ Tool provider (tool-provider SDK, or your own HTTP implementation)
 
 ## API
 
-Business systems call through `AgentService` and never hand-write HTTP; when you do need raw HTTP, these are the ones that matter:
+Business systems call through `StringerAgent` and never hand-write HTTP; when you do need raw HTTP, these are the ones that matter:
 
 | Method | Path | Description |
 | --- | --- | --- |

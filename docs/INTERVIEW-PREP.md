@@ -9,7 +9,7 @@
 
 ### 1.1 一句话定位
 
-Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 注入 `AgentService` 就能调 AI，方法上加 `@StringerTool` 就能让 AI 调用你的业务方法。编排、工具治理、知识库、管控台全部收在服务端。
+Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 注入 `StringerAgent` 就能调 AI，方法上加 `@Tool` 就能让 AI 调用你的业务方法。编排、工具治理、知识库、管控台全部收在服务端。
 
 **与主流方案的差异（面试常被问"为什么不用 Dify / Spring AI"）**
 
@@ -19,7 +19,7 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 | 技术栈 | Java 21 / Spring Boot 3.5.7 | Python 为主 | Java |
 | 工具怎么写 | 现有 Spring Bean 上加注解 | 平台内配置 / 插件市场 | 写代码自己接路由 |
 | 工具在哪跑 | 你的进程内，复用事务、权限、`@Service` | 平台进程，跨系统 HTTP | 你的进程内 |
-| 业务代码改动 | 只注入 `AgentService`，零业务改动 | 另起进程走 REST / iframe | 编排与状态代码写进业务工程 |
+| 业务代码改动 | 只注入 `StringerAgent`，零业务改动 | 另起进程走 REST / iframe | 编排与状态代码写进业务工程 |
 | 编排与状态 | 图编排 + Redis 检查点，中断后可跨实例恢复 | 可视化工作流 | 需自行实现 |
 | 工具治理 | 域可见性 + 审批中断 + 多实例注册中心 | 插件市场 | 无内置治理 |
 | 运维界面 | 内置 8 页管控台 + 运行指标 | 自有界面 | 无 |
@@ -31,20 +31,20 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：引一个 starter 
 | 交付物 | 模块 | 部署位置 |
 | --- | --- | --- |
 | 服务端（独立进程） | `stringer-server` | 自部署，默认端口 9527 |
-| 消费侧 starter | `stringer-agent-client` | 引入业务应用，提供 `AgentService` / `KnowledgeBaseClient`，并传递工具实例 SDK（工具能力默认关闭） |
+| 消费侧 starter | `stringer-agent-client` | 引入业务应用，提供 `StringerAgent`（唯一入口，`forDomain` 取）/ `KnowledgeBaseClient`，并传递工具实例 SDK（工具能力默认关闭） |
 | 工具实例 SDK | `stringer-tool-provider` | 工具提供方应用，把本地方法注册到服务端 |
 
 ### 1.3 模块划分与依赖方向
 
 9 个 Maven 模块：
 
-- `stringer-api`：对外契约（错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService`、SPI）
+- `stringer-api`：对外契约（错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`StringerAgent`/`StringerAgentFactory`/`ApprovalRequiredException`、`AgentService`、SPI）
 - `stringer-common`：异常基类、`InputSanitizer`、`AtomicFiles`
 - `stringer-domain`：领域能力（知识检索、混合检索与融合排序、会话记忆约束）
 - `stringer-infrastructure`：外部依赖适配（ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化）
 - `stringer-runtime`：运行时内核（编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消）
 - `stringer-server`：服务端装配（配置、管控接口、鉴权、设置存储、异常出口、静态管控台）
-- `stringer-agent-client`：消费侧客户端（凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测）
+- `stringer-agent-client`：消费侧客户端（凭证管理、`AgentServiceClient` 内部通道、`DefaultStringerAgentFactory`/`DefaultStringerAgent`、`KnowledgeBaseClient`、启动连通性探测）
 - `stringer-tool-provider`：工具实例 SDK（注解扫描、注册心跳、反向调用端点）
 - `stringer-example`：接入示例（含 6 个演示工具与 4 篇示例语料）
 
@@ -119,10 +119,11 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 
 | 规则 | 内容 | 设计原因 |
 | --- | --- | --- |
-| 创建方式 | **三个来源**：内置兜底域 `default`（预置、不可删）、管控台人工创建（`POST /admin/domains`，落盘 `config/domains.json`，可删）、工具声明派生（`@StringerTool.domains()`） | 内置域保证兜底有落点；人工域让"先建域再启应用"成立 |
+| 创建方式 | **三个来源**：内置兜底域 `default`（预置、不可删）、管控台人工创建（`POST /admin/domains`，落盘 `config/domains.json`，可删）、工具声明派生（`@Tool(domains=)`） | 内置域保证兜底有落点；人工域让"先建域再启应用"成立 |
 | 生命周期 | 一经某工具声明过就**常驻**（工具断开后域仍在，只是名下暂无工具） | 域是调用方沿用的命名空间，不该被一次实例熔断/判死带走 |
 | 判定粒度 | 由工具声明即创建，不需要预先注册 | 降低接入成本 |
-| 缺失处理 | 请求未带 `profile` 报 `10009`；空串同样报错 | 不默认给域，防止"漏传即降级" |
+| 调用侧入口 | SDK 只提供一个入口：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`。门面按使用频度分三层（`ask` 取答案 / `stream` 逐字 / `events` 完整事件），签名里**都没有域参数**，"忘传域"写不出来；域不存在会在首次调用时报 `10004`，无需启动期预校验 | 域是**接线动作**而不是每次都要记得传的参数 |
+| 缺失处理 | HTTP 通道未带 `profile`（或空串）→ 回落兜底域 `default`；SDK 通道则在 `AgentRequest` 构造期**直接拒绝空域**（`IllegalArgumentException`）。`10009` 实际不触发（兜底域受保护不会缺失） | 不默认给域，防"漏传即降级"；SDK 用构造期校验把这事前移 |
 | 域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具** | 静默降级成全量工具是权限事故 |
 | 兜底域恒在 | `knownProfiles` 恒含内置 `default`，故"已知域集合为空"不再发生；域不存在一律 `10004` | 兜底是回落，不是放宽 |
 | 工具视图 | 每轮实时读注册表，**不缓存快照** | 动态上下线要立刻生效 |
@@ -147,26 +148,28 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 
 **三种声明方式，语义完全一致：**
 
-1. 注解式（推荐）：任意 Spring Bean 方法上 `@StringerTool` + `@ToolParam` + `@ToolPolicy`
+1. 注解式（推荐）：任意 Spring Bean 方法上 `@Tool`（`desc` 唯一必填）+ `@ToolParam` 补参数语义
 2. 编程式：实现 `ToolInstanceContributor`，在 `contribute(ToolRegistrar)` 里登记（工具清单要在启动期动态拼装时用）
 3. 两者共存时**重名以编程式为准**（后注册覆盖）
 
-**注解字段（`@StringerTool`）**
+**注解字段（`@Tool`）**
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `name` | 空（取方法名） | 全局唯一，重名注册失败 |
-| `description` | 必填 | 给 LLM 的用途说明，"何时调用/何时不要调用"比参数描述更重要 |
-| `category` | `default` | 仅管理页分类，**不参与过滤** |
-| `domains` | `{}` | 留空＝只属于兜底域 `default`；`{"*"}`＝全域可用 |
-| `version` | `1.0.0` | 语义化版本 |
-| `sideEffect` | `READ` | `READ`/`WRITE`/`DESTRUCTIVE` |
-| `idempotent` | `true` | 当前只登记展示 |
-| `toModel` | `true` | 当前只登记展示 |
+| `desc` | **必填** | 给 LLM 的用途说明，"何时调用/何时不要调用"比参数描述更重要 |
+| `value` | 空（取方法名） | 工具名，全局唯一，重名注册失败 |
+| `domains` | `{}` | 留空＝只属于兜底域 `default`；`{"*"}`＝全域可用（须显式写出） |
+| `effect` | `READ` | `READ`/`WRITE`/`DESTRUCTIVE` |
+| `approval` | `NONE` | `NONE`/`ALWAYS`；`ALWAYS` 时每次调用前中断等授权 |
+| `approvalReason` | 空 | 展示给审批人的原因 |
 
-**`@ToolParam`**：`name`、`description`（必填）、`required`、`example`、`allowValues`（枚举白名单）、`sensitive`。
+配套：`@ToolDomains`（类级默认域）、`@ToolAdvanced`（方法级的高级可选：`example`/`allowValues`/`sensitive`，一律 `参数名=值`，**不做位置对齐** —— 位置对齐在参数增删调序时会静默错位）。
 
-**`@ToolPolicy` → `@Approval`**：`mode`（`NONE`/`ALWAYS`/`CONDITIONAL`/`ONCE_PER_SESSION`）、`condition`、`reason`、`approverRoles`、`timeoutSeconds`、`onTimeout`、`payloadFields`。**当前只有 `mode != NONE` 生效**，`CONDITIONAL`/`ONCE_PER_SESSION` 与 `ALWAYS` 等价。
+**`@ToolParam`**：只有三项 —— `value`（参数说明，推荐写法）、`name`、`required`。示例 / 白名单 / 脱敏**不在这里**，它们属于"偶尔才写一项"的长尾，统一放 `@ToolAdvanced`；旧的 `description`/`example`/`allowValues`/`sensitive` 四个废弃字段已彻底删除（写了编译不过）。
+
+**`@ToolAdvanced` 三个字段各自的落点**（这是"写了会不会真生效"的判据）：`allowValues` → 模型可见 schema 的 `enum`；`example` → `Param.example` 并**追加进参数说明**（底层 schema 只有 description 一个自由文本位，没有 example 槽）；`sensitive` → `Param.sensitive`，并把该参数的**值**在工具调用事件与审批 payload 里掩码成 `***`。名字既可以是形参名，也可以是 DTO 展开出的字段名。
+
+**审批**：新注解只保留 `NONE` / `ALWAYS` 两态——`CONDITIONAL`（条件式）与 `ONCE_PER_SESSION`（会话内免确认）未落地，不再暴露，避免"摆出来却无差别"。
 
 **参数 schema 由反射推导**（`AnnotatedToolScanner#schema`，面试可讲的实现细节）：
 
@@ -771,18 +774,30 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 管理面 `/admin/*`：账号（`init`/`login`/`logout`/`session`/`password`）、模型设置（`settings`/`settings/test`/`models`）、工具与域（`tools`/`domains`/`profiles`）、在线实例（`instances`/`mute`/`restore`/`offline`）、知识库（`kb/documents`/`kb/status`/`kb/rebuild`）、存储配置（`infra`/`infra/test`）、指标（`metrics`）。
 
-### 4.2 `AgentRequest` 字段
+### 4.2 对话契约（`StringerAgent`）与请求体 `AgentRequest`
+
+**对外只有 `StringerAgent`**（`forDomain(domainId)` 取得；`null`/空白 → 兜底域 `default`，同域同实例）：
+
+| 方法 | 返回 | 说明 |
+| --- | --- | --- |
+| `ask(sessionId, question[, tenantId, userId])` | `String` | 只需答案。遇审批抛 `ApprovalRequiredException`，遇错误抛 `StringerException`，被停止则返回已产出部分 |
+| `stream(...)` | `Flux<String>` | 逐字输出 |
+| `events(...)` | `Flux<AgentEvent>` | 完整事件流（对应下面的 SSE 契约） |
+| `resume(sessionId, approved)` | `Flux<AgentEvent>` | 审批恢复，域由门面自动带上 |
+| `stop(sessionId)` / `domainId()` | `boolean` / `String` | 停止 / 本实例的域 |
+
+`AgentRequest` 是**HTTP 请求体与 SDK 内部载体**（`AgentService` 接口仍在 api 里由服务端实现），字段：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `sessionId` | 是 | 会话唯一键，同时是记忆与检查点的 key |
 | `message` | 是 | 用户本轮输入 |
-| `profile` | 是 | 域；为空报 `10009`，不存在报 `10004` |
+| `profile` | 是 | 域。`AgentRequest` 构造期拒绝空白（`IllegalArgumentException`）；**裸 HTTP** 传空则回落 `default`；域不存在报 `10004` |
 | `tenantId` | 否 | **仅日志与审计，不承担隔离职责** |
 | `userId` | 否 | 同上 |
-| `attributes` | 否 | 扩展属性 |
+| `attributes` | 否 | 扩展属性，**只在裸 HTTP 通道可用** |
 
-踩坑提示：用 `toBuilder()` 加工请求时**务必带上 `profile`**，漏传会静默丢掉域。
+踩坑提示：用 SDK 时不必碰 `AgentRequest` —— `forDomain(...)` 已把域定死，域不在参数里也就漏不掉。
 
 ### 4.3 SSE 事件契约
 
@@ -825,7 +840,7 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 `stringer.client.*`：`health-check-timeout`=5s、`connect-timeout`=5s、`read-timeout`=10m（SSE 长连接）。
 `stringer.tool-instance.*`：`enabled`=false、`scan-annotated`=true、`instance-id`、`endpoint`（留空按本进程端口推导）、`heartbeat-interval-seconds`=5、`max-backoff-seconds`=20、`request-timeout-millis`=10000。
 
-**starter 自动配置注册的 Bean**：`stringerWebClient`（`WebClient`）、`stringerClientCredential`、`agentService`、`stringerKnowledgeBaseClient`、`stringerConnectivityCheck`（`SmartInitializingSingleton`，失败即中断启动）。
+**starter 自动配置注册的 Bean**：`stringerWebClient`（`WebClient`）、`stringerClientCredential`、`stringerAgentFactory`（`StringerAgentFactory`，**唯一入口**）、`stringerKnowledgeBaseClient`、`stringerConnectivityCheck`（`SmartInitializingSingleton`，失败即中断启动）。底层 `AgentServiceClient` 不再作为 Bean 暴露。
 
 **客户端两个健壮性细节**：
 
@@ -834,10 +849,10 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 **工具实例心跳的健壮性设计**：
 
-- 指数退避：`delay = min(interval << min(failures-1, 6), maxBackoff)` —— **移位上限 6 防溢出**，退避封顶 60s，避免重启风暴。
+- 指数退避：`delay = min(interval << min(failures-1, 6), maxBackoff)` —— **移位上限 6 防溢出**，退避封顶 `max-backoff-seconds`（默认 20s，小于 35s 判死窗，避免"退避还没到就已被判死"），避免重启风暴。
 - 收到 `410` → `ForcedOfflineException` → **终止心跳**（不可重试）。
 - 收到 `401/403` → 丢弃缓存凭证，下次心跳自动重新登录（服务端可能改过密码，签名密钥由密码哈希派生）。
-- 日志降噪：只在"受理结果变化"时打 INFO，否则打 DEBUG（心跳每 10s 一次，每次都打会把日志刷成噪音）。
+- 日志降噪：只在"受理结果变化"时打 INFO，否则打 DEBUG（心跳每 5s 一次，每次都打会把日志刷成噪音）。
 - 登录失败按状态码给可操作提示：401=账号或密码不对、403=网络侧访问控制、409=服务端未初始化、其他=检查地址。
 
 ---
@@ -877,11 +892,10 @@ fused = vectorWeight × normVectorScore + keywordWeight × normKeywordScore
 
 | 字段 | 实际行为 |
 | --- | --- |
-| `@StringerTool.idempotent` | 不参与重试判定（传输层失败一律换副本重试） |
-| `@StringerTool.toModel` | 不改变结果回填行为 |
-| `@ToolParam.sensitive` | 不改变运行行为，中断事件的 payload 仍按原值输出 |
-| `@Approval.condition`/`approverRoles`/`timeoutSeconds`/`onTimeout`/`payloadFields` | 不参与判定 |
-| `@Approval.mode = CONDITIONAL`/`ONCE_PER_SESSION` | 与 `ALWAYS` 等价 |
+| `ToolDescriptor.idempotent` / `toModel`（注解已不暴露，恒为 `true`） | 不参与重试判定／不改变结果回填行为 |
+| `ToolDescriptor.Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`（新注解不暴露） | 不参与判定 |
+
+> `@ToolAdvanced.sensitive` 曾经是"只登记不生效"—— 现已接入：该参数的**值**会在工具调用事件与审批 payload 里显示为 `***`。
 
 **能力缺口**
 

@@ -77,11 +77,11 @@
 
     <rect x="64" y="76" width="340" height="56" rx="10" fill="#E6F1FB" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
     <text x="234" y="96" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">业务应用 · stringer-agent-client</text>
-    <text x="234" y="114" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#185FA5">注入 AgentService 发起对话，拿回 Flux 事件流</text>
+    <text x="234" y="114" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#185FA5">注入 StringerAgent（forDomain 绑域）发起对话</text>
 
     <rect x="796" y="76" width="340" height="56" rx="10" fill="#E6F1FB" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
     <text x="966" y="96" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">工具提供方 · tool-instance SDK</text>
-    <text x="966" y="114" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#185FA5">方法加 @StringerTool，跑在自己的进程里，10s 心跳</text>
+    <text x="966" y="114" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#185FA5">方法加 @Tool，跑在自己的进程里，5s 心跳</text>
 
     <path d="M234 132 L234 164 L144 164 L144 228" fill="none" stroke="#185FA5" stroke-width="1.5" marker-start="url(#arr)" marker-end="url(#arr)"/>
     <text x="244" y="148" dominant-baseline="central" font-size="11" fill="#5F5E5A">HTTP + SSE</text>
@@ -327,7 +327,7 @@
     <rect x="784" y="1840" width="336" height="152" rx="10" fill="#F1EFE8" stroke="#888780" stroke-width="1" stroke-dasharray="6 4"/>
     <text x="804" y="1864" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">③ 实例五态</text>
     <text x="804" y="1888" dominant-baseline="central" font-size="11" fill="#5F5E5A">ONLINE ⇄ MUTED（心跳仍受理，副本摘除）</text>
-    <text x="804" y="1912" dominant-baseline="central" font-size="11" fill="#5F5E5A">DRAINING → OFFLINE（30s 未心跳）</text>
+    <text x="804" y="1912" dominant-baseline="central" font-size="11" fill="#5F5E5A">DRAINING → OFFLINE（35s 未心跳）</text>
     <text x="804" y="1936" dominant-baseline="central" font-size="11" fill="#5F5E5A">FORCE_OFFLINE（410 · 标记保留 1h）</text>
 
     <path d="M600 2012 L600 2036" fill="none" stroke="#888780" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arr)"/>
@@ -376,14 +376,14 @@
     <tr><td>启动即校验</td><td>starter 启动期换凭证并探测健康，连不上或账密错直接中断启动，不提供关闭开关</td><td class="mono">starter.client</td></tr>
 
     <tr><td class="grp" rowspan="6">域 profile</td><td>定义</td><td>域＝一次对话的场景，同时绑定【一组工具 + 一份提示词】，是可见性的唯一维度</td><td class="mono">ToolRegistry</td></tr>
-    <tr><td>注册方式</td><td>工具在注解里声明 profiles（@StringerTool(profiles={...})）；注册时 remember() 记入 declaredProfiles</td><td class="mono">ToolRegistry#register</td></tr>
+    <tr><td>注册方式</td><td>工具在注解里声明 domains（@Tool(domains={...})）；注册时 remember() 记入 declaredProfiles</td><td class="mono">ToolRegistry#register</td></tr>
     <tr><td>派生数据</td><td>knownProfiles ＝ 内置 default ∪ 人工创建的域 ∪ 工具声明（declaredProfiles 一经声明永不移除）</td><td class="mono">ToolRouter#getKnownProfiles</td></tr>
     <tr><td>选择语义</td><td>domains 留空＝只属于 default；含 <span class="mono">*</span>＝全域可用（须显式）；命中者进入模型视野，每轮实时计算不缓存</td><td class="mono">toolSpecifications(profile)</td></tr>
     <tr><td>入口判定</td><td>acceptsProfile：已知域为空放行任意域，否则未声明即 10004，绝不回退全量工具</td><td class="mono">ToolRegistry#acceptsProfile</td></tr>
     <tr><td>同源约束</td><td>模型可见集与需审批集必须用同一 filter，否则出现"看不见但能审批"的错位</td><td class="mono">routeAfterAgent</td></tr>
 
-    <tr><td class="grp" rowspan="6">工具模型</td><td>声明方式</td><td>@StringerTool ＋ @ToolParam ＋ @ToolPolicy；参数 schema 由方法签名反射推导</td><td class="mono">AnnotatedToolScanner</td></tr>
-    <tr><td>两个来源</td><td>本地 Bean 启动期扫描；远程实例运行期整包心跳（10s），写入同一张注册表</td><td class="mono">DESIGN §5.2</td></tr>
+    <tr><td class="grp" rowspan="6">工具模型</td><td>声明方式</td><td>@Tool ＋ @ToolParam（必要时 @ToolDomains / @ToolAdvanced）；参数 schema 由方法签名反射推导</td><td class="mono">AnnotatedToolScanner</td></tr>
+    <tr><td>两个来源</td><td>本地 Bean 启动期扫描；远程实例运行期整包心跳（5s），写入同一张注册表</td><td class="mono">DESIGN §5.2</td></tr>
     <tr><td>条目结构</td><td>Registered(descriptor, specification, executor, endpoints)，不可变；多副本共享单份描述符</td><td class="mono">ToolRegistry.Registered</td></tr>
     <tr><td>写入语义</td><td>按 instanceId 整包 diff：删未声明副本 → 新增／刷新副本 → 覆盖 byInstance，整段在同一条带锁内</td><td class="mono">replaceInstanceTools</td></tr>
     <tr><td>冲突防线</td><td>本地同名 putIfAbsent 直接失败；远程不得占用本地工具名，校验必须先于任何副本写入（防幽灵副本）</td><td class="mono">ToolRegistry#addReplica</td></tr>

@@ -11,13 +11,13 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | 交付物 | 模块 | 部署位置 |
 | --- | --- | --- |
 | 服务端（独立进程） | `stringer-server` | 客户自部署，端口 `9527`（`server.port` / `STRINGER_SERVER_PORT`） |
-| 消费侧 SDK | `stringer-agent-client` | 引入调用方业务应用，提供 `AgentService` 与 `KnowledgeBaseClient` Bean，并传递 `sdk-core` 与工具实例 SDK（工具能力默认关闭） |
+| 消费侧 SDK | `stringer-agent-client` | 引入调用方业务应用，提供 `StringerAgentFactory`（唯一入口：`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`）与 `KnowledgeBaseClient` Bean，并传递 `sdk-core` 与工具实例 SDK（工具能力默认关闭） |
 | 工具实例 SDK | `stringer-tool-provider` | 引入工具提供方应用，把本地方法注册到服务端；也可单独引入（只当工具方、不调 AI） |
 | 共享契约层 | `stringer-sdk-core` | 被 `agent-client` 与 `tool-provider` 共同依赖，承载 `ServerProperties`（`stringer.server.*`）等共用配置 |
 
 形态约束：
 
-- 服务端不提供开箱业务 Controller，只暴露 `AgentService` Bean；调用方身份（`profile` / `tenantId` / `userId`）由宿主填入请求。
+- 服务端不提供开箱业务 Controller，只暴露 `AgentService` 契约；消费侧对应 **`StringerAgent` 门面**（`forDomain(...)` 时绑定域，之后 `ask`/`stream`/`events`/`resume`/`stop` 都不带域参数），租户 / 用户随各方法显式传入。裸 HTTP 入口仍接受 `profile`。
 - 服务端 **不内置任何业务知识文档**；文档由部署方通过上传接口导入。
 - 服务端不做 SaaS：**单实例部署**——工具注册表在进程内存、知识库导入为进程内串行锁、判死扫描为进程内定时器，因此多实例不成立；扩容只能纵向。
 - 停机为**优雅停机**（`server.shutdown=graceful`，等待上限 30s）：先停止接收新请求，在途请求（含 SSE 长连接）收尾后再退出。
@@ -29,14 +29,14 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 
 | 模块 | 职责 | 主要包 |
 | --- | --- | --- |
-| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService` 接口、`Domains`、`ModelResolver` | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
+| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService`（`StringerAgent` / `StringerAgentFactory` / `ApprovalRequiredException`）、`Domains`、`ModelResolver` | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
 | `stringer-common` | 异常基类与通用工具 | `common.exception` `common.util` |
 | `stringer-domain` | 领域能力：知识检索、混合检索与融合排序、会话记忆约束、域注册表 | `domain.capability.knowledge` `domain.rag` `domain.memory` `domain` |
 | `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |
 | `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消、模型解析 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` `runtime.model` `runtime.domain` |
 | `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台、模型档案与域管理 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` `server.model` |
 | `stringer-sdk-core` | 共享契约层：被两个 SDK 共同依赖，承载 `ServerProperties`（`stringer.server.*`）、`ClientProperties` 等共用配置 | `sdkcore` |
-| `stringer-agent-client` | 消费侧 SDK：凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测 | `agentclient` |
+| `stringer-agent-client` | 消费侧 SDK：凭证管理、`AgentServiceClient`（内部通道）、**唯一入口** `StringerAgent`（`DefaultStringerAgentFactory` / `DefaultStringerAgent`）、`KnowledgeBaseClient`、启动连通性探测 | `agentclient` |
 | `stringer-tool-provider` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolprovider` |
 | `stringer-example` | 接入示例（含示例知识文档与示例工具），不随服务端交付 | `example` |
 
@@ -84,7 +84,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 定义 | 域＝一次对话的场景，同时绑定【工具集 + 系统提示词】 |
-| 创建与销毁 | **三个来源**：内置兜底域 `default`（启动即预置、**不可删除**）、管控台**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具声明派生**（由注解 `@Tool(domains=)` 产生，一经声明即常驻，工具被断开时域仍在，只是该域下暂无工具，因此不受实例熔断 / 判死影响；旧 `@StringerTool.domains()` 同义） |
+| 创建与销毁 | **三个来源**：内置兜底域 `default`（启动即预置、**不可删除**）、管控台**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具声明派生**（由注解 `@Tool(domains=)` 产生，一经声明即常驻，工具被断开时域仍在，只是该域下暂无工具，因此不受实例熔断 / 判死影响） |
 | 可见性判定 | 工具的 `domains` 留空＝<b>只属于兜底域 `default`</b>；含 `*`＝任何域可用（须显式写出）；否则仅声明了本轮域的工具进入模型视野 |
 | 维度数量 | 域是工具可见性的 **唯一维度**，不叠加第二个权限维度 |
 | `profile` 缺失 / 空 | 回落兜底域 `default`（恒存在、不可删），不报错；`default` 下无工具时仅用基线提示词 |
@@ -99,7 +99,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ### 5.1 注解契约（`stringer-api/annotation`）
 
-工具注解已收敛：**新 `@Tool` 全家桶（推荐）** 取代旧的 `@StringerTool` + `@ToolPolicy` 组合。旧注解**仍被扫描器识别（向后兼容，计划两个版本周期后移除）**，但新代码一律用 `@Tool`。
+工具注解只有一个入口：**`@Tool` 全家桶**。旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**——不再被扫描器识别，写了也不会注册。迁移对照见 [SDK 使用手册 §1.6](SDK-USAGE.md)。
 
 | 注解 | 目标 | 字段 | 默认值 |
 | --- | --- | --- | --- |
@@ -109,24 +109,25 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | | | `effect` | `Effect.READ`（`READ`/`WRITE`/`DESTRUCTIVE`） |
 | | | `approval` | `Approval.NONE`（`NONE`/`ALWAYS`，当前仅此两态生效） |
 | | | `approvalReason` | `""`（`approval != NONE` 时建议填写，展示给审批人） |
-| `@ToolParam` | PARAMETER / FIELD / RECORD_COMPONENT | `value` | `""`（参数说明，推荐写法） |
+| `@ToolParam` | PARAMETER / FIELD / RECORD_COMPONENT | `value` | `""`（参数说明，推荐写法；不写会被统计为"未描述"并 WARN） |
 | | | `name` | `""`（留空取形参名 / 字段名） |
 | | | `required` | `true`（`Optional<T>` 自动判为可选） |
-| | | `description` / `example` / `allowValues` / `sensitive` | 已废弃：说明改 `@ToolParam(value=)`，后三项迁移到 `@ToolAdvanced` |
 | `@ToolDomains` | TYPE | `value` | `{}`（类级默认域；方法级 `domains` 就近覆盖） |
-| `@ToolAdvanced` | METHOD | `example` | `{}`（按 `参数名=示例值` 给出） |
-| | | `allowValues` | `{}`（按 `参数名=值1\|值2` 给出枚举白名单） |
-| | | `sensitive` | `{}`（需脱敏的参数名清单，日志 / 事件 / 审批 payload 掩码） |
-| `@StringerTool`（旧·兼容） | METHOD | `name` / `description`(必填) / `category` / `domains` / `profiles`(已废弃，别名 `domains`) / `version` / `sideEffect` / `idempotent` / `toModel` | `description` 对应新 `desc`，`sideEffect` 对应新 `effect` |
-| `@ToolPolicy`（旧·兼容） | METHOD | `approval` → `@Approval`（`mode` / `condition` / `reason` / `approverRoles` / `timeoutSeconds` / `onTimeout` / `payloadFields`） | 对应新 `approval` + `approvalReason`；`mode` 仅 `NONE`/`ALWAYS` 生效 |
+| `@ToolAdvanced` | METHOD | `example` | `{}`（`参数名=示例值`，如 `{"orderNo=FR2024001"}`） |
+| | | `allowValues` | `{}`（`参数名=值1\|值2`，如 `{"channel=SMS\|APP"}`） |
+| | | `sensitive` | `{}`（需掩码的参数名清单） |
+
+> `@ToolParam` 只保留"每个参数都该写"的三项（说明 / 名字 / 必填）；示例、白名单、脱敏属于长尾，
+> 统一在方法级的 `@ToolAdvanced` 上写，三个字段一律 `参数名=值`，**不做位置对齐**。
 
 实际生效范围（当前实现）：
 
-- 扫描：`AnnotatedToolScanner` 同时识别 `@Tool` 与 `@StringerTool`（服务端进程内与工具实例 SDK 两侧规则一致）。任一都足以让方法被注册；`StringerToolProvider` 接口已退化为可选标记。
-- 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`）；`@ToolParam` 只补语义，`@ToolAdvanced` 补示例 / 白名单 / 脱敏。
-- 审批判定只看 `approval`（新）或 `Approval.mode`（旧）是否非 `NONE`；旧 `CONDITIONAL` / `ONCE_PER_SESSION` 当前与 `ALWAYS` 等价。
-- 仅登记、不参与运行行为：`idempotent`、`toModel`、旧 `@ToolParam` 的 `example`/`allowValues`/`sensitive`（已迁移到 `@ToolAdvanced`）、旧 `@Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`/`onTimeout`/`payloadFields`。
-- 域归属合并：`@Tool(domains=)` 与 `@ToolDomains`（类级默认）合并判定，方法级优先；旧 `@StringerTool.domains()` 与废弃的 `profiles()` 同义。
+- 扫描：`AnnotatedToolScanner` 只识别 `@Tool`（服务端进程内与工具实例 SDK 两侧规则一致）；`StringerToolProvider` 接口已退化为可选标记。
+- 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`）；`@ToolParam` 只补说明。
+- `@ToolAdvanced` 在参数树建好后**按名字**套上（名字既可是形参名，也可是 DTO 展开出的字段名）：`allowValues` → 模型 schema 的 `enum`；`example` → `Param.example` **并追加进模型可见的参数说明**（底层 schema 只有 description 一个自由文本位，没有 example 槽）；`sensitive` → `Param.sensitive` + 事件与审批 payload 的**值掩码**。
+- 审批判定只看 `@Tool#approval` 是否非 `NONE`；新注解只暴露 `NONE` / `ALWAYS` 两态。
+- 仅登记、不参与运行行为：`idempotent`、`toModel`、`ToolDescriptor.Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`（新注解不再暴露这三个字段，记录结构保留以备后续真落地）。
+- 域归属合并：`@Tool(domains=)` 与 `@ToolDomains`（类级默认）合并判定，方法级优先。
 
 ### 5.2 工具来源
 
@@ -244,7 +245,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 空结果 | 返回"未检索到相关内容"文本；服务不可用返回"知识库检索服务当前不可用…"——两态分离 |
 | 重建 | 删除索引并按当前维度重建，**索引内容清空，需重新上传文档** |
 
-知识检索以 `KnowledgeSearchService` 形式提供，由部署方通过 `@StringerTool` 暴露为工具；服务端不自带示例工具。
+知识检索以 `KnowledgeSearchService` 形式提供，由部署方通过 `@Tool` 暴露为工具；服务端不自带示例工具。
 
 ---
 

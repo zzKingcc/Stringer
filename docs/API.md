@@ -81,7 +81,7 @@
 | --- | --- | --- | --- |
 | `sessionId` | String | 是 | 会话唯一键 |
 | `message` | String | 是 | 用户消息 |
-| `profile` | String | 否 | 域；**为空时回落兜底域 `default`**；该域不存在（10004）会被拒绝 |
+| `profile` | String | 否 | 域；**为空时回落兜底域 `default`**（本 JSON 契约如此）。走 SDK 则用 `StringerAgentFactory.forDomain(...)` 在绑定时确定域，根本传不出空值；该域不存在（10004）会被拒绝 |
 | `tenantId` | String | 否 | 审计字段，写入日志；不承担隔离职责 |
 | `userId` | String | 否 | 同上 |
 | `attributes` | Map | 否 | 附加属性 |
@@ -348,20 +348,27 @@
 | --- | --- | --- |
 | `stringerWebClient` | `WebClient` | 内部与自定义调用使用 |
 | `stringerClientCredential` | `ClientCredential` | 凭证缓存与登录 |
-| `agentService` | `AgentService` | 对话契约（chat / resume / stop） |
+| `stringerAgentFactory` | `StringerAgentFactory` | **唯一入口**：`forDomain(...)` → `StringerAgent`（`ask`/`stream`/`events`/`resume`/`stop`） |
 | `stringerKnowledgeBaseClient` | `KnowledgeBaseClient` | 知识库管理 |
 | `stringerConnectivityCheck` | `SmartInitializingSingleton` | 启动期探测，失败即中断启动 |
+
+> 底层的 `AgentService` / `AgentServiceClient` 是 SDK 内部通道，**不作为 Bean 暴露** —— 对外只有 `StringerAgent` 一个入口。
 
 ### 6.3 方法签名
 
 | 类 | 方法 |
 | --- | --- |
+| `StringerAgentFactory` | `forDomain(String domainId)` → `StringerAgent`（`null`/空白 → 兜底域 `default`；同域返回同一实例） |
+| `StringerAgent` | `ask(sessionId, question[, tenantId, userId])` → `String`（遇审批抛 `ApprovalRequiredException`） |
+| | `stream(...)` → `Flux<String>`；`events(...)` → `Flux<AgentEvent>` |
+| | `resume(sessionId, approved)` → `Flux<AgentEvent>`；`stop(sessionId)` → `boolean`；`domainId()` → `String` |
 | `ClientCredential` | `get()`、`invalidate()`、`login()`、`extractHttpStatus(Throwable)` |
 | `KnowledgeBaseClient` | `upload(byte[] content, String fileName, boolean replace)` → `UploadResult(docId, fileName, size, chunks)` |
 | | `list()` → `List<DocumentItem(docId, fileName, chunks)>` |
 | | `delete(String docId)` |
 
-客户端异常统一为 `StringerException`（携带 `ErrorCode`）；启动探测失败抛 `StringerStartupException`。
+客户端异常统一为 `StringerException`（携带 `ErrorCode`）；启动探测失败抛 `StringerStartupException`；
+`ask` / `stream` 命中人工审批时抛 `ApprovalRequiredException`（带 `sessionId` / `domainId` / `tools` / `traceId`）。
 
 ---
 
@@ -369,14 +376,13 @@
 
 ### 7.1 注解
 
-工具实例侧支持两套注解，扫描器均会识别：
+工具实例侧只认一套注解：
 
-- **`@Tool` 全家桶（推荐，新）**：`desc` 为唯一必填，配套 `@ToolParam` / `@ToolDomains` / `@ToolAdvanced`，审批收敛为 `@Tool(approval=..., approvalReason=...)`。字段与示例见 [`SDK-USAGE.md`](SDK-USAGE.md) 与 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
-- **`@StringerTool` + `@ToolPolicy`（向后兼容，旧）**：字段见 `DESIGN.md` §5.1。新代码建议改用 `@Tool`。
+- **`@Tool` 全家桶**：`desc` 为唯一必填，配套 `@ToolParam`（说明/名字/必填三字段）/ `@ToolDomains`（类级默认域）/ `@ToolAdvanced`（示例、枚举白名单、敏感参数，一律 `参数名=值`），审批收敛为 `@Tool(approval=..., approvalReason=...)`。旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**，`@ToolParam` 的四个废弃别名字段也已删除，写了不会被扫描到（后者直接编译不过）。字段与示例见 [`SDK-USAGE.md`](SDK-USAGE.md) 与 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
 
 两种生效场景：
 
-- **工具实例侧（本 SDK）**：方法所在类注册为 Spring Bean 即可，由 `AnnotatedToolScanner` 在装配期扫描注册；参数 schema 由方法签名推导，`@ToolParam` 补语义，`@ToolPolicy` 定审批。
+- **工具实例侧（本 SDK）**：方法所在类注册为 Spring Bean 即可，由 `AnnotatedToolScanner` 在装配期扫描注册；参数 schema 由方法签名推导，`@ToolParam` 补语义，`@Tool(approval=...)` 定审批。
 - **服务端进程内**：任意 Spring Bean 即可（见 `INSTANCE.md` §5）。`StringerToolProvider` 为可选标记，实现了照样被扫到。
 
 开关 `stringer.tool-instance.scan-annotated`（默认 `true`）。
@@ -390,7 +396,7 @@
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enabled` | false | 必须显式开启 |
-| `scan-annotated` | true | 是否扫描 `@StringerTool` 注解方法并自动注册；关闭后只认 `ToolInstanceContributor` 编程式注册 |
+| `scan-annotated` | true | 是否扫描 `@Tool` 注解方法并自动注册；关闭后只认 `ToolInstanceContributor` 编程式注册 |
 | `instance-id` | — | 实例标识 |
 | `endpoint` | 推导 | 本实例对外可达地址，服务端反向调用用；留空按 `http://localhost:{本进程端口}/stringer/invoke` 推导，跨机部署必须显式填写 |
 | `heartbeat-interval-seconds` | 5 | 心跳周期 |
@@ -406,7 +412,7 @@
 | `ToolSpec` | 工具声明（序列化为注册报文的 `manifest` 项） |
 | `ToolInstanceConfig` | 实例身份配置 |
 | `ToolRegistrar` | 注册扩展点 |
-| `AnnotatedToolScanner` | 扫描 Spring 容器里带 `@StringerTool` 的方法，转成 `ToolSpec` + 反射执行体并注册 |
+| `AnnotatedToolScanner` | 扫描 Spring 容器里带 `@Tool` 的方法，转成 `ToolSpec` + 反射执行体并注册 |
 
 ### 7.4 反向调用协议（服务端 → 实例）
 

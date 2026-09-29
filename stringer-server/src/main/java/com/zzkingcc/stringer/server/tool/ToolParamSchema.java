@@ -58,6 +58,14 @@ final class ToolParamSchema {
             JsonNode property = entry.getValue();
             List<String> allowValues = textList(property.path("enum"));
             String type = allowValues.isEmpty() ? typeName(property) : "enum";
+            // 数组：从 items 还原元素结构（与本地工具 Param 树的 items 保持一致，不能拍平成字符串）
+            List<ToolDescriptor.Param> items = List.of();
+            if ("array".equals(type)) {
+                JsonNode itemNode = property.path("items");
+                if (itemNode.isObject()) {
+                    items = List.of(itemParam(itemNode));
+                }
+            }
             params.add(new ToolDescriptor.Param(
                     entry.getKey(),
                     type,
@@ -66,9 +74,33 @@ final class ToolParamSchema {
                     List.copyOf(allowValues),
                     property.path("example").asText(""),
                     property.path("x-sensitive").asBoolean(false),
-                    toParams(property.path("properties"), textList(property.path("required")))));
+                    toParams(property.path("properties"), textList(property.path("required"))),
+                    items));
         }
         return params;
+    }
+
+    /** 数组元素的反向解析（无名字；递归保留其 object 子字段与嵌套数组） */
+    private static ToolDescriptor.Param itemParam(JsonNode node) {
+        List<String> allowValues = textList(node.path("enum"));
+        String type = allowValues.isEmpty() ? typeName(node) : "enum";
+        List<ToolDescriptor.Param> items = List.of();
+        if ("array".equals(type)) {
+            JsonNode itemNode = node.path("items");
+            if (itemNode.isObject()) {
+                items = List.of(itemParam(itemNode));
+            }
+        }
+        return new ToolDescriptor.Param(
+                null,
+                type,
+                node.path("description").asText("（未描述）"),
+                false,
+                List.copyOf(allowValues),
+                node.path("example").asText(""),
+                node.path("x-sensitive").asBoolean(false),
+                toParams(node.path("properties"), textList(node.path("required"))),
+                items);
     }
 
     private static JsonObjectSchema objectSchema(JsonNode node) {

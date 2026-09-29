@@ -69,6 +69,9 @@ public record ToolDescriptor(
      * @param properties  <b>{@code type=object} 时的子字段</b>；简单类型为空列表。
      *                    这就是 DTO / record 参数被展开后的嵌套结构 —— 没有它，
      *                    模型只会看到一个"字符串"，无法构造出对象。
+     * @param items       <b>{@code type=array} 时的元素结构</b>；非数组为空列表。
+     *                    元素如果是 DTO，这里递归展开成对象，模型才知道数组里该填什么 ——
+     *                    和 {@code properties} 是同一类"不能退化成字符串"的规则，只不过套在数组里。
      */
     public record Param(
             String name,
@@ -78,12 +81,20 @@ public record ToolDescriptor(
             List<String> allowValues,
             String example,
             boolean sensitive,
-            List<Param> properties) {
+            List<Param> properties,
+            List<Param> items) {
 
-        /** 简单类型：没有子字段。保留七参形态，既有调用点无需改动 */
+        /** 简单类型：没有子字段，也没有数组元素结构。保留七参形态，既有调用点无需改动 */
         public Param(String name, String type, String description, boolean required,
                      List<String> allowValues, String example, boolean sensitive) {
-            this(name, type, description, required, allowValues, example, sensitive, List.of());
+            this(name, type, description, required, allowValues, example, sensitive, List.of(), List.of());
+        }
+
+        /** object 类型：有子字段，但没有数组元素结构（数组元素用 {@code items} 单独表达）。 */
+        public Param(String name, String type, String description, boolean required,
+                     List<String> allowValues, String example, boolean sensitive,
+                     List<Param> properties) {
+            this(name, type, description, required, allowValues, example, sensitive, properties, List.of());
         }
     }
 

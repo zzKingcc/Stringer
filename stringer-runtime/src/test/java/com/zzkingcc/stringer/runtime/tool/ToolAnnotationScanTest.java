@@ -68,6 +68,11 @@ class ToolAnnotationScanTest {
         public String setContact(Contact contact) {
             return "ok";
         }
+
+        @Tool(desc = "批量查询订单（演示 List<DTO> 的元素结构在本地也被保留）")
+        public String batch(@ToolParam(name = "orders", value = "订单列表") List<OrderQuery> orders) {
+            return "ok";
+        }
     }
 
     private static ToolDescriptor find(List<ToolRegistry.Registered> tools, String name) {
@@ -81,7 +86,7 @@ class ToolAnnotationScanTest {
     @Test
     void registersToolsFromNewAnnotation() {
         List<ToolRegistry.Registered> tools = AnnotatedToolScanner.scan(new DemoTools());
-        assertEquals(4, tools.size(), "@Tool 标注的方法都应被注册");
+        assertEquals(5, tools.size(), "@Tool 标注的方法都应被注册");
     }
 
     @Test
@@ -149,5 +154,18 @@ class ToolAnnotationScanTest {
         assertEquals(1, contact.properties().size());
         assertTrue(contact.properties().get(0).sensitive(),
                 "@ToolAdvanced 的名字要对得上 DTO 展开出的字段名");
+    }
+
+    @Test
+    void arrayOfDtoKeepsElementSchemaInLocalTree() {
+        ToolDescriptor batch = find(AnnotatedToolScanner.scan(new DemoTools()), "batch");
+        assertEquals(1, batch.params().size());
+
+        ToolDescriptor.Param orders = batch.params().get(0);
+        assertEquals("array", orders.type(), "List<DTO> 在本地也必须是数组");
+        assertEquals(1, orders.items().size(), "数组元素结构不能被丢掉（否则模型构造不出元素）");
+        ToolDescriptor.Param element = orders.items().get(0);
+        assertEquals("object", element.type(), "元素要展开成对象");
+        assertEquals(2, element.properties().size(), "元素要能展开出 DTO 子字段");
     }
 }

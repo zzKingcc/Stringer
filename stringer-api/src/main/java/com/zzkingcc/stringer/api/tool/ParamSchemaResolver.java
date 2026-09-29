@@ -111,6 +111,7 @@ public final class ParamSchemaResolver {
         String description = descriptionOf(annotation);
 
         List<ToolDescriptor.Param> children = List.of();
+        List<ToolDescriptor.Param> items = List.of();
         if ("object".equals(type)) {
             children = propertiesOf(raw, depth, visiting);
             if (children.isEmpty()) {
@@ -120,10 +121,37 @@ public final class ParamSchemaResolver {
                         ? "嵌套超过 " + MAX_DEPTH + " 层，未展开"
                         : "未展开出字段（可能是循环引用或字段全被跳过）") + "）";
             }
+        } else if ("array".equals(type)) {
+            // 数组元素结构：和 object 的子字段是同一类规则 —— 元素若是 DTO，也要展开，
+            // 否则模型在数组里只会看到"字符串"，构造不出元素。没有泛型实参（裸 Collection）则展不开。
+            Type elementType = elementTypeOf(generic, raw);
+            if (elementType != null && depth < MAX_DEPTH) {
+                items = List.of(resolveOne(null, elementType, null, false, depth + 1, visiting));
+            }
         }
 
         return new ToolDescriptor.Param(name, type, description, required,
-                List.copyOf(allowValues), "", false, children);
+                List.copyOf(allowValues), "", false, children, items);
+    }
+
+    /**
+     * 从参数泛型里取出"数组 / 集合的元素类型"。
+     *
+     * <p>{@code List<Foo>} / {@code Set<Foo>} 取第一个类型实参；{@code Foo[]} 取组件类型；
+     * 裸 {@code Collection}（无泛型）或纯数组之外的类型返回 {@code null} —— 元素结构展不开时，
+     * 调用方会把数组当成"元素未知"，由下游按字符串兜底。</p>
+     */
+    private static Type elementTypeOf(Type generic, Class<?> raw) {
+        if (generic instanceof ParameterizedType parameterized
+                && parameterized.getRawType() instanceof Class<?> rawClass
+                && Collection.class.isAssignableFrom(rawClass)
+                && parameterized.getActualTypeArguments().length > 0) {
+            return parameterized.getActualTypeArguments()[0];
+        }
+        if (raw != null && raw.isArray()) {
+            return raw.getComponentType();
+        }
+        return null;
     }
 
     /**
@@ -201,6 +229,11 @@ public final class ParamSchemaResolver {
             List<ToolDescriptor.Param> children = param.properties().isEmpty()
                     ? param.properties()
                     : applyOverrides(param.properties(), overrides);
+            // 数组元素结构里的字段同样要套 @ToolAdvanced（示例 / 白名单 / 敏感），否则
+            // DTO 一旦被放进数组，子字段上的治理信息就会凭空消失
+            List<ToolDescriptor.Param> items = param.items().isEmpty()
+                    ? param.items()
+                    : applyOverrides(param.items(), overrides);
 
             out.add(new ToolDescriptor.Param(
                     param.name(),
@@ -210,9 +243,74 @@ public final class ParamSchemaResolver {
                     gainedOptions ? allowValues : param.allowValues(),
                     example,
                     overrides.isSensitive(param.name()),
-                    children));
+                    children,
+                    items));
         }
         return out;
+    }
+
+    /**
+     * 把参数树渲染成"上报 JSON Schema"的 {@link Map} 形式（不依赖任何 JSON 库，纯 {@link Map}）。
+     *
+     * <p>工具实例侧用它生成要发给服务端的报文；服务端 {@code ToolParamSchema} 认的就是这套键
+     * （{@code type / description / example / enum / x-sensitive / properties / required / items}）。
+     * 两端共用这一份渲染，保证"工具实例上报的"与"服务端本地扫描的"是同一棵树、同一种格式 ——
+     * 同一段工具代码搬到另一侧，模型看到的 schema 一字不差。</p>
+     */
+    public static Map<String, Object> toWireSchema(List<ToolDescriptor.Param> params) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        List<String> required = new ArrayList<>();
+        for (ToolDescriptor.Param param : params) {
+            properties.put(param.name(), toWireNode(param));
+            if (param.required()) {
+                required.add(param.name());
+            }
+        }
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("type", "object");
+        root.put("properties", properties);
+        if (!required.isEmpty()) {
+            root.put("required", required.toArray(new String[0]));
+        }
+        return root;
+    }
+
+    /** 单个参数 → 上报 JSON 节点（递归保留 object 的 properties 与 array 的 items） */
+    public static Map<String, Object> toWireNode(ToolDescriptor.Param param) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        if (!param.allowValues().isEmpty()) {
+            // 白名单把类型抬成 enum（string + enum 取值），与 @ToolAdvanced.allowValues 的口径一致
+            node.put("type", "string");
+            node.put("enum", new ArrayList<>(param.allowValues()));
+        } else {
+            node.put("type", param.type());
+        }
+        node.put("description", param.description());
+        if (param.example() != null && !param.example().isBlank()) {
+            node.put("example", param.example());
+        }
+        if (param.sensitive()) {
+            // 服务端 ToolParamSchema 认这个键，脱敏清单必须跟着 schema 一起上报
+            node.put("x-sensitive", true);
+        }
+        if ("object".equals(param.type())) {
+            Map<String, Object> properties = new LinkedHashMap<>();
+            List<String> required = new ArrayList<>();
+            for (ToolDescriptor.Param child : param.properties()) {
+                properties.put(child.name(), toWireNode(child));
+                if (child.required()) {
+                    required.add(child.name());
+                }
+            }
+            node.put("properties", properties);
+            if (!required.isEmpty()) {
+                node.put("required", required.toArray(new String[0]));
+            }
+        } else if ("array".equals(param.type()) && !param.items().isEmpty()) {
+            // 数组元素结构：和 properties 一样不能退化成字符串
+            node.put("items", toWireNode(param.items().get(0)));
+        }
+        return node;
     }
 
     private static String fallbackParamName(Parameter parameter, int index) {
@@ -297,6 +395,7 @@ public final class ParamSchemaResolver {
                 missing++;
             }
             missing += countMissingDescription(param.properties());
+            missing += countMissingDescription(param.items());
         }
         return missing;
     }

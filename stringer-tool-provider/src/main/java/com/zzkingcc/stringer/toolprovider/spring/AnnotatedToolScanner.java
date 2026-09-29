@@ -6,6 +6,7 @@ import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.annotation.ToolDomains;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
 import com.zzkingcc.stringer.api.tool.ParamSchemaResolver;
+import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.toolprovider.ToolHandler;
 import com.zzkingcc.stringer.toolprovider.ToolRegistrar;
 import com.zzkingcc.stringer.toolprovider.ToolSpec;
@@ -17,26 +18,18 @@ import org.springframework.core.ParameterNameDiscoverer;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
-import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.time.temporal.Temporal;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 
 /**
  * 注解式工具扫描器 —— 在客户进程里把"方法"直接变成"工具"
@@ -67,9 +60,6 @@ import java.util.UUID;
 public final class AnnotatedToolScanner {
 
     private static final Logger log = LoggerFactory.getLogger(AnnotatedToolScanner.class);
-
-    /** 嵌套对象展开的最大层数（防循环引用与巨型 schema） */
-    private static final int MAX_DEPTH = 4;
 
     private final ListableBeanFactory beanFactory;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -184,13 +174,19 @@ public final class AnnotatedToolScanner {
             throw new IllegalStateException("@Tool.desc 必填（它是模型判断何时调用的唯一依据）：" + where);
         }
 
+        // 参数结构一律交给 ParamSchemaResolver —— 与本地 Bean 工具共用同一份实现，
+        // 保证"同一段工具代码搬到另一侧得到同一个 schema"（这正是 ⑧ 要消除的不一致）。
+        // 顶层参数名以绑定侧（Spring 参数名发现）为准：无 -parameters 时 resolver 只能用 arg0 兜底，
+        // 而 handler 靠 Spring 拿到真实名；名字不一致模型就调不对参，所以这里按 binding 重新落键。
+        List<ToolDescriptor.Param> resolved = ParamSchemaResolver.resolve(method);
+        List<ParamMeta> meta = binding.params();
         Map<String, Object> properties = new LinkedHashMap<>();
         List<String> required = new ArrayList<>();
-        for (ParamMeta param : binding.params()) {
-            properties.put(param.name(), schema(param.type(), param.annotation(), 0,
-                    param.name(), binding.overrides()));
+        for (int i = 0; i < resolved.size() && i < meta.size(); i++) {
+            ToolDescriptor.Param param = resolved.get(i);
+            properties.put(meta.get(i).name(), ParamSchemaResolver.toWireNode(param));
             if (param.required()) {
-                required.add(param.name());
+                required.add(meta.get(i).name());
             }
         }
 
@@ -371,139 +367,6 @@ public final class AnnotatedToolScanner {
         } catch (Exception e) {
             return String.valueOf(result);
         }
-    }
-
-    // ==================== JSON Schema 推断 ====================
-
-    /**
-     * 由方法签名 / 字段类型推断 JSON Schema。
-     *
-     * <p>语义分两处取：{@code @ToolParam} 给说明（唯一来源），{@code @ToolAdvanced} 给
-     * 示例 / 枚举白名单 / 敏感 —— 后者的解析与说明拼装<b>整体复用服务端同一份实现</b>
-     * （{@link ParamSchemaResolver.ParamOverrides}），保证同一段工具代码在两侧得到同一个 schema。</p>
-     */
-    private Map<String, Object> schema(Type type, ToolParam annotation, int depth,
-                                       String name, ParamSchemaResolver.ParamOverrides overrides) {
-        Map<String, Object> node = new LinkedHashMap<>();
-
-        if (type instanceof ParameterizedType parameterized) {
-            Type raw = parameterized.getRawType();
-            Type[] arguments = parameterized.getActualTypeArguments();
-            if (raw instanceof Class<?> rawClass && Collection.class.isAssignableFrom(rawClass)) {
-                node.put("type", "array");
-                node.put("items", arguments.length > 0
-                        ? schema(arguments[0], null, depth + 1, null, overrides)
-                        : Map.of("type", "string"));
-            } else if (raw instanceof Class<?> rawClass) {
-                node.put("type", "object");
-                if (depth < MAX_DEPTH && !isSimple(rawClass)) {
-                    node.putAll(objectOf(rawClass, depth, overrides));
-                }
-            }
-        } else if (type instanceof Class<?> c) {
-            String jsonType = jsonTypeOf(c);
-            if (jsonType != null) {
-                node.put("type", jsonType);
-            } else if (c.isEnum()) {
-                node.put("type", "string");
-                node.put("enum", enumValues(c));
-            } else if (c.isArray()) {
-                node.put("type", "array");
-                node.put("items", schema(c.getComponentType(), null, depth + 1, null, overrides));
-            } else if (Collection.class.isAssignableFrom(c)) {
-                node.put("type", "array");
-                node.put("items", Map.of("type", "string"));
-            } else {
-                node.put("type", "object");
-                if (depth < MAX_DEPTH) {
-                    node.putAll(objectOf(c, depth, overrides));
-                }
-            }
-        } else {
-            node.put("type", "object");
-        }
-
-        node.put("description", overrides.describe(name, annotation == null ? null : annotation.value()));
-
-        String example = overrides.exampleOf(name);
-        if (!example.isBlank()) {
-            node.put("example", example);
-        }
-        List<String> allowValues = overrides.allowValuesOf(name);
-        if (!allowValues.isEmpty()) {
-            node.put("type", "string");
-            node.put("enum", allowValues);
-        }
-        if (overrides.isSensitive(name)) {
-            // 服务端 ToolParamSchema 认这个键，脱敏清单必须跟着 schema 一起上报
-            node.put("x-sensitive", true);
-        }
-        return node;
-    }
-
-    /** 展开一个 POJO 的字段（含父类），递归受 {@link #MAX_DEPTH} 限制 */
-    private Map<String, Object> objectOf(Class<?> type, int depth, ParamSchemaResolver.ParamOverrides overrides) {
-        Map<String, Object> properties = new LinkedHashMap<>();
-        List<String> required = new ArrayList<>();
-
-        for (Class<?> current = type; current != null && current != Object.class; current = current.getSuperclass()) {
-            for (Field field : current.getDeclaredFields()) {
-                int modifiers = field.getModifiers();
-                if (field.isSynthetic() || Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers)) {
-                    continue;
-                }
-                ToolParam annotation = field.getAnnotation(ToolParam.class);
-                String name = annotation != null && !annotation.name().isBlank()
-                        ? annotation.name().trim()
-                        : field.getName();
-                properties.put(name, schema(field.getGenericType(), annotation, depth + 1, name, overrides));
-                // 嵌套字段只有"显式标注必填且是原始类型"才进 required：默认值策略交给业务方法，schema 不该越权
-                if (annotation != null && annotation.required() && field.getType().isPrimitive()) {
-                    required.add(name);
-                }
-            }
-        }
-
-        Map<String, Object> node = new LinkedHashMap<>();
-        node.put("properties", properties);
-        if (!required.isEmpty()) {
-            node.put("required", required);
-        }
-        return node;
-    }
-
-    private static boolean isSimple(Class<?> type) {
-        return jsonTypeOf(type) != null || type.isEnum();
-    }
-
-    private static String jsonTypeOf(Class<?> type) {
-        if (type == String.class || type == Character.class || type == char.class
-                || CharSequence.class.isAssignableFrom(type)
-                || type == UUID.class || Temporal.class.isAssignableFrom(type) || Date.class.isAssignableFrom(type)) {
-            return "string";
-        }
-        if (type == boolean.class || type == Boolean.class) {
-            return "boolean";
-        }
-        if (type == int.class || type == Integer.class || type == long.class || type == Long.class
-                || type == short.class || type == Short.class || type == byte.class || type == Byte.class
-                || type == BigInteger.class) {
-            return "integer";
-        }
-        if (type == float.class || type == Float.class || type == double.class || type == Double.class
-                || type == BigDecimal.class || Number.class.isAssignableFrom(type)) {
-            return "number";
-        }
-        return null;
-    }
-
-    private static List<String> enumValues(Class<?> type) {
-        Object[] constants = type.getEnumConstants();
-        List<String> values = new ArrayList<>(constants.length);
-        for (Object constant : constants) {
-            values.add(constant.toString());
-        }
-        return values;
     }
 
     // ==================== 内部数据 ====================

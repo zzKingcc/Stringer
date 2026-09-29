@@ -171,7 +171,7 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 
 **审批**：新注解只保留 `NONE` / `ALWAYS` 两态——`CONDITIONAL`（条件式）与 `ONCE_PER_SESSION`（会话内免确认）未落地，不再暴露，避免"摆出来却无差别"。
 
-**参数 schema 由反射推导**（`AnnotatedToolScanner#schema`，面试可讲的实现细节）：
+**参数 schema 由 `ParamSchemaResolver` 统一推导**（本地 Bean 与工具实例<b>共用同一份实现</b>：工具实例侧再经 `toWireSchema` 把同一棵树渲染成上报 JSON，服务端 `ToolParamSchema` 认的就是这套键）：
 
 - `String`/`UUID`/`Temporal`/`Date` → `string`
 - `int/long/short/byte/BigInteger` → `integer`
@@ -179,9 +179,9 @@ SSE 事件流：TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / 
 - `boolean` → `boolean`
 - `enum` → `string` + `enum` 枚举值列表
 - `T[]` / `Collection<T>` → `array` + `items`
-- 其他类 → `object` + 递归展开 `properties`，**最大深度 4 层**（`MAX_DEPTH`，防循环引用与巨型 schema）
+- 其他类 → `object` + 递归展开 `properties`，**最大深度 5 层**（`ParamSchemaResolver.MAX_DEPTH`，防循环引用与巨型 schema）
 - POJO 展开含父类字段，跳过 `synthetic` / `static` / `transient`
-- 嵌套字段只有"显式标注 required 且是原始类型"才进 `required`（默认值策略交给业务方法，schema 不越权）
+- 嵌套字段的 `required` 直接取 `@ToolParam.required`（缺省 `false`），不替业务方法做默认值假设
 
 **参数名解析失败直接启动期报错**：优先 `@ToolParam.name`，其次编译期元数据（`DefaultParameterNameDiscoverer`）。取不到就抛异常并提示"补 `@ToolParam(name=...)` 或给编译器加 `-parameters`"。理由：用 `arg0` 注册出去只会让模型拿错 key，这种错必须留在启动期。
 

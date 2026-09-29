@@ -192,10 +192,14 @@ public final class AnnotatedToolScanner {
                     .description(description)
                     .enumValues(param.allowValues())
                     .build();
-            case "array" -> JsonArraySchema.builder()
-                    .description(description)
-                    .items(JsonStringSchema.builder().build())
-                    .build();
+            case "array" -> {
+                // 数组元素结构：本地工具与远端工具必须用同一套口径展开，否则同样是 List<DTO>，
+                // 本地给模型看"数组套字符串"、远端给"数组套对象" —— 同一段工具代码两种形态不一致
+                JsonSchemaElement item = param.items().isEmpty()
+                        ? JsonStringSchema.builder().build()
+                        : toSchemaElement(param.items().get(0));
+                yield JsonArraySchema.builder().description(description).items(item).build();
+            }
             default -> JsonStringSchema.builder().description(description).build();
         };
     }

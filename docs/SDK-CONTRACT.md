@@ -47,7 +47,7 @@
 
 > **两个载体、一个优先级**：形参注解 **>** 字段注解（就近覆盖）。
 > 1~2 个简单参数用形参；3+ 参数、被多个工具复用、或有嵌套结构 → 用 `record` DTO 的字段注解（只写一次）。
-> ✅ 两个载体**都已实现**：服务端本地 Bean 走 `ParamSchemaResolver`（record 组件 + 普通类字段），工具实例侧走自己的 `schema()`；DTO 也会递归展开成嵌套 `object`。
+> ✅ 两个载体**都已实现且完全统一**：服务端本地 Bean 与工具实例侧<b>共用同一份 `ParamSchemaResolver` 产出参数树</b>，工具实例侧再经 `toWireSchema` 把同一棵树渲染成上报 JSON；DTO 递归展开成 `object`，数组元素（`List<DTO>`）也递归展开成 `items`，两侧对同一段工具代码给出完全一致的 schema。
 
 ---
 
@@ -200,5 +200,5 @@
 | 配置项扁平化（`server` URL 等） | 下一步 |
 | 启动自检清单（其余项） | 提示词↔工具可见性、知识库按域均已落地（§9.1）；待补：skill 声明的工具是否存在、标了域却无人使用的文档等 |
 | skill（能力包 = 指令 + 工具） | 已确认**暂缓**，形态待 1.0 之后再定（初定 `@Skill` 注解，域声明复用现有三规则） |
-| **两端 schema 生成的完全统一** | ⚠️ 仍在做：两端已共用同一套注解、同一份 `ParamOverrides`（示例/白名单/敏感）与同一段说明文本，但**参数树的产出仍是两套代码**（服务端：`ParamSchemaResolver` → langchain4j Schema；工具实例：自有 `schema()` → 上报 JSON）。要彻底统一需重写工具实例侧的 schema 生成，属独立改动项 |
+| **两端 schema 生成的完全统一** | ✅ 已完成：工具实例侧弃用自有 `schema()`，改为复用 `ParamSchemaResolver` 的 `Param` 树并经 `toWireSchema` 渲染上报 JSON；`Param` 新增 `items` 字段承载数组元素结构，服务端本地扫描（`toSchemaElement`）与远端解析（`ToolParamSchema`）均按 `items` 展开，本地 / 远端 / 上报三者口径一致。新增 `SchemaUnificationTest` 做"对拍"：上报报文被 `ToolParamSchema` 解析后须逐棵等于 `resolve` 算出的参数树 |
 | `sensitive` 的覆盖面 | 目前只掩码工具调用事件与审批 payload 两处；**日志与工具自身回显**未覆盖（工具实例侧不应把敏感值写进返回值/异常） |

@@ -25,7 +25,7 @@
 | 定位 | Java 生态的 AI Agent 运行时中间件（服务端 + 薄 starter + 工具实例 SDK） |
 | 交付形态 | 单实例 fat jar，`stringer-server` 承载全部重逻辑，ES / Redis / 模型服务外置 |
 | 已做好的抽象 | ① 文档处理策略（工厂 + 模板方法，按扩展名分派）；② 模型 / 基础设施 / 提示词的「管控台落盘优先 + yaml 回落」热替换（`LlmModelHolder`、`InfraSettingsHolder`、`Swappable*`）；③ 原子落盘 `AtomicFiles`；④ 检索双路融合 `CompositeRetriever`；⑤ 配置与密钥不入镜像 |
-| 已声明的空壳 | `api.spi` 下的 `ToolProvider` / `ContentRetriever` / `ChatMemoryStore` / `CheckpointSaver` / `ToolExecutionInterceptor` 五个接口**只声明未落地**——实现类走的是 langchain4j 接口，SPI 实际未被 import |
+| 已声明的空壳 | ~~`api.spi` 下的五个接口~~ **已于 2026-09-29 作为死代码删除**（零 import、零实现；真实检索/记忆/检查点走 langchain4j / langgraph4j 同名接口，真正的工具注册扩展是 `api.tool.StringerToolProvider`） |
 | 硬约束 | 进程内状态 ×3（`ToolRegistry`、`InstanceRegistry`、`KnowledgeBaseService` 的 `Semaphore(1)`）+ 进程内判死定时器（`InstanceLifecycle`） |
 
 ---
@@ -54,7 +54,7 @@
 | --- | --- | --- | --- |
 | P0-1 | 权威状态在进程内 | `ToolRegistry.tools` / `byInstance`、`InstanceRegistry.sessions`、`KnowledgeBaseService` 的 `Semaphore(1)` + 判死 `InstanceLifecycle` 定时器 | 无法多实例、无 HA、滚动升级即断服、重启丢在线表 |
 | P0-2 | 租户维度不贯通 | 记忆 key `stringer:chat:memory:<sessionId>`、检查点 `stringer:graph:checkpoint:<threadId>`、ES 索引无 tenant 字段 | 多租户下会话串号、检索越权、无法按租户计量与限流 |
-| P0-3 | 扩展点空壳 | `api.spi` 五个接口零实现零引用；ES / Redis 单一绑死（`embedding`、`storage` 包为空占位） | 换存储、换检索、换记忆必须改源码；脱离 Spring 不可用 |
+| P0-3 | 扩展点空壳 | ~~`api.spi` 五个接口~~ **已删除**（零实现零引用）；ES / Redis 单一绑死（`embedding`、`storage` 包为空占位） | 换存储、换检索、换记忆必须改源码；脱离 Spring 不可用 |
 | P0-4 | 契约不可演进 | `ErrorCode` 私有构造的封闭 enum，`of(int)` 未命中返回 null；事件 payload 是裸 JSON String；HTTP 路径无版本 | 任何扩展都要破坏兼容；第三方无法自定义错误码与事件 |
 
 ### P1 · 能力级

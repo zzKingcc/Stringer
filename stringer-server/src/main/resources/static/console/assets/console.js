@@ -89,7 +89,7 @@
         knowledge: '<ellipse cx="12" cy="5" rx="9" ry="3"/>'
             + '<path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>',
         /* 提示词设定：对话气泡 + 文本行（提示词是"写给模型的文字"） */
-        profiles: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'
+        prompts: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'
             + '<path d="M8 9h8M8 12.5h5"/>',
         /* 域：三层堆叠 = 域的叠加空间（域是平行的命名空间，用"叠"而不是"箱"） */
         domains: '<path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/>',
@@ -104,7 +104,7 @@
         { key: 'infra', label: '存储配置', href: 'infra.html', icon: 'infra' },
         { key: 'domains', label: '域空间', href: 'domains.html', icon: 'domains' },
         { key: 'instances', label: '熔断工具调用', href: 'instances.html', icon: 'instances' },
-        { key: 'profiles', label: '提示词设定', href: 'profiles.html', icon: 'profiles' },
+        { key: 'prompts', label: '提示词设定', href: 'prompts.html', icon: 'prompts' },
         { key: 'knowledge', label: '知识库', href: 'knowledge.html', icon: 'knowledge' },
         { key: 'account', label: '账号', href: 'account.html', icon: 'account' }
     ];

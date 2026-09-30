@@ -108,14 +108,14 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 | `password` | — | 无密码模式可空 |
 | `database` | `0` | 库号。默认 0（集群/云托管常只给 0 号库）。隔离靠 key 前缀 `stringer:`，不靠库号。**换库号＝换数据源，历史会话不迁移** |
 
-### 2.5 域提示词 `profiles.json`（管控台「提示词设定」页）
+### 2.5 域提示词 `prompts.json`（管控台「提示词设定」页）
 
 提示词＝**公共基线 + 域差异**，与工具的域过滤一一对应。
 
 ```json
 {
   "base": "你是一个中文智能助手。回答精炼、有条理……",
-  "profiles": {
+  "prompts": {
     "customer": "你是客服视角，只处理订单与售后……",
     "admin":    "你是管理视角，可看经营数据……"
   }
@@ -125,7 +125,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 | 字段 | 作用 |
 |---|---|
 | `base` | 所有域共享（回答风格、格式、安全规则）。可留空 |
-| `profiles` | 域 → 差异片段。键名**必须与工具注解 `@Tool(domains = {...})` 里声明的域名一致** |
+| `prompts` | 域 → 差异片段。键名**必须与工具注解 `@Tool(domains = {...})` 里声明的域名一致** |
 
 **编写纪律（四条）**
 
@@ -155,7 +155,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 
 | 配置键 | 默认 | 作用 |
 |---|---|---|
-| `stringer.ai.prompt.base` / `stringer.ai.prompt.profiles` | 空 | 提示词的 yaml 兜底（管控台优先级更高） |
+| `stringer.ai.prompt.base` / `stringer.ai.prompt.prompts` | 空 | 提示词的 yaml 兜底（管控台优先级更高） |
 | `stringer.memory.max-messages` | `100` | 会话记忆窗口（消息数） |
 | `stringer.memory.max-tokens` | `30000` | 会话记忆窗口（token 数） |
 | `stringer.memory.ttl` | `72h` | 记忆过期；比 `checkpoint-ttl` 长一档 |

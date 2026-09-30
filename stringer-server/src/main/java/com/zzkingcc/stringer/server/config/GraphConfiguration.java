@@ -7,8 +7,8 @@ import com.zzkingcc.stringer.runtime.orchestration.AgentOrchestrationService;
 import com.zzkingcc.stringer.runtime.prompt.SystemPromptResolver;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.infrastructure.redis.checkpoint.RedisCheckpointSaver;
-import com.zzkingcc.stringer.server.prompt.ProfileSystemPromptResolver;
-import com.zzkingcc.stringer.server.settings.ProfileSettingsStore;
+import com.zzkingcc.stringer.server.prompt.DomainSystemPromptResolver;
+import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -102,8 +102,8 @@ public class GraphConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(SystemPromptResolver.class)
-    public SystemPromptResolver systemPromptResolver(ProfileSettingsStore profileSettingsStore,
+    public SystemPromptResolver systemPromptResolver(DomainSettingsStore domainSettingsStore,
                                                      PromptProperties promptProperties) {
-        return new ProfileSystemPromptResolver(profileSettingsStore, promptProperties);
+        return new DomainSystemPromptResolver(domainSettingsStore, promptProperties);
     }
 }

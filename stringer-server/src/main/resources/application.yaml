@@ -16,7 +16,7 @@ spring:
 
 stringer:
   # 受保护资源的落盘目录
-  # accounts.json / llm-settings.json / infra-settings.json / profiles.json 都落在这里。
+  # accounts.json / llm-settings.json / infra-settings.json / prompts.json 都落在这里。
   # 默认取服务器上的绝对路径：部署到服务器 / 容器就能直接用，不随"从哪个目录启动"漂移；
   # 目录不存在会由写入方自动创建（首启落盘种子账号时）。
   # 本机开发请用 STRINGER_SETTINGS_PATH 覆盖，否则会往本盘根目录下的 var/lib/... 写。
@@ -24,7 +24,7 @@ stringer:
     path: ${STRINGER_SETTINGS_PATH:/var/lib/stringer/config}
   ai:
     prompt:
-      # 这里只作示例 / 兜底；正式内容请在管控台「提示词设定」页填写（config/profiles.json 优先级更高）。
+      # 这里只作示例 / 兜底；正式内容请在管控台「提示词设定」页填写（config/prompts.json 优先级更高）。
       # 留空是合法状态：没有提示词只是少一层引导，工具可见性与域过滤照常生效。
       base: |
         你是一个中文智能助手。
@@ -42,7 +42,7 @@ stringer:
           9. 本场景没有知识检索能力时：不要臆造检索结果，按第 7 条处理。
           10. 回答涉及具体承诺时必须标注信息来源（文件名 / 章节）；无法标注来源的一律视为不确定。
       # 域差异：键为域，必须与工具注解 @Tool(domains = {...}) 里声明的域名一致。
-      profiles: {}
+      prompts: {}
 
   # Redis 连接提供默认配置
   redis:

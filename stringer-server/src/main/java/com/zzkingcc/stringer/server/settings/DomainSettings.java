@@ -4,16 +4,16 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 域提示词设置（落盘 {@code config/profiles.json}）
+ * 域提示词设置（落盘 {@code config/prompts.json}）
  * @author zzkingcc
  */
-public class ProfileSettings {
+public class DomainSettings {
 
     /** 公共基线：所有域共享 */
     private String base = "";
 
     /** 域 → 该域的差异提示词 */
-    private Map<String, String> profiles = new LinkedHashMap<>();
+    private Map<String, String> prompts = new LinkedHashMap<>();
 
     public String getBase() {
         return base;
@@ -23,16 +23,16 @@ public class ProfileSettings {
         this.base = base == null ? "" : base;
     }
 
-    public Map<String, String> getProfiles() {
-        return profiles;
+    public Map<String, String> getPrompts() {
+        return prompts;
     }
 
-    public void setProfiles(Map<String, String> profiles) {
-        this.profiles = profiles == null ? new LinkedHashMap<>() : new LinkedHashMap<>(profiles);
+    public void setPrompts(Map<String, String> prompts) {
+        this.prompts = prompts == null ? new LinkedHashMap<>() : new LinkedHashMap<>(prompts);
     }
 
     /** 指定域的差异片段；未配置返回 {@code null} */
-    public String profilePrompt(String profile) {
-        return profiles.get(profile);
+    public String domainPrompt(String domainId) {
+        return prompts.get(domainId);
     }
 }

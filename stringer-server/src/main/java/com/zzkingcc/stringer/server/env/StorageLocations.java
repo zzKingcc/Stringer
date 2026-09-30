@@ -33,7 +33,7 @@ public class StorageLocations {
         ensureDirectory(logDir, "日志");
     }
 
-    /** 受保护资源目录：accounts / llm-settings / infra-settings / profiles 都落在这里 */
+    /** 受保护资源目录：accounts / llm-settings / infra-settings / prompts 都落在这里 */
     public Path settingsDir() {
         return settingsDir;
     }

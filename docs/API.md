@@ -126,7 +126,7 @@
       "description": "查询订单",
       "category": "default",
       "version": "1.0.0",
-      "profiles": ["after-sale"],
+      "prompts": ["after-sale"],
       "sideEffect": "READ",
       "idempotent": true,
       "toModel": true,
@@ -207,10 +207,10 @@
 | --- | --- | --- | --- |
 | GET | `/admin/tools` | — | 工具描述符列表 `ToolDescriptor` |
 | GET | `/admin/domains` | — | `stats{domainCount, toolCount, globalToolCount, approvalToolCount, missingPromptCount}`、`domains`、`globalTools`、`orphanPrompts`、`settingsFile` |
-| GET | `/admin/profiles` | — | `base`、`profiles`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
-| POST | `/admin/profiles` | body `ProfileSettings`（可空） | `success`、`message`、`settingsFile` |
+| GET | `/admin/prompts` | — | `base`、`prompts`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
+| POST | `/admin/prompts` | body `DomainSettings`（可空） | `success`、`message`、`settingsFile` |
 
-`domains` 与 `profiles` 是同一事实的两个视图。域有**三个来源**：**内置**（兜底域 `default`，启动即存在、不可删除）、**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具派生**（由工具的域声明产生，生命周期归工具）。因此「先建域、再让应用绑定它启动」是成立的；`10004` 只在「既非内置、又非人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable`。
+`domains` 与 `prompts` 是同一事实的两个视图。域有**三个来源**：**内置**（兜底域 `default`，启动即存在、不可删除）、**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具派生**（由工具的域声明产生，生命周期归工具）。因此「先建域、再让应用绑定它启动」是成立的；`10004` 只在「既非内置、又非人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable`。
 
 ### 4.4 在线实例
 

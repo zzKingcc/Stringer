@@ -204,8 +204,8 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 组成 | `公共基线 + 域差异` 拼接为一条 `SystemMessage` |
-| 来源与优先级 | `config/profiles.json`（高） > yaml（`stringer.ai.prompt.base` 与 `stringer.ai.prompt.profiles.*`，低） |
-| 拼接标记 | 服务端在域差异前后加 `PROFILE_BEGIN` / `PROFILE_END` 边界标记（标记文案由接口下发，前端不重复实现） |
+| 来源与优先级 | `config/prompts.json`（高） > yaml（`stringer.ai.prompt.base` 与 `stringer.ai.prompt.prompts.*`，低） |
+| 拼接标记 | 服务端在域差异前后加 `DOMAIN_DIFF_BEGIN` / `DOMAIN_DIFF_END` 边界标记（标记文案由接口下发，前端不重复实现） |
 | 域差异缺省 | 允许为空，此时只用基线并记一条 WARN |
 | 生效时机 | 执行单元内冻结；单元之间取最新值；`resume` 沿用中断时注入的那份 |
 | 替换语义 | 整体替换，不支持追加 |
@@ -397,7 +397,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `synchronized(this)` | `ClientCredential`、`ToolInstanceClient`、`AccountStore`、`SwappableRedisConnectionFactory` | 换凭证、账号读写、连接工厂热替换 |
 | `synchronized(writeLock)` | `AuthService` | 初始化 / 登录写盘 / 改密码的整段"读-改-写" |
 | `Semaphore(1)` | `KnowledgeBaseService` | 知识库导入串行与重名校验 |
-| `ConcurrentHashMap` + `compute` | `ToolRegistry`、`CancellationRegistry`、`ProfileSystemPromptResolver` | 条目原子替换、停止标志、告警去重 |
+| `ConcurrentHashMap` + `compute` | `ToolRegistry`、`CancellationRegistry`、`DomainSystemPromptResolver` | 条目原子替换、停止标志、告警去重 |
 
 必须串行的边界：同一 `sessionId` 的对话；知识库导入；同一实例的注册表更新；账号与配置的写盘。
 
@@ -416,7 +416,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.logging.path` | String | `/var/log/stringer` |
 | `stringer.logging.level` | String | `INFO` |
 | `stringer.ai.prompt.base` | String | yaml 内定义 |
-| `stringer.ai.prompt.profiles` | Map | `{}` |
+| `stringer.ai.prompt.prompts` | Map | `{}` |
 | `stringer.redis.host` | String | null |
 | `stringer.redis.port` | int | 6379 |
 | `stringer.redis.password` | String | null |
@@ -470,7 +470,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `config/llm-settings.json` | `LlmSettingsStore` | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions` |
 | `config/models.json` | `ModelProfileStore` | `defaultAlias`、`domainBindings`（域→别名）、`chatProfiles`（别名→ `ProfileData{baseUrl, apiKey, modelName, temperature, maxTokens, capabilities, fallbacks}`） |
 | `config/infra-settings.json` | `InfraSettingsStore` | `es{host,port,scheme,username,password,connectTimeout,socketTimeout}`、`redis{host,port,password,database}` |
-| `config/profiles.json` | `ProfileSettingsStore` | `base`、`profiles`（域名 → 提示词） |
+| `config/prompts.json` | `DomainSettingsStore` | `base`、`prompts`（域名 → 提示词） |
 | `config/domains.json` | `DomainStore` | `manualDomains`（人工创建的域标识清单） |
 
 - 目录由 `stringer.settings.path` 指定，默认 `/var/lib/stringer/config`（服务器绝对路径）；容器化把该目录挂成卷。

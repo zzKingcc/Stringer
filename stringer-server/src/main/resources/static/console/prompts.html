@@ -130,13 +130,13 @@
     var COLORS = { primary: '#2563eb', muted: '#6b7280', red: '#dc2626', amber: '#d97706' };
 
     /* 编辑中的值（保存时整对象提交） vs 服务端基线（用于脏标记与"清空"） */
-    var model = { base: '', profiles: {} };
-    var baseline = { base: '', profiles: {} };
+    var model = { base: '', prompts: {} };
+    var baseline = { base: '', prompts: {} };
     var domains = [];
     var boundary = { begin: '', end: '' };
     var currentDomain = null;
 
-    function snapshot(o) { return JSON.stringify({ base: o.base || '', profiles: o.profiles || {} }); }
+    function snapshot(o) { return JSON.stringify({ base: o.base || '', prompts: o.prompts || {} }); }
 
     function isDirty() { return snapshot(model) !== snapshot(baseline); }
 
@@ -147,12 +147,12 @@
     function counts() {
         document.getElementById('baseLen').textContent = (model.base || '').trim().length;
         document.getElementById('domainLen').textContent =
-            currentDomain ? (model.profiles[currentDomain] || '').trim().length : 0;
+            currentDomain ? (model.prompts[currentDomain] || '').trim().length : 0;
     }
 
     function compose(domain) {
         var base = (model.base || '').trim();
-        var diff = (model.profiles[domain] || '').trim();
+        var diff = (model.prompts[domain] || '').trim();
         if (!base) { return ''; }
         if (!diff) { return base; }
         return base + boundary.begin + diff + boundary.end;
@@ -182,7 +182,7 @@
         document.getElementById('edTools').textContent = d
             ? ('可见工具 ' + d.tools.length + ' 个，来自 ' + d.providerCount + ' 个提供者')
             : '';
-        document.getElementById('domainText').value = model.profiles[domain] || '';
+        document.getElementById('domainText').value = model.prompts[domain] || '';
         counts();
         renderPreview();
         document.getElementById('editorCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -197,7 +197,7 @@
             return;
         }
         tbody.innerHTML = domains.map(function (d) {
-            var val = (model.profiles[d.name] || '').trim();
+            var val = (model.prompts[d.name] || '').trim();
             var status = val
                 ? '<span class="tag read">已配置</span>'
                 : '<span class="tag write">缺提示词</span>';
@@ -230,14 +230,14 @@
     }
 
     function load() {
-        Console.request('/admin/profiles').then(function (r) {
+        Console.request('/admin/prompts').then(function (r) {
             baseline = {
                 base: r.base || '',
-                profiles: Object.assign({}, r.profiles || {})
+                prompts: Object.assign({}, r.prompts || {})
             };
             model = {
                 base: baseline.base,
-                profiles: Object.assign({}, baseline.profiles)
+                prompts: Object.assign({}, baseline.prompts)
             };
             domains = r.domains || [];
             boundary = r.previewBoundary || { begin: '', end: '' };
@@ -274,7 +274,7 @@
 
     document.getElementById('domainText').addEventListener('input', function (e) {
         if (!currentDomain) { return; }
-        model.profiles[currentDomain] = e.target.value;
+        model.prompts[currentDomain] = e.target.value;
         counts();
         renderPreview();
         renderDomains();
@@ -283,7 +283,7 @@
 
     document.getElementById('clearBtn').addEventListener('click', function () {
         /* 清空 = 把编辑区归零，之后点「保存并生效」才会真正回落 yaml；不是"撤销" */
-        model = { base: '', profiles: {} };
+        model = { base: '', prompts: {} };
         document.getElementById('domainText').value = '';
         renderAll();
     });
@@ -298,8 +298,8 @@
         el.textContent = '正在保存…';
         el.className = 'result show ok';
 
-        var payload = { base: model.base, profiles: model.profiles };
-        Console.jsonRequest('/admin/profiles', 'POST', payload).then(function (r) {
+        var payload = { base: model.base, prompts: model.prompts };
+        Console.jsonRequest('/admin/prompts', 'POST', payload).then(function (r) {
             if (!r.success) {
                 el.textContent = r.message || '保存失败';
                 el.className = 'result show err';
@@ -314,7 +314,7 @@
         });
     });
 
-    Console.renderSidebar('profiles');
+    Console.renderSidebar('prompts');
     Console.ready(load);
 </script>
 </body>

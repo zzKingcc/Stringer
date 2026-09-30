@@ -276,18 +276,18 @@
     <rect x="64" y="1512" width="336" height="232" rx="10" fill="#F1EFE8" stroke="#888780" stroke-width="1" stroke-dasharray="8 5"/>
     <text x="84" y="1538" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">4.1　注册：工具声明自己属于哪些域</text>
     <rect x="84" y="1560" width="296" height="44" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
-    <text x="232" y="1582" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">queryOrder　profiles = {customer}</text>
+    <text x="232" y="1582" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">queryOrder　prompts = {customer}</text>
     <rect x="84" y="1612" width="296" height="44" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
-    <text x="232" y="1634" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">refundOrder　profiles = {admin} · 需审批</text>
+    <text x="232" y="1634" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">refundOrder　prompts = {admin} · 需审批</text>
     <rect x="84" y="1664" width="296" height="44" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
-    <text x="232" y="1686" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">searchKb　profiles 留空 ＝ 只属于 default</text>
-    <text x="84" y="1724" dominant-baseline="central" font-size="11" fill="#5F5E5A">注册时 remember(profiles) 记入 declaredProfiles</text>
+    <text x="232" y="1686" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#0C447C">searchKb　prompts 留空 ＝ 只属于 default</text>
+    <text x="84" y="1724" dominant-baseline="central" font-size="11" fill="#5F5E5A">注册时 remember(prompts) 记入 declaredProfiles</text>
 
     <rect x="424" y="1512" width="336" height="232" rx="10" fill="#F1EFE8" stroke="#888780" stroke-width="1" stroke-dasharray="8 5"/>
     <text x="444" y="1538" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">4.2　派生：注册表里维护的域数据</text>
     <text x="444" y="1566" dominant-baseline="central" font-size="11" fill="#5F5E5A">declaredProfiles：一经声明永不移除</text>
     <text x="444" y="1590" dominant-baseline="central" font-size="11" fill="#5F5E5A">knownProfiles ＝ declaredProfiles ∪ 现存工具声明</text>
-    <text x="444" y="1614" dominant-baseline="central" font-size="11" fill="#5F5E5A">条目 descriptor.profiles 保留原始声明</text>
+    <text x="444" y="1614" dominant-baseline="central" font-size="11" fill="#5F5E5A">条目 descriptor.prompts 保留原始声明</text>
     <text x="444" y="1638" dominant-baseline="central" font-size="11" fill="#5F5E5A">域还绑定提示词：公共基线 + 域差异</text>
     <rect x="444" y="1660" width="296" height="52" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" stroke-dasharray="6 4"/>
     <text x="592" y="1680" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="500" fill="#0C447C">域 ＝ 工具集 + 提示词</text>
@@ -406,7 +406,7 @@
     <tr><td>停止回滚</td><td>提问前先拍快照，停止时整体 restore；无快照退化为删最后一条</td><td class="mono">restoreMemory</td></tr>
     <tr><td>三态隔离</td><td>记忆 / 检查点 / SSE 互不混用；异常中断主动清残留断点防悬空 AiMessage</td><td class="mono">releaseCheckpointQuietly</td></tr>
 
-    <tr><td class="grp" rowspan="2">提示词</td><td>组成</td><td>公共基线 + [PROFILE_BEGIN] 域差异 [PROFILE_END]，整体替换不支持追加</td><td class="mono">ProfileSystemPromptResolver</td></tr>
+    <tr><td class="grp" rowspan="2">提示词</td><td>组成</td><td>公共基线 + [DOMAIN_DIFF_BEGIN] 域差异 [DOMAIN_DIFF_END]，整体替换不支持追加</td><td class="mono">DomainSystemPromptResolver</td></tr>
     <tr><td>生效时机</td><td>执行单元内冻结，单元之间取最新；resume 沿用中断时注入的那份</td><td class="mono">DESIGN §7</td></tr>
 
     <tr><td class="grp" rowspan="4">知识检索</td><td>摄取</td><td>全局串行 + 信号量 + 等待上限 60s；失败回滚本次已写切片；同名不区分大小写需 replace</td><td class="mono">KnowledgeBaseService</td></tr>

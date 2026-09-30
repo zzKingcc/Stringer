@@ -11,8 +11,8 @@ public interface SystemPromptResolver {
     /**
      * 给出指定域的系统提示词。
      *
-     * @param profile 本轮所处的域；{@code null} 时只返回公共基线
+     * @param domainId 本轮所处的域；{@code null} 时只返回公共基线
      * @return 该域的提示词；为空表示不下发 SystemMessage
      */
-    String resolve(String profile);
+    String resolve(String domainId);
 }

@@ -56,7 +56,7 @@ class AtomicFilesTest {
     @DisplayName("写空内容是合法操作（管控台清空配置时会走到）")
     void writesEmptyContent() throws IOException {
         Path root = Files.createTempDirectory("stringer-atomic");
-        Path target = root.resolve("profiles.json");
+        Path target = root.resolve("prompts.json");
 
         AtomicFiles.write(target, new byte[0]);
 

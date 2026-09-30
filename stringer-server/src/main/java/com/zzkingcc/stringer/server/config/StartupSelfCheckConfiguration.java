@@ -2,7 +2,7 @@ package com.zzkingcc.stringer.server.config;
 
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.server.prompt.PromptToolConsistencyAudit;
-import com.zzkingcc.stringer.server.settings.ProfileSettingsStore;
+import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -32,9 +32,9 @@ public class StartupSelfCheckConfiguration {
      */
     @Bean
     public SmartInitializingSingleton stringerPromptToolConsistencyAudit(ToolRouter toolRouter,
-                                                                        ProfileSettingsStore profileSettingsStore,
+                                                                        DomainSettingsStore domainSettingsStore,
                                                                         PromptProperties promptProperties) {
         log.debug("[启动自检] 已注册：提示词 ↔ 工具可见性一致性检查");
-        return () -> new PromptToolConsistencyAudit(toolRouter, profileSettingsStore, promptProperties).audit();
+        return () -> new PromptToolConsistencyAudit(toolRouter, domainSettingsStore, promptProperties).audit();
     }
 }

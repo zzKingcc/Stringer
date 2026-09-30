@@ -3,8 +3,8 @@ package com.zzkingcc.stringer.server.prompt;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.server.config.PromptProperties;
-import com.zzkingcc.stringer.server.settings.ProfileSettings;
-import com.zzkingcc.stringer.server.settings.ProfileSettingsStore;
+import com.zzkingcc.stringer.server.settings.DomainSettings;
+import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,7 +19,7 @@ import java.util.TreeSet;
  * 提示词 ↔ 工具可见性 一致性自检（启动期跑，<b>只提醒、不阻断</b>）。
  *
  * <p>要挡的是什么：域同时绑定【工具集 + 系统提示词】，而两者分处两个地方维护
- * （工具声明在 {@code @Tool}，提示词在管控台 {@code profiles.json} / yaml），
+ * （工具声明在 {@code @Tool}，提示词在管控台 {@code prompts.json} / yaml），
  * 于是很容易写出"提示词里点名了某个工具、但它在当前域不可见"。
  * 后果是模型被告知有能力却调不到，要么反复失败、要么拿近义工具硬凑。
  * 这类问题<b>不抛异常、不进错误日志、HTTP 依旧 200</b>，只能靠人工比对发现 ——
@@ -39,16 +39,16 @@ public class PromptToolConsistencyAudit {
     private static final int MAX_DETAILS = 10;
 
     private final ToolRouter toolRouter;
-    private final ProfileSettingsStore settingsStore;
-    private final ProfileSystemPromptResolver resolver;
+    private final DomainSettingsStore settingsStore;
+    private final DomainSystemPromptResolver resolver;
 
     public PromptToolConsistencyAudit(ToolRouter toolRouter,
-                                      ProfileSettingsStore settingsStore,
+                                      DomainSettingsStore settingsStore,
                                       PromptProperties promptProperties) {
         this.toolRouter = toolRouter;
         this.settingsStore = settingsStore;
         // 复用"管控台优先 / yaml 兜底"那套解析；preview 只拼文本，不发任何日志
-        this.resolver = new ProfileSystemPromptResolver(settingsStore, promptProperties);
+        this.resolver = new DomainSystemPromptResolver(settingsStore, promptProperties);
     }
 
     /**
@@ -69,7 +69,7 @@ public class PromptToolConsistencyAudit {
                 return;
             }
 
-            ProfileSettings settings = settingsStore.load();
+            DomainSettings settings = settingsStore.load();
             String base = resolver.preview(null, settings);
             Map<String, String> promptByDomain = new LinkedHashMap<>();
             for (String domain : domains) {

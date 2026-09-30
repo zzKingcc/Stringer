@@ -14,7 +14,7 @@ import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.config.RedisProperties;
 import com.zzkingcc.stringer.server.config.RetrievalConfiguration;
 import com.zzkingcc.stringer.server.config.PromptProperties;
-import com.zzkingcc.stringer.server.prompt.ProfileSystemPromptResolver;
+import com.zzkingcc.stringer.server.prompt.DomainSystemPromptResolver;
 import com.zzkingcc.stringer.server.settings.EsCompatibility;
 import com.zzkingcc.stringer.server.settings.InfraSettings;
 import com.zzkingcc.stringer.server.settings.InfraSettingsHolder;
@@ -24,8 +24,8 @@ import com.zzkingcc.stringer.server.settings.LlmModelCatalog;
 import com.zzkingcc.stringer.server.settings.LlmModelHolder;
 import com.zzkingcc.stringer.server.settings.LlmSettings;
 import com.zzkingcc.stringer.server.settings.LlmSettingsStore;
-import com.zzkingcc.stringer.server.settings.ProfileSettings;
-import com.zzkingcc.stringer.server.settings.ProfileSettingsStore;
+import com.zzkingcc.stringer.server.settings.DomainSettings;
+import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -82,7 +82,7 @@ public class AdminController {
     private final InfraSettingsHolder infraHolder;
     private final InfraSettingsStore infraSettingsStore;
     private final RedisProperties redisProperties;
-    private final ProfileSettingsStore profileSettingsStore;
+    private final DomainSettingsStore domainSettingsStore;
     private final PromptProperties promptProperties;
     private final ToolRegistry toolRegistry;
     /** 域注册表：内置域与人工创建的域在这里；工具声明派生的域在 ToolRegistry 里 */
@@ -103,7 +103,7 @@ public class AdminController {
                            InfraSettingsHolder infraHolder,
                            InfraSettingsStore infraSettingsStore,
                            RedisProperties redisProperties,
-                           ProfileSettingsStore profileSettingsStore,
+                           DomainSettingsStore domainSettingsStore,
                            PromptProperties promptProperties,
                            ToolRegistry toolRegistry,
                            InstanceRegistry instanceRegistry,
@@ -122,7 +122,7 @@ public class AdminController {
         this.infraHolder = infraHolder;
         this.infraSettingsStore = infraSettingsStore;
         this.redisProperties = redisProperties;
-        this.profileSettingsStore = profileSettingsStore;
+        this.domainSettingsStore = domainSettingsStore;
         this.promptProperties = promptProperties;
         this.toolRegistry = toolRegistry;
         this.instanceRegistry = instanceRegistry;
@@ -519,9 +519,9 @@ public class AdminController {
     public Map<String, Object> domains() {
         List<ToolDescriptor> all = toolRouter.getToolDescriptors();
         Set<String> known = new TreeSet<>(toolRouter.getKnownProfiles());
-        ProfileSettings console = profileSettingsStore.load();
-        ProfileSystemPromptResolver resolver =
-                new ProfileSystemPromptResolver(profileSettingsStore, promptProperties);
+        DomainSettings console = domainSettingsStore.load();
+        DomainSystemPromptResolver resolver =
+                new DomainSystemPromptResolver(domainSettingsStore, promptProperties);
 
         /* 全域可见＝显式声明了通配 "*" 的工具（它们在每个域里都会出现）。
            注意与「未声明域」区分：未声明＝只属于兜底域 default，不再等于全域可见。 */
@@ -558,8 +558,8 @@ public class AdminController {
                 }
             }
 
-            String diff = firstNonBlank(console.profilePrompt(domain),
-                    promptProperties.profilePrompt(domain));
+            String diff = firstNonBlank(console.domainPrompt(domain),
+                    promptProperties.domainPrompt(domain));
             boolean hasPrompt = diff != null && !diff.isBlank();
             if (!hasPrompt) {
                 missingPrompt++;
@@ -584,7 +584,7 @@ public class AdminController {
             d.put("sideEffects", bySideEffect);
             d.put("hasPrompt", hasPrompt);
             d.put("promptLength", hasPrompt ? diff.trim().length() : 0);
-            // 该域实际生效的 SystemMessage 预览（preview 不打日志，见 ProfileSystemPromptResolver）
+            // 该域实际生效的 SystemMessage 预览（preview 不打日志，见 DomainSystemPromptResolver）
             d.put("promptPreview", resolver.preview(domain, console));
             d.put("tools", tools);
             domains.add(d);
@@ -611,11 +611,11 @@ public class AdminController {
         body.put("stats", stats);
         body.put("domains", domains);
         body.put("globalTools", globalList);
-        List<String> orphans = new ArrayList<>(console.getProfiles().keySet());
+        List<String> orphans = new ArrayList<>(console.getPrompts().keySet());
         orphans.removeAll(known);
         Collections.sort(orphans);
         body.put("orphanPrompts", orphans);
-        body.put("settingsFile", profileSettingsStore.filePath());
+        body.put("settingsFile", domainSettingsStore.filePath());
         return body;
     }
 
@@ -1087,26 +1087,26 @@ public class AdminController {
 
     // ===== 提示词设定 =====
     //
-    // 提示词 = 公共基线 + 域差异，落盘 config/profiles.json（控制台 > yaml）。
+    // 提示词 = 公共基线 + 域差异，落盘 config/prompts.json（控制台 > yaml）。
     // 域的【存在性】有两个来源：DomainRegistry（内置 default 与人工创建的域）与工具声明的派生域
     // （ToolRegistry）；本页只读不改域本身，增删域在「域空间」。
 
     /**
      * 读取提示词设定（公共基线 + 各域差异）。
      */
-    @GetMapping("/profiles")
-    public Map<String, Object> profiles() {
-        ProfileSettings console = profileSettingsStore.load();
+    @GetMapping("/prompts")
+    public Map<String, Object> prompts() {
+        DomainSettings console = domainSettingsStore.load();
         Map<String, Object> body = new LinkedHashMap<>();
 
         // 编辑框里填"生效值"：控制台没写的用 yaml 兜底，避免用户以为空就是没配
         body.put("base", firstNonBlank(console.getBase(), promptProperties.getBase()));
-        body.put("profiles", effectiveProfileMap(console));
+        body.put("prompts", effectivePromptMap(console));
 
         Set<String> known = new TreeSet<>(toolRouter.getKnownProfiles());
         List<Map<String, Object>> domains = new ArrayList<>();
-        ProfileSystemPromptResolver resolver =
-                new ProfileSystemPromptResolver(profileSettingsStore, promptProperties);
+        DomainSystemPromptResolver resolver =
+                new DomainSystemPromptResolver(domainSettingsStore, promptProperties);
         for (String domain : known) {
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("name", domain);
@@ -1129,8 +1129,8 @@ public class AdminController {
                     .map(t -> providerOf(String.valueOf(t.get("source"))))
                     .distinct()
                     .count());
-            String diff = firstNonBlank(console.profilePrompt(domain),
-                    promptProperties.profilePrompt(domain));
+            String diff = firstNonBlank(console.domainPrompt(domain),
+                    promptProperties.domainPrompt(domain));
             d.put("prompt", diff == null ? "" : diff);
             d.put("hasPrompt", diff != null && !diff.isBlank());
             d.put("promptLength", diff == null ? 0 : diff.trim().length());
@@ -1142,34 +1142,34 @@ public class AdminController {
         /* 拼接边界标记下发一份：管控台要实时预览"实际会生效的全文"，
            若前端自己抄一遍标记，两边一旦不一致就会出现"预览与实际不符"的隐蔽问题。 */
         Map<String, Object> boundary = new LinkedHashMap<>();
-        boundary.put("begin", ProfileSystemPromptResolver.PROFILE_BEGIN);
-        boundary.put("end", ProfileSystemPromptResolver.PROFILE_END);
+        boundary.put("begin", DomainSystemPromptResolver.DOMAIN_DIFF_BEGIN);
+        boundary.put("end", DomainSystemPromptResolver.DOMAIN_DIFF_END);
         body.put("previewBoundary", boundary);
 
-        List<String> orphans = new ArrayList<>(console.getProfiles().keySet());
+        List<String> orphans = new ArrayList<>(console.getPrompts().keySet());
         orphans.removeAll(known);
         Collections.sort(orphans);
         body.put("orphanPrompts", orphans);
 
-        body.put("settingsFile", profileSettingsStore.filePath());
+        body.put("settingsFile", domainSettingsStore.filePath());
         return body;
     }
 
     /**
      * 保存提示词设定，立即生效（不重启）
      */
-    @PostMapping("/profiles")
-    public Map<String, Object> saveProfiles(@RequestBody(required = false) ProfileSettings incoming) {
-        ProfileSettings toSave = normalize(incoming);
+    @PostMapping("/prompts")
+    public Map<String, Object> savePrompts(@RequestBody(required = false) DomainSettings incoming) {
+        DomainSettings toSave = normalize(incoming);
         log.info("[管控] 收到域提示词保存请求: 基线 {} 字符，域差异 {} 个",
                 toSave.getBase() == null ? 0 : toSave.getBase().length(),
-                toSave.getProfiles().size());
+                toSave.getPrompts().size());
         Map<String, Object> result = new LinkedHashMap<>();
         try {
-            profileSettingsStore.save(toSave);
+            domainSettingsStore.save(toSave);
             result.put("success", true);
             result.put("message", "已保存并生效：下一次对话即使用新提示词");
-            result.put("settingsFile", profileSettingsStore.filePath());
+            result.put("settingsFile", domainSettingsStore.filePath());
         } catch (Exception e) {
             log.error("[管控] 域提示词保存失败: {}", e.getMessage(), e);
             result.put("success", false);
@@ -1181,18 +1181,18 @@ public class AdminController {
     /**
      * 归一化后再落盘。
      */
-    private static ProfileSettings normalize(ProfileSettings incoming) {
-        ProfileSettings result = new ProfileSettings();
+    private static DomainSettings normalize(DomainSettings incoming) {
+        DomainSettings result = new DomainSettings();
         if (incoming == null) {
             return result;
         }
         if (incoming.getBase() != null && !incoming.getBase().isBlank()) {
             result.setBase(incoming.getBase());
         }
-        if (incoming.getProfiles() != null) {
-            incoming.getProfiles().forEach((k, v) -> {
+        if (incoming.getPrompts() != null) {
+            incoming.getPrompts().forEach((k, v) -> {
                 if (k != null && !k.isBlank() && v != null && !v.isBlank()) {
-                    result.getProfiles().put(k.trim(), v);
+                    result.getPrompts().put(k.trim(), v);
                 }
             });
         }
@@ -1200,12 +1200,12 @@ public class AdminController {
     }
 
     /** 控制台值优先，未配置时回落 yaml（编辑框要显示"实际会生效的那份"） */
-    private Map<String, String> effectiveProfileMap(ProfileSettings console) {
+    private Map<String, String> effectivePromptMap(DomainSettings console) {
         Map<String, String> merged = new LinkedHashMap<>();
-        if (promptProperties.getProfiles() != null) {
-            merged.putAll(promptProperties.getProfiles());
+        if (promptProperties.getPrompts() != null) {
+            merged.putAll(promptProperties.getPrompts());
         }
-        console.getProfiles().forEach((k, v) -> {
+        console.getPrompts().forEach((k, v) -> {
             if (v != null && !v.isBlank()) {
                 merged.put(k, v);
             }

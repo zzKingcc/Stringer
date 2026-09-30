@@ -18,13 +18,13 @@ public class PromptProperties {
     private String base;
 
     /** 域差异：域 → 该域的补充提示词。留空表示只有公共基线 */
-    private Map<String, String> profiles = new LinkedHashMap<>();
+    private Map<String, String> prompts = new LinkedHashMap<>();
 
     /** 指定域的差异片段；未配置返回 {@code null} */
-    public String profilePrompt(String profile) {
-        if (profile == null || profiles == null) {
+    public String domainPrompt(String domainId) {
+        if (domainId == null || prompts == null) {
             return null;
         }
-        return profiles.get(profile);
+        return prompts.get(domainId);
     }
 }

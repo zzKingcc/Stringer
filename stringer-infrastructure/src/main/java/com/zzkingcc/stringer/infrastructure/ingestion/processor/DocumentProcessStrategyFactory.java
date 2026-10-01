@@ -23,7 +23,8 @@ public class DocumentProcessStrategyFactory {
     private static final List<DocumentProcessStrategy> ALL_STRATEGIES = List.of(
             new TextDocumentProcessStrategy(),          // .txt
             new MarkdownDocumentProcessStrategy(),      // .md .markdown
-            new PdfDocumentProcessStrategy(),           // .pdf
+            new DocxDocumentProcessStrategy(),          // .docx
+            new PdfDocumentProcessStrategy(),           // .pdf（尚未落地，占住扩展名给明确答复）
             UnknownDocumentProcessStrategy.INSTANCE     // 未知文件类型
     );
 

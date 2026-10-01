@@ -41,6 +41,7 @@
         <langgraph4j.version>1.8.17</langgraph4j.version>
         <elasticsearch.version>9.4.4</elasticsearch.version>
         <spring-security-crypto.version>6.3.3</spring-security-crypto.version>
+        <poi.version>5.4.1</poi.version>
     </properties>
 
     <dependencyManagement>
@@ -66,6 +67,13 @@
                 <groupId>co.elastic.clients</groupId>
                 <artifactId>elasticsearch-java</artifactId>
                 <version>${elasticsearch.version}</version>
+            </dependency>
+
+            <!-- 文档解析：docx 直读（title 层级只有 POI 能拿到） -->
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-ooxml</artifactId>
+                <version>${poi.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.elasticsearch.client</groupId>

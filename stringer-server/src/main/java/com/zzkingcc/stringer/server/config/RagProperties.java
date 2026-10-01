@@ -27,10 +27,10 @@ public class RagProperties {
      * 允许上传的扩展名白名单（小写）。
      *
      * <p>格式决定走哪条格式适配层：{@code txt} 靠正则<b>猜</b>结构，
-     * {@code md} / {@code markdown} 由 Markdown 解析器<b>读</b>结构。
+     * {@code md} / {@code markdown} 由 Markdown 解析器、{@code docx} 由 POI <b>读</b>结构。
      * 加一种新格式 = 加一套适配器，不是给这个列表加一项就够了。</p>
      */
-    private List<String> allowedExtensions = List.of("txt", "md", "markdown");
+    private List<String> allowedExtensions = List.of("txt", "md", "markdown", "docx");
 
     /**
      * 切片参数（只这三项可调，其余阈值都是代码常量）。

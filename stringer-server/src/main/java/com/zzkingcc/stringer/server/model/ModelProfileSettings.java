@@ -1,8 +1,10 @@
 package com.zzkingcc.stringer.server.model;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import lombok.Data;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,6 +28,41 @@ public class ModelProfileSettings {
 
     /** 别名 → 档案（对话 / 向量都在这里，靠 {@link ProfileData#getType()} 区分） */
     private Map<String, ProfileData> profiles = new LinkedHashMap<>();
+
+    /**
+     * 沿链解析结果
+     *
+     * @param aliases      生效的别名列表；空 = 整条链都没有绑定
+     * @param sourceDomain 这份绑定所在的域（自身，或最近的祖先）；全链未绑时为 {@code null}
+     */
+    public record Binding(List<String> aliases, String sourceDomain) {
+
+        public Binding {
+            aliases = aliases == null ? List.of() : List.copyOf(aliases);
+        }
+
+        public boolean empty() {
+            return aliases.isEmpty();
+        }
+    }
+
+    /**
+     * 沿域链解析绑定：<b>由自身向根</b>找最近一份非空绑定。
+     *
+     * <p>纯函数（不依赖 Spring 容器），因此可被单元测试直接覆盖。回落的是域链本身，
+     * 不含任何内置默认值 —— 根域也没绑就是真的没有。</p>
+     */
+    public Binding resolveAlong(String domain) {
+        List<String> chain = Domains.chainOf(Domains.normalize(domain));
+        for (int i = chain.size() - 1; i >= 0; i--) {
+            String step = chain.get(i);
+            List<String> bound = domainBindings.get(step);
+            if (bound != null && !bound.isEmpty()) {
+                return new Binding(bound, step);
+            }
+        }
+        return new Binding(List.of(), null);
+    }
 
     /**
      * 一条档案的落盘形态（与 {@link ModelProfile} 一一对应）。

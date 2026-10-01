@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.server.model;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.runtime.model.ModelResolver;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -30,16 +31,22 @@ public class DefaultModelResolver implements ModelResolver {
 
     @Override
     public StreamingChatModel streamingChat(String domain) {
-        List<String> aliases = registry.resolveAliases(domain);
+        ModelProfileSettings.Binding binding = registry.resolve(domain);
+        List<String> aliases = binding.aliases();
 
-        /* 域一个可调用模型都没配 → 如实抛出，由调用点转成明确失败。
-           不再回落任何内置 default：域必须先显式配置自己的模型（新建域即处于"无可调用"状态）。 */
-        if (aliases.isEmpty()) {
-            throw new NotConfiguredException("域 " + domain + " 未配置可调用模型"
-                    + " —— 请到管控台「域空间」为该域指定至少一个模型");
+        /* 整条域链一个可调用模型都没绑 → 如实抛出，由调用点转成明确失败。
+           回落的是域链，不是任何内置 default —— 链上没有任何绑定就是真的没有。 */
+        if (binding.empty()) {
+            throw new NotConfiguredException("域 " + domain + " 及其祖先域均未绑定可调用模型"
+                    + " —— 请到管控台「域空间」为该域或它的祖先域指定至少一个模型");
+        }
+        if (!Domains.normalize(domain).equals(binding.sourceDomain())) {
+            // 继承自哪个祖先必须能看见，否则排障时说不清模型是哪来的
+            log.info("[模型档案] 域 {} 自身未绑定模型，沿链继承 {} 的可调用列表 {}",
+                    domain, binding.sourceDomain(), aliases);
         }
 
-        /* 域的可调用列表按顺序试：首个可用即用（列表只有一个时行为与"单值绑定"一致） */
+        /* 可调用列表按顺序试：首个可用即用（列表只有一个时行为与"单值绑定"一致） */
         for (String alias : aliases) {
             ModelProfile profile = registry.profile(alias).orElse(null);
             if (profile == null || !profile.isUsable() || !profile.isChat()) {

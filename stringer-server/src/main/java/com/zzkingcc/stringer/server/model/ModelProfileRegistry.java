@@ -22,8 +22,9 @@ import java.util.Set;
  *       空列表即"无可调用模型"。</li>
  * </ol>
  *
- * <p><b>没有内置对话模型</b>：对话模型只来自「模型设置」页里用户自建的模型档案，不再有"未绑定域回落内置 default"
- * 这一套。域必须先显式配置自己的模型，否则调用时直接报"未配置"（由 {@code DefaultModelResolver} 抛出）。</p>
+ * <p><b>没有内置对话模型</b>：对话模型只来自「模型设置」页里用户自建的模型档案。域未绑定时沿<b>域链</b>向上找
+ * 最近一个绑了模型的祖先（回落的是域链，不是任何内置默认值）；整条链都没绑即"无可调用"，
+ * 调用时直接报"未配置"（由 {@code DefaultModelResolver} 抛出）。</p>
  *
  * <p>内存态 + 落盘：每次写操作先改内存、再整体落盘（写盘失败会抛异常，调用方必须感知）。</p>
  *
@@ -48,20 +49,13 @@ public class ModelProfileRegistry {
     // ==================== 解析 ====================
 
     /**
-     * 解析该域的可调用模型别名列表（按设定顺序）。
+     * 解析该域的可调用模型列表，<b>沿域链回落</b>：自身没绑就向上找最近一个绑了模型的祖先。
      *
-     * <p>仅返回该域<b>显式绑定</b>的列表；域未绑定任何模型时返回空列表 —— 调用方据此判断"无可调用"，
-     * 不再回落到任何内置默认值。</p>
+     * <p>回落的是<b>域链</b>，不是任何内置默认值 —— 根域也未绑定时返回空，
+     * 调用方据此判断"无可调用"。于是根域绑一次，整棵树都能用，不必逐域配一遍。</p>
      */
-    public List<String> resolveAliases(String domain) {
-        String key = Domains.normalize(domain);
-        List<String> bound = settings.getDomainBindings().get(key);
-        if (bound != null && !bound.isEmpty()) {
-            return List.copyOf(bound);
-        }
-        /* 未绑定 = 该域<b>没有任何可调用模型</b>，不再回落到内置 default。
-           域必须先显式配置自己的模型；新建域即处于此状态，由管控台提示「无可调用模型」。 */
-        return List.of();
+    public ModelProfileSettings.Binding resolve(String domain) {
+        return settings.resolveAlong(domain);
     }
 
     /**

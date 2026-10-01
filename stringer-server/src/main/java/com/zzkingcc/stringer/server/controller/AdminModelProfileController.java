@@ -5,6 +5,7 @@ import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.server.model.ModelProbe;
 import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
+import com.zzkingcc.stringer.server.model.ModelProfileSettings;
 import com.zzkingcc.stringer.server.model.ModelProfileStore;
 import com.zzkingcc.stringer.server.settings.LlmFailureDescriber;
 import com.zzkingcc.stringer.server.settings.LlmModelHolder;
@@ -215,7 +216,9 @@ public class AdminModelProfileController {
     }
 
     /**
-     * 设置域的可调用模型列表（**整体覆盖**，顺序即优先级）；{@code aliases} 空表示解绑，解绑后该域走默认别名。
+     * 设置域的可调用模型列表（**整体覆盖**，顺序即优先级）；{@code aliases} 空表示解绑。
+     *
+     * <p>解绑后该域沿域链向上继承最近一个绑了模型的祖先；整条链都没绑才是真的"无可调用"。</p>
      */
     @PutMapping("/model-bindings/{domain}")
     public Map<String, Object> bind(@PathVariable("domain") String domain,
@@ -226,8 +229,11 @@ public class AdminModelProfileController {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
         }
         boolean unbound = aliases == null || aliases.isEmpty();
+        ModelProfileSettings.Binding binding = registry.resolve(domain);
         Map<String, Object> result = result(unbound ? "unbound" : "bound", domain);
-        result.put("aliases", registry.resolveAliases(domain));
+        result.put("aliases", binding.aliases());
+        // 生效来源要看得见：本域自己绑的，还是从哪个祖先继承来的
+        result.put("sourceDomain", binding.sourceDomain());
         result.put("domainBindings", registry.domainBindings());
         return result;
     }

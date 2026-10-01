@@ -628,7 +628,10 @@ public class AdminController {
             String source = domainSource(domain);
             d.put("source", source);
             d.put("sourceLabel", sourceLabel(source));
-            d.put("deletable", DomainRegistry.Source.MANUAL.name().equals(source));
+            // 三种来源同级，只有根域因是整棵树的起点而不可删
+            d.put("deletable", !DomainRegistry.Source.BUILTIN.name().equals(source));
+            d.put("parentId", Domains.parentOf(domain));
+            d.put("childrenCount", domainRegistry.descendantsOf(domain).size());
             d.put("toolCount", tools.size());
             d.put("exclusiveToolCount", tools.stream()
                     .filter(t -> Boolean.TRUE.equals(t.get("exclusive"))).count());
@@ -681,19 +684,15 @@ public class AdminController {
      * <p>两处来源合并判断：{@code DomainRegistry} 管内置与人工，派生域归 {@code ToolRegistry}。</p>
      */
     private String domainSource(String domain) {
-        if (domainRegistry.isBuiltin(domain)) {
-            return DomainRegistry.Source.BUILTIN.name();
-        }
-        if (domainRegistry.contains(domain)) {
-            return DomainRegistry.Source.MANUAL.name();
-        }
-        return "DERIVED";
+        DomainRegistry.Source source = domainRegistry.sourceOf(domain);
+        // 未登记的域只可能是尚未被扫描进来的工具声明，按派生计
+        return source == null ? DomainRegistry.Source.DERIVED.name() : source.name();
     }
 
     /** 来源的中文标签（给管控台直接用，避免前端各写一份映射） */
     private static String sourceLabel(String source) {
         return switch (source) {
-            case "BUILTIN" -> "内置";
+            case "BUILTIN" -> "根域";
             case "MANUAL" -> "人工创建";
             default -> "工具派生";
         };

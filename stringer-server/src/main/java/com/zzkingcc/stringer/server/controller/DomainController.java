@@ -64,13 +64,9 @@ public class DomainController {
      * 域来源：内置 / 人工创建 / 工具派生。
      */
     private String sourceOf(String domainId) {
-        if (domainRegistry.isBuiltin(domainId)) {
-            return DomainRegistry.Source.BUILTIN.name();
-        }
-        if (domainRegistry.contains(domainId)) {
-            return DomainRegistry.Source.MANUAL.name();
-        }
-        return "DERIVED";
+        DomainRegistry.Source source = domainRegistry.sourceOf(domainId);
+        // 未登记的域只可能是尚未被扫描进来的工具声明，按派生计
+        return source == null ? DomainRegistry.Source.DERIVED.name() : source.name();
     }
 
     /**

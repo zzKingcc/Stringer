@@ -73,16 +73,18 @@ public class NativeScriptScoreContentRetriever implements ContentRetriever {
                                 .script(script))
                         .build();
 
-        // 域过滤下推到通道内：放融合之后会把本域结果挤掉（Top-N 被其他域占满），召回会塌陷
-        Query domainFiltered = DomainFilterQuery.wrap(scriptScoreQuery);
-
         try {
+            // 一域一索引：域边界由「查哪个索引」保证，不再做 metadata.domains 过滤。
+            // allowNoIndices / ignoreUnavailable：域链上某个祖先域可能还没有索引，此时应安静地返回空，
+            // 而不是抛 index_not_found 把整轮检索打断。
             SearchResponse<Map> resp = esClient.search(s -> s
                             .index(indexName)
+                            .ignoreUnavailable(true)
+                            .allowNoIndices(true)
                             .size(maxResults)
                             .minScore(minScoreRaw)//匹配数量
                             .source(src -> src.filter(f -> f.includes("text", "metadata")))
-                            .query(domainFiltered),
+                            .query(scriptScoreQuery),
                     Map.class);
 
             List<Content> out = new ArrayList<>();

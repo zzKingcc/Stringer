@@ -190,8 +190,7 @@ public class InfraSettingsHolder {
      */
     public record EsProbe(String clusterName, String version, String buildFlavor,
                           EsCompatibility.Verdict compatibility,
-                          Boolean ikAvailable, String ikNote,
-                          String indexName, boolean indexExists, Long docCount) {
+                          Boolean ikAvailable, String ikNote) {
     }
 
     /**
@@ -202,12 +201,11 @@ public class InfraSettingsHolder {
     }
 
     /**
-     * 用候选参数探活 Elasticsearch：{@code ping} + 产品身份 + IK 分词器 + 目标索引
+     * 用候选参数探活 Elasticsearch：{@code ping} + 产品身份 + IK 分词器
      *
      * @param candidate 候选配置（口令留空时调用方应先补齐）
-     * @param indexName 平台索引名
      */
-    public EsProbe testEs(InfraSettings.Es candidate, String indexName) {
+    public EsProbe testEs(InfraSettings.Es candidate) {
         if (candidate == null || !candidate.isUsable()) {
             throw new NotConfiguredException("请先填写 Elasticsearch 地址");
         }
@@ -221,12 +219,9 @@ public class InfraSettingsHolder {
             }
             ProductInfo product = probeProduct(restClient);
             Boolean ikAvailable = probeIk(restClient);
-            boolean indexExists = client.indices().exists(e -> e.index(indexName)).value();
-            Long docCount = indexExists ? client.count(c -> c.index(indexName)).count() : null;
             return new EsProbe(product.clusterName(), product.version(), product.flavor(),
                     EsCompatibility.judge(product.version(), product.flavor(), product.distribution()),
-                    ikAvailable, ikNote(ikAvailable),
-                    indexName, indexExists, docCount);
+                    ikAvailable, ikNote(ikAvailable));
         } catch (Exception e) {
             throw new IllegalStateException(describe(e), e);
         }

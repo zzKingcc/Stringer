@@ -1,5 +1,7 @@
 package com.zzkingcc.stringer.domain.rag.fusion;
 
+import com.zzkingcc.stringer.domain.rag.model.Modality;
+import com.zzkingcc.stringer.domain.rag.model.RankedList;
 import com.zzkingcc.stringer.domain.rag.model.RetrievalScoreKeys;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
@@ -14,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 锁住默认融合算法：去重 / 归一化加权 / TopN 重排 / 标题文件名 boost / 通道标记。
+ * 锁住分数制融合（<b>单索引</b>轨）：去重 / 归一化加权 / TopN 重排 / 标题文件名 boost / 通道标记。
  * 这些是升级前 {@code CompositeRetriever} 的内联行为，抽成 {@link DefaultFusionStrategy} 后
  * 必须逐字节等价 —— 本测试即"对拍"。
  */
@@ -32,10 +34,26 @@ class DefaultFusionStrategyTest {
         return Content.from(TextSegment.from(text, Metadata.from(m)));
     }
 
+    private static RankedList vec(Content... contents) {
+        return new RankedList("idx", Modality.VECTOR, List.of(contents));
+    }
+
+    private static RankedList vec(List<Content> contents) {
+        return new RankedList("idx", Modality.VECTOR, contents);
+    }
+
+    private static RankedList kw(Content... contents) {
+        return new RankedList("idx", Modality.KEYWORD, List.of(contents));
+    }
+
+    private static RankedList kw(List<Content> contents) {
+        return new RankedList("idx", Modality.KEYWORD, contents);
+    }
+
     @Test
-    void emptyChannels_returnEmpty() {
+    void emptyLists_returnEmpty() {
         DefaultFusionStrategy s = new DefaultFusionStrategy();
-        assertTrue(s.fuse("q", List.of(), List.of(), FusionConfig.defaults()).isEmpty());
+        assertTrue(s.fuse("q", List.of(), FusionConfig.defaults()).isEmpty());
     }
 
     @Test
@@ -43,7 +61,7 @@ class DefaultFusionStrategyTest {
         DefaultFusionStrategy s = new DefaultFusionStrategy();
         Content shared = content("same text", 0.9f, "退款", "a.md");
         // 同一条内容出现在两路 -> 去重为 1 条，但两个通道分都记录
-        List<Content> result = s.fuse("退款", List.of(shared), List.of(shared), FusionConfig.defaults());
+        List<Content> result = s.fuse("退款", List.of(vec(shared), kw(shared)), FusionConfig.defaults());
         assertEquals(1, result.size());
         Metadata m = result.get(0).textSegment().metadata();
         assertEquals("both", m.getString(RetrievalScoreKeys.MATCH_CHANNEL));
@@ -59,8 +77,8 @@ class DefaultFusionStrategyTest {
         Content c2 = content("B", 0.5f, null, null);
         Content c3 = content("C", 0.1f, null, null);
         // 向量权重 1.0、无 boost、TopN=2
-        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.0, 0.0, 2);
-        List<Content> result = s.fuse("q", List.of(c1, c2, c3), List.of(), cfg);
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.0, 0.0, 2, 60);
+        List<Content> result = s.fuse("q", List.of(vec(List.of(c1, c2, c3))), cfg);
         assertEquals(2, result.size());
         double first = result.get(0).textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE);
         double second = result.get(1).textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE);
@@ -75,8 +93,8 @@ class DefaultFusionStrategyTest {
         // 两路原始分相同；一条标题命中查询词 -> 应加 boost 并排第一
         Content withTitle = content("X", 0.5f, "退款政策", "a.md");
         Content withoutTitle = content("Y", 0.5f, "其他说明", "b.md");
-        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.2, 0.0, 10);
-        List<Content> result = s.fuse("退款", List.of(withTitle, withoutTitle), List.of(), cfg);
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.2, 0.0, 10, 60);
+        List<Content> result = s.fuse("退款", List.of(vec(List.of(withTitle, withoutTitle))), cfg);
         assertEquals(2, result.size());
         assertEquals("X", result.get(0).textSegment().text());
         double boosted = result.get(0).textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE);
@@ -89,11 +107,28 @@ class DefaultFusionStrategyTest {
         DefaultFusionStrategy s = new DefaultFusionStrategy();
         Content v = content("vec-only", 0.7f, null, null);
         Content k = content("kw-only", 0.6f, null, null);
-        List<Content> result = s.fuse("q", List.of(v), List.of(k), FusionConfig.defaults());
+        List<Content> result = s.fuse("q", List.of(vec(v), kw(k)), FusionConfig.defaults());
         assertEquals(2, result.size());
         Map<String, Object> meta = result.stream()
                 .filter(c -> "vec-only".equals(c.textSegment().text()))
                 .findFirst().orElseThrow().textSegment().metadata().toMap();
         assertEquals("vector", meta.get(RetrievalScoreKeys.MATCH_CHANNEL));
+    }
+
+    /**
+     * 多张同模态的排名表在分数制下会拼回一路（这是"单索引轨"的假设）；
+     * 真正多索引时应由 {@link AdaptiveFusionStrategy} 走 RRF —— 此用例只钉住拼表行为。
+     */
+    @Test
+    void multipleListsOfSameModality_areConcatenated() {
+        DefaultFusionStrategy s = new DefaultFusionStrategy();
+        Content a = content("A", 0.9f, null, null);
+        Content b = content("B", 0.4f, null, null);
+        List<Content> result = s.fuse("q",
+                List.of(new RankedList("i1", Modality.VECTOR, List.of(a)),
+                        new RankedList("i2", Modality.VECTOR, List.of(b))),
+                new FusionConfig(1.0, 0.0, 0.0, 0.0, 10, 60));
+        assertEquals(2, result.size());
+        assertEquals("A", result.get(0).textSegment().text());
     }
 }

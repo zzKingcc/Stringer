@@ -1,31 +1,33 @@
 package com.zzkingcc.stringer.domain.rag.fusion;
 
+import com.zzkingcc.stringer.domain.rag.model.RankedList;
 import dev.langchain4j.rag.content.Content;
 
 import java.util.List;
 
 /**
- * 混合检索融合策略：把两路召回（向量 + 关键词）合并、去重、归一化、加权、重排。
+ * 混合检索融合策略：把多路召回的<b>排名表</b>合并、去重、排序、取 TopN。
  *
- * <p>从 {@code CompositeRetriever} 里抽出来的目的：让部署方可以替换融合算法
- * （例如 RRF、rerank），而不必改动召回编排与失败处理。默认实现
- * {@link DefaultFusionStrategy} 完全复刻升级前行为，<b>只抽取不改算法</b>。</p>
+ * <p>输入是一组 {@link RankedList}（多索引时 = 索引数 × 2），由本接口的实现决定如何融合：
+ * <ul>
+ *   <li>{@link DefaultFusionStrategy} —— 单索引（分数制）行为；</li>
+ *   <li>{@link RrfFusionStrategy} —— 多索引（排名制）行为；</li>
+ *   <li>{@link AdaptiveFusionStrategy} —— 按索引数自动二选一（本项目的双轨入口）。</li>
+ * </ul>
  *
  * @author zzkingcc
  */
 public interface FusionStrategy {
 
     /**
-     * 融合两路召回结果。
+     * 融合多路召回结果。
      *
-     * @param queryText      原始查询文本（用于标题 / 文件名命中 boost 判定）
-     * @param vectorResults  向量通道结果（可为 {@code null} / 空列表，表示本路失败或未命中）
-     * @param keywordResults 关键词通道结果（可为 {@code null} / 空列表）
-     * @param fusion         融合参数（权重 / boost / topN）
+     * @param queryText 原始查询文本（用于标题 / 文件名命中 boost 判定）
+     * @param lists     各路排名表（可能为空；单路失败或被跳过时该表内容为空）
+     * @param fusion    融合参数（权重 / boost / topN / rrfK）
      * @return 融合重排后的结果，已回写分项分、融合分、名次、命中通道到 metadata
      */
     List<Content> fuse(String queryText,
-                       List<Content> vectorResults,
-                       List<Content> keywordResults,
+                       List<RankedList> lists,
                        FusionConfig fusion);
 }

@@ -41,24 +41,24 @@ public class KnowledgeBaseClient {
     public record DocumentItem(String docId, String fileName, int chunks) {}
 
     /**
-     * 上传一个文档（不声明域 → 挂在根域 {@code default}，按累加语义全域可见）。
+     * 上传一个文档到根域 {@code default} 的索引（按累加语义对全树可见）。
      *
      * @param content  文件字节
      * @param fileName 文件名（含扩展名，需在服务端白名单内）
-     * @param replace  {@code true} = 已存在同名文档时覆盖更新；{@code false} = 同名直接拒绝
+     * @param replace  {@code true} = 该域索引内已存在同名文档时覆盖更新；{@code false} = 同名直接拒绝
      */
     public UploadResult upload(byte[] content, String fileName, boolean replace) {
-        return upload(content, fileName, replace, List.of());
+        return upload(content, fileName, replace, null);
     }
 
     /**
-     * 上传一个文档，并声明它的可用域。
+     * 上传一个文档，并指定它归属的域（即落到该域的索引里）。
      *
      * <p>域决定<b>哪些对话能检索到这份文档</b>，与 {@code @Tool(domains = {...})} 同构：
-     * 每项都是<b>从根域出发的完整路径</b>，挂在该域即其<b>全部后代域</b>都能检索到；
+     * 必须是<b>从根域出发的完整路径</b>，挂在该域即其<b>全部后代域</b>都能检索到；
      * 留空 = 挂根域 = 全域可见。没有通配写法，路径非法会被服务端直接拒绝。</p>
      */
-    public UploadResult upload(byte[] content, String fileName, boolean replace, List<String> domains) {
+    public UploadResult upload(byte[] content, String fileName, boolean replace, String domain) {
         if (content == null || content.length == 0) {
             throw new StringerException(ErrorCode.INVALID_PARAMETER, "上传内容为空");
         }
@@ -76,17 +76,13 @@ public class KnowledgeBaseClient {
             }
         });
 
-        List<String> effectiveDomains = domains == null ? List.of() : domains.stream()
-                .filter(d -> d != null && !d.isBlank())
-                .map(String::trim)
-                .distinct()
-                .toList();
+        String effectiveDomain = domain == null ? null : domain.trim();
 
         Map<String, Object> resp = webClient.post()
                 .uri(uri -> {
                     uri.path("/admin/kb/documents").queryParam("replace", replace);
-                    if (!effectiveDomains.isEmpty()) {
-                        uri.queryParam("domains", effectiveDomains);
+                    if (effectiveDomain != null && !effectiveDomain.isEmpty()) {
+                        uri.queryParam("domain", effectiveDomain);
                     }
                     return uri.build();
                 })

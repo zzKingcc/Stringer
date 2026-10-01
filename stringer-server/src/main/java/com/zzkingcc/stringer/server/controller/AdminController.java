@@ -2,9 +2,9 @@ package com.zzkingcc.stringer.server.controller;
 
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
+import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.common.exception.BaseException;
-import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.InstanceLifecycle;
 import com.zzkingcc.stringer.runtime.tool.InstanceRegistry;
@@ -12,9 +12,7 @@ import com.zzkingcc.stringer.runtime.tool.InstanceSession;
 import com.zzkingcc.stringer.runtime.tool.InstanceState;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
-import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.config.RedisProperties;
-import com.zzkingcc.stringer.server.config.RetrievalConfiguration;
 import com.zzkingcc.stringer.server.config.PromptProperties;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.prompt.DomainSystemPromptResolver;
@@ -31,7 +29,6 @@ import com.zzkingcc.stringer.server.settings.DomainSettings;
 import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.store.embedding.EmbeddingStore;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,11 +71,8 @@ public class AdminController {
     private static final String CONNECT_FAILED = "连接失败";
 
     private final ToolRouter toolRouter;
-    private final RetrievalConfiguration retrievalConfiguration;
     private final ElasticsearchClient esClient;
     private final EmbeddingModel embeddingModel;
-    private final EmbeddingStore embeddingStore;
-    private final RagProperties ragProperties;
     private final LlmModelHolder modelHolder;
     private final LlmSettingsStore settingsStore;
     private final LlmModelCatalog modelCatalog;
@@ -96,11 +90,8 @@ public class AdminController {
     private final ModelProfileRegistry modelProfileRegistry;
 
     public AdminController(ToolRouter toolRouter,
-                           RetrievalConfiguration retrievalConfiguration,
                            @Qualifier("stringerElasticsearchClient") ElasticsearchClient esClient,
                            @Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
-                           @Qualifier("myEmbeddingStore") EmbeddingStore embeddingStore,
-                           RagProperties ragProperties,
                            LlmModelHolder modelHolder,
                            LlmSettingsStore settingsStore,
                            LlmModelCatalog modelCatalog,
@@ -116,11 +107,8 @@ public class AdminController {
                            DomainRegistry domainRegistry,
                            ModelProfileRegistry modelProfileRegistry) {
         this.toolRouter = toolRouter;
-        this.retrievalConfiguration = retrievalConfiguration;
         this.esClient = esClient;
         this.embeddingModel = embeddingModel;
-        this.embeddingStore = embeddingStore;
-        this.ragProperties = ragProperties;
         this.modelHolder = modelHolder;
         this.settingsStore = settingsStore;
         this.modelCatalog = modelCatalog;
@@ -203,16 +191,15 @@ public class AdminController {
         // 注意注入的 embeddingModel 是持有者的委派代理，apply() 之后已指向新模型。
         boolean rebuilt = false;
         if (dim.verdict() == DimVerdict.NEEDS_REBUILD) {
-            log.warn("[管控] 维度 {} → {}，开始重建知识库索引（index={}）",
-                    dim.indexDims(), dim.newDims(), ragProperties.getIndexName());
+            log.warn("[管控] 维度 {} → {}，开始重建全部知识库索引", dim.indexDims(), dim.newDims());
             try {
                 // 维度必须显式传入：索引维度是 mapping 的不可变参数，取"三处同源"的公共取值点。
                 // apply() 已生效，这里拿到的就是新模型的维度。
-                // forceDelete=true：维度变了，旧索引留着也没用——不删就永远修不好。
-                retrievalConfiguration.rebuildKnowledgeIndex(esClient, embeddingModel, embeddingStore,
-                        ragProperties, modelHolder.effectiveEmbeddingDimension(), true);
+                // 重建语义是"删掉重建"：维度变了，旧索引留着也没用——不删就永远修不好。
+                List<String> rebuiltIndices =
+                        knowledgeBaseService.rebuildAll(modelHolder.effectiveEmbeddingDimension());
                 rebuilt = true;
-                log.info("[管控] 知识库索引重建完成（dims={}）", dim.newDims());
+                log.info("[管控] 知识库索引重建完成（dims={}，索引 {}）", dim.newDims(), rebuiltIndices);
             } catch (Exception e) {
                 // 配置已落盘并生效，只是索引重建失败 —— 必须如实告知，不能报成功
                 log.error("[管控] 知识库索引重建失败（配置已生效）: {}", e.getMessage(), e);
@@ -346,7 +333,7 @@ public class AdminController {
         // 退化为"不做预检"即可。与"实测维度失败必须放行"同一哲学——否则用户会被卡在
         // "必须先配好 ES 才能改模型配置"的循环里，自救路径被切断。
         try {
-            indexDims = EsIndexManager.currentVectorDims(esClient, ragProperties.getIndexName());
+            indexDims = knowledgeBaseService.currentVectorDims();
         } catch (Exception e) {
             log.warn("[管控] 读取索引向量维度失败，跳过维度预检（ES 未配置或索引不存在）: {}",
                     e.getMessage());
@@ -436,7 +423,7 @@ public class AdminController {
         LlmModelHolder.EmbeddingProbe probe = modelHolder.testEmbeddingConnection(candidate);
         int actual = probe.actualDimension();
         Integer declared = probe.declaredDimension();
-        Integer indexDims = EsIndexManager.currentVectorDims(esClient, ragProperties.getIndexName());
+        Integer indexDims = knowledgeBaseService.currentVectorDims();
 
         result.put("type", "embedding");
         result.put("dimension", actual);
@@ -850,7 +837,7 @@ public class AdminController {
             row.put("docId", item.docId());
             row.put("fileName", item.fileName());
             row.put("chunks", item.chunks());
-            row.put("domains", item.domains());
+            row.put("domain", item.domain());
             documents.add(row);
         }
         Map<String, Object> body = new LinkedHashMap<>();
@@ -863,16 +850,16 @@ public class AdminController {
     /**
      * 上传一个知识库文档（multipart，字段名 {@code file}）
      *
-     * @param replace {@code true} = 已存在同名文档时先删旧再写入；{@code false} = 同名直接拒绝（60005）
-     * @param domains 该文档的可用域（与 {@code @Tool(domains=)} 同构：完整路径；挂某域则其全部后代可检索；留空 → 挂根域）
+     * @param replace {@code true} = 该域索引内已存在同名文档时先删旧再写入；{@code false} = 同名直接拒绝（60005）
+     * @param domain  该文档归属的域（完整路径，落到该域的索引里；挂某域则其全部后代可检索；留空 → 根域）
      */
     @PostMapping(value = "/kb/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> kbUpload(@RequestParam("file") MultipartFile file,
                                         @RequestParam(value = "replace", defaultValue = "false") boolean replace,
-                                        @RequestParam(value = "domains", required = false) List<String> domains)
+                                        @RequestParam(value = "domain", required = false) String domain)
             throws IOException {
         KnowledgeBaseService.UploadResult result =
-                knowledgeBaseService.upload(file.getBytes(), file.getOriginalFilename(), replace, domains);
+                knowledgeBaseService.upload(file.getBytes(), file.getOriginalFilename(), replace, domain);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 0);
         body.put("success", true);
@@ -880,7 +867,7 @@ public class AdminController {
         body.put("fileName", result.fileName());
         body.put("size", result.size());
         body.put("chunks", result.chunks());
-        body.put("domains", KnowledgeBaseService.normalizeDomains(domains));
+        body.put("domain", result.domain());
         return body;
     }
 
@@ -899,7 +886,7 @@ public class AdminController {
     }
 
     /**
-     * 知识库索引状态：索引是否存在、文档数、切片总数。
+     * 知识库状态：索引数、文档数、切片总数，以及每个索引（域）的明细。
      */
     @GetMapping("/kb/status")
     public Map<String, Object> kbStatus() {
@@ -910,24 +897,23 @@ public class AdminController {
     }
 
     /**
-     * 手动重建知识库索引（诊断 + 删旧 + 建 IK mapping + 校验）
+     * 手动重建全部知识库索引（诊断 + 删旧 + 建 IK mapping + 校验）。
+     *
+     * <p>语义是「删掉重建」，因此<b>索引会被清空，文档需重新上传</b>。</p>
      */
     @PostMapping("/kb/rebuild")
     public Map<String, Object> rebuildKnowledgeIndex() {
-        log.info("[管控] 收到知识库重建请求 index={}", ragProperties.getIndexName());
         try {
             int dimensions = modelHolder.effectiveEmbeddingDimension();
-            log.info("[管控] 重建索引使用的向量维度 = {}", dimensions);
-            // forceDelete=true：手动重建的语义就是"删掉重建"。不删的话，改过的文档会新旧片段共存、
-            // 旧片段继续被检索命中，而且维度改错的索引永远修不好。
-            retrievalConfiguration.rebuildKnowledgeIndex(
-                    esClient, embeddingModel, embeddingStore, ragProperties, dimensions, true);
+            log.info("[管控] 收到知识库重建请求，向量维度 = {}", dimensions);
+            List<String> indices = knowledgeBaseService.rebuildAll(dimensions);
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("code", 0);
             result.put("success", true);
-            result.put("index", ragProperties.getIndexName());
+            result.put("indices", indices);
             result.put("dimensions", dimensions);
-            result.put("message", "已删除旧索引并按维度 " + dimensions + " 重建；索引已清空，请重新上传知识库文档");
+            result.put("message", "已按维度 " + dimensions + " 重建 " + indices.size()
+                    + " 个索引；索引已清空，请重新上传知识库文档");
             return result;
         } catch (Exception e) {
             log.error("[管控] 知识库重建失败: {}", e.getMessage(), e);
@@ -941,7 +927,7 @@ public class AdminController {
     // ===== 存储配置（ES / Redis） =====
     //
     // 连接信息从 yaml 搬到管控台：先在页面上填 → 「测试连接」验证 → 「保存并生效」热替换。
-    // 保存的是"界面那一份"，yaml 留空回落；两者都空即"未配置"（服务照常启动，只跳过灌库）。
+    // 保存的是"界面那一份"，yaml 留空回落；两者都空即"未配置"（服务照常启动，检索与上传报未配置）。
 
     /**
      * 读取 ES / Redis 存储配置（口令脱敏）
@@ -956,7 +942,7 @@ public class AdminController {
         body.put("redisConfigured", infraHolder.isRedisConfigured());
         body.put("esSource", infraHolder.esSource());
         body.put("redisSource", infraHolder.redisSource());
-        body.put("indexName", ragProperties.getIndexName());
+        body.put("indexPattern", KbIndexes.WILDCARD);
         body.put("settingsFile", infraSettingsStore.filePath());
         return body;
     }
@@ -1006,24 +992,7 @@ public class AdminController {
         result.put("redisSource", infraHolder.redisSource());
         result.put("message", "存储配置已保存并立即生效");
         fillSecretState(result);
-
-        IndexProbe probe = probeIndex();
-        if (probe != null) {
-            result.put("indexName", probe.name());
-            if (probe.error() == null) {
-                result.put("indexExists", probe.exists());
-                result.put("indexDocCount", probe.docCount());
-                result.put("requiresRebuild",
-                        !probe.exists() || (probe.docCount() != null && probe.docCount() == 0));
-            } else {
-                result.put("indexProbeError", probe.error());
-            }
-        }
         return result;
-    }
-
-    /** 索引探测结果；{@code error} 非空表示"没探成"，与"索引不存在"是两回事 */
-    private record IndexProbe(String name, boolean exists, Long docCount, String error) {
     }
 
     /**
@@ -1035,21 +1004,6 @@ public class AdminController {
         body.put("esPasswordSet", hasText(cur.getEs().getPassword()));
         body.put("redisPasswordMasked", cur.getRedis().getMaskedPassword());
         body.put("redisPasswordSet", hasText(cur.getRedis().getPassword()));
-    }
-
-    private IndexProbe probeIndex() {
-        if (!infraHolder.isEsConfigured()) {
-            return null;
-        }
-        String indexName = ragProperties.getIndexName();
-        try {
-            boolean exists = esClient.indices().exists(e -> e.index(indexName)).value();
-            Long count = exists ? esClient.count(c -> c.index(indexName)).count() : null;
-            return new IndexProbe(indexName, exists, count, null);
-        } catch (Exception e) {
-            log.warn("[管控] 保存后探测索引失败（配置已生效，不影响保存结论）: {}", e.getMessage());
-            return new IndexProbe(indexName, false, null, e.getMessage());
-        }
     }
 
     /**
@@ -1078,8 +1032,7 @@ public class AdminController {
                         + "（" + modeLabel(probe.mode()) + "），库 " + probe.database()
                         + " 当前有 " + text(probe.dbSize()) + " 个 key");
             } else {
-                InfraSettingsHolder.EsProbe probe =
-                        infraHolder.testEs(candidate.getEs(), ragProperties.getIndexName());
+                InfraSettingsHolder.EsProbe probe = infraHolder.testEs(candidate.getEs());
                 result.put("success", true);
                 result.put("clusterName", probe.clusterName());
                 result.put("version", probe.version());
@@ -1089,11 +1042,9 @@ public class AdminController {
                 ik.put("available", probe.ikAvailable());
                 ik.put("note", probe.ikNote());
                 result.put("ik", ik);
-                result.put("indexName", probe.indexName());
-                result.put("indexExists", probe.indexExists());
-                result.put("indexDocCount", probe.docCount());
+                result.put("indexPattern", KbIndexes.WILDCARD);
                 result.put("message", "Elasticsearch 连接正常：集群 " + text(probe.clusterName())
-                        + "（版本 " + text(probe.version()) + "）；" + indexNote(probe));
+                        + "（版本 " + text(probe.version()) + "）");
             }
         } catch (Exception e) {
             String reason = e.getMessage() == null ? "未知原因" : e.getMessage();
@@ -1127,17 +1078,6 @@ public class AdminController {
             case "sentinel" -> "哨兵";
             default -> mode;
         };
-    }
-
-    /** 索引现状的一句话说明（测试与保存两条路径共用同一套措辞） */
-    private static String indexNote(InfraSettingsHolder.EsProbe probe) {
-        if (!probe.indexExists()) {
-            return "索引 " + probe.indexName() + " 尚不存在，保存后需到「知识库」页触发一次重建";
-        }
-        if (probe.docCount() != null && probe.docCount() == 0) {
-            return "索引 " + probe.indexName() + " 存在但文档数为 0，需到「知识库」页重建";
-        }
-        return "索引 " + probe.indexName() + " 已有 " + text(probe.docCount()) + " 个文档";
     }
 
     // ===== 提示词设定 =====

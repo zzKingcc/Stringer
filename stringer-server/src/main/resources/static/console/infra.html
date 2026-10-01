@@ -385,7 +385,7 @@
             applyKeyHint('redis', s.redis.passwordMasked, !!s.redis.passwordSet);
 
             el('settingsFileHint').textContent = '设置文件：' + (s.settingsFile || '-')
-                + '（索引 ' + (s.indexName || '-') + '）';
+                + '（知识库索引 ' + (s.indexPattern || '-') + '）';
 
             CONFIGURED.es = !!s.esConfigured;
             CONFIGURED.redis = !!s.redisConfigured;
@@ -486,21 +486,6 @@
                 afterSaved(which, data);
                 var msg = '✅ 「' + LABEL[which] + '」已保存并立即生效（来源：'
                     + (which === 'es' ? data.esSource : data.redisSource) + '）。';
-                if (data.requiresRebuild) {
-                    showResult(RESULT[which], msg
-                        + ' ⚠️ 索引 ' + (data.indexName || '') + ' '
-                        + (data.indexExists ? '存在但文档数为 0' : '尚不存在')
-                        + '，请到「知识库」页触发一次重建，否则检索结果为空。', 'err');
-                    return;
-                }
-                if (data.indexProbeError) {
-                    showResult(RESULT[which], msg
-                        + ' （索引探测未成功：' + data.indexProbeError + '）', '');
-                    return;
-                }
-                if (which === 'es' && data.indexName) {
-                    msg += ' 索引 ' + data.indexName + ' 已有 ' + data.indexDocCount + ' 个文档。';
-                }
                 showResult(RESULT[which], msg, 'ok');
             })
             .catch(function (e) {

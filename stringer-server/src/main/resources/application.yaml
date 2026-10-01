@@ -82,28 +82,30 @@ stringer:
     invoke-max-attempts: 2
 
   # 混合检索（向量 + 关键词并行召回与融合排序）
-  # 现在提供的工具就是用es进行混合，按照文档设计准则，测试的0.6和0.4，效果 best
+  # 检索域 = 自身 + 祖先链；域链上每个索引各召回两路，单索引走分数制、多索引走 RRF（k 默认 60）
   retrieval:
     parallel: true
     timeout-ms: 5000
     core-pool-size: 4
     max-pool-size: 16
     queue-capacity: 200
+    # 每张索引的召回条数
+    vector-top-k: 15
+    keyword-top-k: 5
+    # 向量最低余弦相似度（脚本里已 +1.0 回归，这里按原始余弦填）
+    vector-min-score: 0.2
     vector-weight: 0.6
     keyword-weight: 0.4
     title-boost: 0.15
     file-name-boost: 0.10
     top-n: 10
+    rrf-k: 60
 
-  # 向量索引
+  # 知识库（一域一索引，索引名由域路径派生，首次上传时按需创建；故此处无索引名配置）
   rag:
-    index-name: stringer_knowledge
-    # 启动时重建开关
-    delete-on-startup: false
-    # 启动期是否执行建索引 + 灌库
-    bootstrap-enabled: ${STRINGER_RAG_BOOTSTRAP_ENABLED:true}
-    # 灌库失败是否阻断启动
-    bootstrap-strict: ${STRINGER_RAG_BOOTSTRAP_STRICT:false}
+    # 导入失败等不阻断启动：索引完全是运行期按需建出来的
+    ingest-pool-size: 2
+    ingest-queue-capacity: 16
 
   logging:
     path: ${STRINGER_LOG_PATH:/var/log/stringer}

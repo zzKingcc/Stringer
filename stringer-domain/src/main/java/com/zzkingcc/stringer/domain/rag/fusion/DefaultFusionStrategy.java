@@ -1,5 +1,7 @@
 package com.zzkingcc.stringer.domain.rag.fusion;
 
+import com.zzkingcc.stringer.domain.rag.model.Modality;
+import com.zzkingcc.stringer.domain.rag.model.RankedList;
 import com.zzkingcc.stringer.domain.rag.model.RetrievalScoreKeys;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
@@ -7,30 +9,27 @@ import dev.langchain4j.rag.content.Content;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HexFormat;
-import java.util.stream.IntStream;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
- * 默认融合策略 —— 完全复刻升级前 {@code CompositeRetriever} 的内联算法：
+ * 默认融合策略（<b>分数制</b>）—— 复刻升级前的两路融合算法，单索引场景使用：
  *
  * <ul>
+ *   <li>把多份排名表按模态拼回两路（向量 / 关键词），保持各表内部顺序；</li>
  *   <li>去重：按文本内容 SHA-256 判同一条；两路都命中只记一次，但两个通道分都保留</li>
  *   <li>归一化：向量分 / 关键词分各自做 min-max（单路缺失按 0 算）</li>
  *   <li>加权：{@code 向量权重×归一化向量分 + 关键词权重×归一化关键词分}，标题 / 文件名命中再各加 boost</li>
  *   <li>重排：按融合分降序，取 TopN，回写分项分 / 融合分 / 名次 / 命中通道</li>
  * </ul>
  *
- * <p>这是当前行为的"真相"，新增的融合策略应由此派生或整体替换，但不应悄悄改变默认结果。</p>
+ * <p>单索引（1 张向量表 + 1 张关键词表）时与升级前逐字节一致。多索引场景由
+ * {@link RrfFusionStrategy} 承担 —— 因为 BM25 分跨索引不可比，分数制在这里会失真。</p>
  *
  * @author zzkingcc
  */
@@ -40,27 +39,38 @@ public class DefaultFusionStrategy implements FusionStrategy {
 
     @Override
     public List<Content> fuse(String queryText,
-                             List<Content> vectorResults,
-                             List<Content> keywordResults,
+                             List<RankedList> lists,
                              FusionConfig fusion) {
         long start = System.currentTimeMillis();
 
-        List<Content> vector = vectorResults == null ? List.of() : vectorResults;
-        List<Content> keyword = keywordResults == null ? List.of() : keywordResults;
+        List<Content> vector = new ArrayList<>();
+        List<Content> keyword = new ArrayList<>();
+        if (lists != null) {
+            for (RankedList l : lists) {
+                if (l == null) {
+                    continue;
+                }
+                if (l.modality() == Modality.VECTOR) {
+                    vector.addAll(l.contents());
+                } else if (l.modality() == Modality.KEYWORD) {
+                    keyword.addAll(l.contents());
+                }
+            }
+        }
 
         // 合并去重 + 记录分数来源
         Map<String, ScoreEntry> scoreMap = new LinkedHashMap<>();
 
         for (Content c : vector) {
-            String hash = hashContent(c);
-            double score = extractScore(c);
+            String hash = FusionSupport.hashContent(c);
+            double score = FusionSupport.extractScore(c);
             scoreMap.computeIfAbsent(hash, k -> new ScoreEntry(c, queryText, fusion)).vectorScore = score;
         }
 
         int keywordAdded = 0;
         for (Content c : keyword) {
-            String hash = hashContent(c);
-            double score = extractScore(c);
+            String hash = FusionSupport.hashContent(c);
+            double score = FusionSupport.extractScore(c);
             ScoreEntry exist = scoreMap.get(hash);
             if (exist != null) {
                 exist.keywordScore = score;
@@ -138,12 +148,12 @@ public class DefaultFusionStrategy implements FusionStrategy {
                     + e.fusion.keywordWeight() * (e.normKeywordScore != null ? e.normKeywordScore : 0.0);
 
             String title = e.content.textSegment().metadata().getString("section_title");
-            if (title != null && !title.isBlank() && containsAnyKeyword(title, e.queryText)) {
+            if (title != null && !title.isBlank() && FusionSupport.containsAnyKeyword(title, e.queryText)) {
                 fused += e.fusion.titleBoost();
             }
 
             String fileName = e.content.textSegment().metadata().getString("file_name");
-            if (fileName != null && !fileName.isBlank() && containsAnyKeyword(fileName, e.queryText)) {
+            if (fileName != null && !fileName.isBlank() && FusionSupport.containsAnyKeyword(fileName, e.queryText)) {
                 fused += e.fusion.fileNameBoost();
             }
 
@@ -172,65 +182,10 @@ public class DefaultFusionStrategy implements FusionStrategy {
         }
         meta.put(RetrievalScoreKeys.FUSED_SCORE, e.fusedScore);
         meta.put(RetrievalScoreKeys.FUSION_RANK, rank);
-        meta.put(RetrievalScoreKeys.MATCH_CHANNEL, channel(e));
+        meta.put(RetrievalScoreKeys.MATCH_CHANNEL,
+                FusionSupport.channel(e.vectorScore != null, e.keywordScore != null));
 
         return Content.from(TextSegment.from(source.text(), Metadata.from(meta)));
-    }
-
-    private String channel(ScoreEntry e) {
-        if (e.vectorScore != null && e.keywordScore != null) {
-            return "both";
-        }
-        return e.vectorScore != null ? "vector" : "keyword";
-    }
-
-    /**
-     * 从 Content metadata 中提取 ES 检索分数
-     */
-    private double extractScore(Content content) {
-        try {
-            return content.textSegment().metadata().getFloat(RetrievalScoreKeys.RAW_SCORE);
-        } catch (Exception e) {
-            return 0.0;
-        }
-    }
-
-    /**
-     * 判断文本中是否包含查询词的任意关键词（中文按单字/词匹配，英文按空格分词）
-     */
-    private boolean containsAnyKeyword(String text, String query) {
-        if (text == null || query == null) {
-            return false;
-        }
-        String lowerText = text.toLowerCase();
-        Set<String> keywords = extractKeywords(query);
-        for (String kw : keywords) {
-            if (kw.length() >= 2 && lowerText.contains(kw)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 从查询文本中提取关键词集合
-     */
-    private Set<String> extractKeywords(String query) {
-        return Arrays.stream(query.toLowerCase()
-                        .split("[\\s，。！？、；：\"'（）《》\\[\\]【】,.!?;:()]+"))
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toSet());
-    }
-
-    //去重辅助
-    private String hashContent(Content content) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(content.textSegment().text().getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (Exception e) {
-            return content.textSegment().text();
-        }
     }
 
     /**
@@ -245,10 +200,6 @@ public class DefaultFusionStrategy implements FusionStrategy {
         Double normVectorScore;
         Double normKeywordScore;
         double fusedScore;
-
-        ScoreEntry(Content content, String queryText) {
-            this(content, queryText, null);
-        }
 
         ScoreEntry(Content content, String queryText, FusionConfig fusion) {
             this.content = content;

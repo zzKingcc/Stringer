@@ -6,6 +6,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
+import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.infrastructure.ingestion.DocumentIngestor;
@@ -15,6 +16,8 @@ import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.elasticsearch.ElasticsearchConfigurationScript;
+import dev.langchain4j.store.embedding.elasticsearch.ElasticsearchEmbeddingStore;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,12 +28,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -40,7 +42,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 知识库服务：文档上传 / 列表 / 删除 / 状态。
+ * 知识库服务：文档上传 / 列表 / 删除 / 状态，并承担<b>一域一索引</b>的生命周期。
+ *
+ * <p>结构性事实（与域树、工具、提示词同构）：<b>一个域 = 一个 ES 索引</b>。
+ * 索引名由域路径确定性派生（{@link KbIndexes#nameOf}），在首次上传时<b>按需创建</b> ——
+ * 不再有"启动期建一个全局索引"这回事，因为域是运行期由用户创建的，索引跟着域走。</p>
+ *
+ * <p>检索侧的域边界由「查哪些索引」保证：检索域 D 时只查 D 自身与祖先链上的索引，
+ * 因此文档自带域的含义变成「它被上传到哪个域的索引」。{@code metadata.domain} 只用于
+ * 管控台展示与排查，<b>不再参与过滤</b>。</p>
+ *
  * @author zzkingcc
  */
 @Slf4j
@@ -48,25 +59,25 @@ import java.util.concurrent.atomic.AtomicLong;
 public class KnowledgeBaseService {
 
     /**
-     * 列表聚合时单次最多拉取的命中数。
+     * 列表聚合时单个索引最多拉取的命中数。
      */
     private static final int LIST_MAX_SIZE = 1000;
 
     private final ElasticsearchClient esClient;
-    private final EmbeddingStore embeddingStore;
     private final EmbeddingModel embeddingModel;
     private final RagProperties ragProperties;
     private final LlmModelHolder modelHolder;
     private final ThreadPoolExecutor ingestExecutor;
     private final Semaphore ingestPermit = new Semaphore(1);
 
+    /** 索引名 → 向量存储（无状态包装，可安全复用） */
+    private final Map<String, EmbeddingStore> storeCache = new ConcurrentHashMap<>();
+
     public KnowledgeBaseService(@Qualifier("stringerElasticsearchClient") ElasticsearchClient esClient,
-                                @Qualifier("myEmbeddingStore") EmbeddingStore embeddingStore,
                                 @Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
                                 RagProperties ragProperties,
                                 LlmModelHolder modelHolder) {
         this.esClient = esClient;
-        this.embeddingStore = embeddingStore;
         this.embeddingModel = embeddingModel;
         this.ragProperties = ragProperties;
         this.modelHolder = modelHolder;
@@ -94,58 +105,169 @@ public class KnowledgeBaseService {
     }
 
     /** 上传结果 */
-    public record UploadResult(String docId, String fileName, long size, int chunks) {}
+    public record UploadResult(String docId, String fileName, long size, int chunks, String domain) {}
 
     /** 索引内已入库的文档条目 */
     public record DocumentItem(String docId, String fileName, String fileNameLower,
-                               int chunks, List<String> domains) {}
+                               int chunks, String domain) {}
+
+    // ==================== 域 → 索引 ====================
 
     /**
-     * 规范化文档的可用域 —— 与 {@code @Tool(domains = {...})} <b>同构</b>：
-     * 每项都是从根域出发的完整路径，留空 = 挂在根域（按累加语义对全树可见）。
+     * 规范化并校验文档归属域 —— 与 {@code @Tool(domains = {...})} <b>同构</b>：
+     * 必须是从根域出发的完整路径，留空 = 挂在根域 {@code default}。
      *
-     * <p>同构是刻意的：接入方学一次规则，工具与知识库两个维度通用。
-     * 路径非法<b>直接抛异常</b>而不是静默丢弃 —— 静默会把文档写到一个树里不存在的域上，
+     * <p>路径非法<b>直接抛异常</b>而不是静默丢弃 —— 静默会把文档写到一个树里不存在的域上，
      * 结果是永远检索不到且不报错。</p>
      */
-    public static List<String> normalizeDomains(List<String> domains) {
-        Set<String> seen = new LinkedHashSet<>();
-        if (domains != null) {
-            for (String domain : domains) {
-                if (domain == null || domain.isBlank()) {
-                    continue;
-                }
-                String path = domain.trim();
-                String reason = Domains.validatePath(path);
-                if (reason != null) {
-                    throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER,
-                            "知识库文档的域不合法（" + reason + "）；须为从 " + Domains.DEFAULT
-                                    + " 出发的完整路径，如 default.sales");
-                }
-                seen.add(path);
-            }
+    public static String normalizeDomain(String domain) {
+        if (domain == null || domain.isBlank()) {
+            return Domains.DEFAULT;
         }
-        return seen.isEmpty() ? List.of(Domains.DEFAULT) : List.copyOf(seen);
+        String path = domain.trim();
+        String reason = Domains.validatePath(path);
+        if (reason != null) {
+            throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER,
+                    "知识库文档的域不合法（" + reason + "）；须为从 " + Domains.DEFAULT
+                            + " 出发的完整路径，如 default.sales");
+        }
+        return path;
+    }
+
+    /** 域 → 该域的知识库索引名 */
+    public static String indexOf(String domain) {
+        return KbIndexes.nameOf(normalizeDomain(domain));
+    }
+
+    /** 当前已存在的全部知识库索引（按名排序） */
+    public List<String> existingIndices() {
+        return EsIndexManager.listIndices(esClient, KbIndexes.WILDCARD);
     }
 
     /**
-     * 同步上传一个文档（不声明域 → 挂在根域 {@code default}，按累加语义全域可见）。
+     * 取某个索引的向量存储（按索引名缓存 —— 存储对象本身无状态，只是 client + indexName 的包装）。
+     */
+    public EmbeddingStore storeFor(String indexName) {
+        return storeCache.computeIfAbsent(indexName, name -> ElasticsearchEmbeddingStore.builder()
+                .client(esClient)
+                .indexName(name)
+                .configuration(ElasticsearchConfigurationScript.builder().build())
+                .build());
+    }
+
+    /**
+     * 索引不存在则按当前向量维度创建（幂等）。
+     */
+    public void ensureIndex(String indexName) {
+        EsIndexManager.createIndexWithIkMapping(esClient, indexName, modelHolder.effectiveEmbeddingDimension());
+    }
+
+    /**
+     * 取任一已存在索引的向量维度；没有任何索引时返回 {@code null}。
+     *
+     * <p>维度是全局的（只有一个向量模型），所以拿哪个索引读都一样。</p>
+     */
+    public Integer currentVectorDims() {
+        for (String index : existingIndices()) {
+            Integer dims = EsIndexManager.currentVectorDims(esClient, index);
+            if (dims != null) {
+                return dims;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 删除若干<b>域</b>各自的知识库索引（供删域时清理，先清索引再删域）。
+     *
+     * @return 实际存在并被删除的域标识
+     */
+    public List<String> deleteIndices(Collection<String> domains) {
+        if (domains == null || domains.isEmpty()) {
+            return List.of();
+        }
+        List<String> removed = new ArrayList<>();
+        for (String domain : domains) {
+            if (domain == null || domain.isBlank()) {
+                continue;
+            }
+            String index = KbIndexes.nameOf(domain.trim());
+            if (EsIndexManager.deleteIndex(esClient, index)) {
+                storeCache.remove(index);
+                removed.add(domain.trim());
+            }
+        }
+        if (!removed.isEmpty()) {
+            log.info("[知识库] 已删除 {} 个域的索引：{}", removed.size(), removed);
+        }
+        return List.copyOf(removed);
+    }
+
+    /**
+     * 重建全部知识库索引（诊断 → 删旧 → 按新维度建 mapping → 校验）。
+     *
+     * <p>语义是「删掉重建」，因此<b>索引会被清空，文档需重新上传</b>。什么时候需要它：
+     * 换了向量模型导致维度变化（ES 的向量维度是 mapping 参数，建好后无法修改，不重建就永远修不好），
+     * 或者想一把清空知识库。一个索引都没有时，重建会建出根域的索引。</p>
+     *
+     * @param dimensions 新索引的向量维度（取"三处同源"的公共取值点）
+     * @return 被重建的索引名
+     */
+    public List<String> rebuildAll(int dimensions) {
+        assertElasticsearchReachable();
+        List<String> existing = existingIndices();
+        List<String> targets = existing.isEmpty()
+                ? List.of(KbIndexes.nameOf(Domains.DEFAULT))
+                : existing;
+        log.info("[知识库] 开始重建 {} 个索引（维度 {}）：{}", targets.size(), dimensions, targets);
+        for (String index : targets) {
+            EsIndexManager.diagnoseElasticsearch(esClient, index);
+            EsIndexManager.deleteIndex(esClient, index);
+            EsIndexManager.createIndexWithIkMapping(esClient, index, dimensions);
+            EsIndexManager.writeAfterVerify(esClient, index);
+        }
+        storeCache.clear();
+        log.info("[知识库] 索引重建完成：{}", targets);
+        return targets;
+    }
+
+    private void assertElasticsearchReachable() {
+        try {
+            Boolean ok = esClient.ping().value();
+            if (ok == null || !ok) {
+                throw new IllegalStateException("ES ping 返回 false");
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
+                    "Elasticsearch 不可达：" + e.getMessage()
+                            + "（请检查管控台「存储配置」页的地址与账号密码）", e);
+        }
+    }
+
+    // ==================== 上传 ====================
+
+    /**
+     * 同步上传一个文档到根域 {@code default} 的索引（按累加语义对全树可见）。
+     */
+    public UploadResult upload(byte[] content, String fileName, boolean replace) {
+        return upload(content, fileName, replace, Domains.DEFAULT);
+    }
+
+    /**
+     * 同步上传一个文档，并指定它归属的域（即落到该域的索引里）。
+     *
+     * <p>域决定<b>哪些对话能检索到这份文档</b>：检索域 D 时只查 D 及其祖先链上的索引，
+     * 所以挂在某域 = 该域及其<b>全部后代域</b>都能检索到。检索工具本身仍由部署方用
+     * {@code @Tool} 暴露到哪些域，两层是叠加的。</p>
      *
      * @param content  文件字节
      * @param fileName 原始文件名（含扩展名）
-     * @param replace  {@code true} = 已存在同名文档时先删旧再写入；{@code false} = 直接拒绝
+     * @param replace  {@code true} = 该域索引内已存在同名文档时先删旧再写入；{@code false} = 直接拒绝
+     * @param domain   归属域（完整路径；留空 → 根域）
      */
-    public UploadResult upload(byte[] content, String fileName, boolean replace) {
-        return upload(content, fileName, replace, List.of());
-    }
-
-    /**
-     * 同步上传一个文档，并声明它的可用域。
-     *
-     * <p>域决定<b>哪些对话能检索到这份文档</b>。检索工具本身仍由部署方用 {@code @Tool} 暴露到哪些域，
-     * 两层是叠加的：工具不在该域 → 根本不会被调用；工具在该域 → 再按文档的域过滤内容。</p>
-     */
-    public UploadResult upload(byte[] content, String fileName, boolean replace, List<String> domains) {
+    public UploadResult upload(byte[] content, String fileName, boolean replace, String domain) {
         String name = requireSupported(fileName);
         if (content == null || content.length == 0) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED, "文件内容为空");
@@ -155,8 +277,8 @@ public class KnowledgeBaseService {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
                     "文件 " + name + " 超过大小上限：" + content.length + " 字节，上限 " + max + " 字节");
         }
-        List<String> effective = normalizeDomains(domains);
-        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，replace={}，可用域={}",
+        String effective = normalizeDomain(domain);
+        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，replace={}，域={}",
                 name, content.length, replace, effective);
 
         Future<UploadResult> future = submit(content, name, replace, effective);
@@ -176,9 +298,9 @@ public class KnowledgeBaseService {
     }
 
     /** 提交导入任务；队列满时明确拒绝，而不是无界堆积 */
-    private Future<UploadResult> submit(byte[] content, String fileName, boolean replace, List<String> domains) {
+    private Future<UploadResult> submit(byte[] content, String fileName, boolean replace, String domain) {
         try {
-            return ingestExecutor.submit(() -> ingest(content, fileName, replace, domains));
+            return ingestExecutor.submit(() -> ingest(content, fileName, replace, domain));
         } catch (RejectedExecutionException e) {
             log.warn("[知识库] 导入队列已满（容量 {}），拒绝本次上传：{}",
                     ragProperties.getIngestQueueCapacity(), fileName);
@@ -188,10 +310,129 @@ public class KnowledgeBaseService {
         }
     }
 
-    /** 已入库文档列表（按 doc_id 聚合出切片数；超出 {@link #LIST_MAX_SIZE} 的切片不计入展示） */
+    // ==================== 列表 / 删除 / 状态 ====================
+
+    /** 全部索引上的已入库文档（按 doc_id 聚合切片数；超出 {@link #LIST_MAX_SIZE} 的切片不计入展示） */
     public List<DocumentItem> list() {
-        String index = ragProperties.getIndexName();
-        if (!indexExists(index)) {
+        List<DocumentItem> all = new ArrayList<>();
+        for (String index : existingIndices()) {
+            all.addAll(listIndex(index));
+        }
+        return all;
+    }
+
+    /**
+     * 删除一个文档的全部切片，并释放其文件名（删除后同名可以再次上传）。
+     *
+     * <p>docId 里看不出它在哪个域，因此逐个索引找；命中即删并返回。</p>
+     *
+     * @return 是否命中并删除
+     */
+    public boolean delete(String docId) {
+        if (docId == null || docId.isBlank()) {
+            throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER, "docId 不能为空");
+        }
+        for (String index : existingIndices()) {
+            if (countByDocId(index, docId) > 0) {
+                deleteByDocId(index, docId);
+                log.info("[知识库] 已删除文档 docId={}（索引 {}，文件名随之释放）", docId, index);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 知识库状态：索引数、文档数、切片总数，以及每个索引的明细（域 → 索引 → 文档/切片）。
+     */
+    public Map<String, Object> status() {
+        List<Map<String, Object>> indices = new ArrayList<>();
+        int documents = 0;
+        int chunks = 0;
+        for (String index : existingIndices()) {
+            List<DocumentItem> items = listIndex(index);
+            int chunkCount = countAll(index);
+            documents += items.size();
+            chunks += chunkCount;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("index", index);
+            row.put("domain", items.isEmpty() ? null : items.get(0).domain());
+            row.put("documents", items.size());
+            row.put("chunks", chunkCount);
+            indices.add(row);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("indexCount", indices.size());
+        result.put("documents", documents);
+        result.put("chunks", chunks);
+        result.put("indices", indices);
+        return result;
+    }
+
+    // ==================== 内部实现 ====================
+
+    private UploadResult ingest(byte[] content, String fileName, boolean replace,
+                                String domain) throws InterruptedException {
+        // 串行锁在任务内部获取：排队等待不占用额外池线程，池大小可保持很小
+        if (!ingestPermit.tryAcquire(ragProperties.getIngestLockWaitSeconds(), TimeUnit.SECONDS)) {
+            throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
+                    "知识库导入繁忙：等待超过 " + ragProperties.getIngestLockWaitSeconds()
+                            + " 秒仍未拿到导入锁，请稍后重试");
+        }
+        String docId = null;
+        String index = indexOf(domain);
+        try {
+            ensureIndex(index);
+            String lowerName = lower(fileName);
+            List<DocumentItem> existing = listIndex(index).stream()
+                    .filter(d -> lowerName.equals(d.fileNameLower()))
+                    .toList();
+            if (!existing.isEmpty()) {
+                if (!replace) {
+                    throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_DOCUMENT_DUPLICATE,
+                            "域 " + domain + " 下已存在同名文档：" + fileName
+                                    + "（同名判定不区分大小写）。"
+                                    + "如需替换请带 replace=true，或先删除原文档");
+                }
+                for (DocumentItem old : existing) {
+                    deleteByDocId(index, old.docId());
+                }
+                log.info("[知识库] 覆盖更新：已清除域 {} 下同名旧文档 {} 个", domain, existing.size());
+            }
+
+            docId = UUID.randomUUID().toString();
+            Document doc = buildDocument(content, fileName, docId, lowerName, domain);
+            int processed = DocumentIngestor.ingestExternalDocuments(
+                    List.of(doc), esClient, index, storeFor(index), embeddingModel);
+            if (processed <= 0) {
+                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
+                        "文档未处理成功：" + fileName);
+            }
+            int chunks = countByDocId(index, docId);
+            if (chunks <= 0) {
+                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
+                        "导入后未写入任何片段，可能文档内容为空或向量化失败：" + fileName);
+            }
+            log.info("[知识库] 上传完成：文件={}，域={}，索引={}，docId={}，切片={}",
+                    fileName, domain, index, docId, chunks);
+            return new UploadResult(docId, fileName, content.length, chunks, domain);
+        } catch (KnowledgeBaseException e) {
+            rollback(index, docId);
+            throw e;
+        } catch (Exception e) {
+            rollback(index, docId);
+            throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
+                    "知识库文档导入失败：" + e.getMessage(), e);
+        } finally {
+            ingestPermit.release();
+        }
+    }
+
+    /**
+     * 读取单个索引里的文档条目（按 doc_id 聚合切片数）。
+     */
+    private List<DocumentItem> listIndex(String index) {
+        if (!EsIndexManager.exists(esClient, index)) {
             return List.of();
         }
         try {
@@ -203,7 +444,7 @@ public class KnowledgeBaseService {
 
             Map<String, String> idToName = new LinkedHashMap<>();
             Map<String, Integer> idToChunks = new LinkedHashMap<>();
-            Map<String, List<String>> idToDomains = new LinkedHashMap<>();
+            Map<String, String> idToDomain = new LinkedHashMap<>();
             for (Hit<Map> hit : resp.hits().hits()) {
                 Map<String, Object> md = metadataOf(hit.source());
                 if (md == null) {
@@ -215,155 +456,17 @@ public class KnowledgeBaseService {
                 }
                 idToName.putIfAbsent(docId, text(md.get("file_name")));
                 idToChunks.merge(docId, 1, Integer::sum);
-                idToDomains.putIfAbsent(docId, domainsOf(md));
+                idToDomain.putIfAbsent(docId, domainOf(md));
             }
             List<DocumentItem> items = new ArrayList<>();
             idToName.forEach((id, fileName) ->
-                    items.add(new DocumentItem(id, fileName, lower(fileName), idToChunks.getOrDefault(id, 0),
-                            idToDomains.getOrDefault(id, List.of(Domains.DEFAULT)))));
+                    items.add(new DocumentItem(id, fileName, lower(fileName),
+                            idToChunks.getOrDefault(id, 0),
+                            idToDomain.getOrDefault(id, Domains.DEFAULT))));
             return items;
         } catch (Exception e) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
-                    "读取知识库文档列表失败：" + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 删除一个文档的全部切片，并释放其文件名（删除后同名可以再次上传）。
-     *
-     * @return 是否命中并删除
-     */
-    public boolean delete(String docId) {
-        if (docId == null || docId.isBlank()) {
-            throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER, "docId 不能为空");
-        }
-        String index = ragProperties.getIndexName();
-        if (!indexExists(index) || countByDocId(index, docId) <= 0) {
-            return false;
-        }
-        deleteByDocId(index, docId);
-        log.info("[知识库] 已删除文档 docId={}（文件名随之释放）", docId);
-        return true;
-    }
-
-    /**
-     * 按域删除：清掉 {@code metadata.domains} 命中<b>任一</b>给定域的全部文档，返回被清空的 docId。
-     *
-     * <p>逐个删除并<b>逐个校验</b>残留为 0，任一个没删干净就抛异常中止 ——
-     * 调用方据此拒绝后续动作。删除前先按域统计命中，没有命中时是空操作。</p>
-     */
-    public List<String> deleteByDomains(Collection<String> domains) {
-        Set<String> targets = new LinkedHashSet<>();
-        if (domains != null) {
-            for (String domain : domains) {
-                if (domain != null && !domain.isBlank()) {
-                    targets.add(domain.trim());
-                }
-            }
-        }
-        if (targets.isEmpty()) {
-            return List.of();
-        }
-        String index = ragProperties.getIndexName();
-        if (!indexExists(index)) {
-            return List.of();
-        }
-        List<String> hit = list().stream()
-                .filter(item -> item.domains().stream().anyMatch(targets::contains))
-                .map(DocumentItem::docId)
-                .toList();
-        if (hit.isEmpty()) {
-            return List.of();
-        }
-        List<String> removed = new ArrayList<>();
-        for (String docId : hit) {
-            deleteByDocId(index, docId);
-            if (countByDocId(index, docId) > 0) {
-                // 已删掉的部分无法复原，因此这里必须中止并让调用方知晓：
-                // 继续往下只会把"删了一半"当成成功
-                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
-                        "删除知识库文档未清干净，仍残留片段：docId=" + docId
-                                + "（已删除 " + removed.size() + " 个，请重试或手工清理）");
-            }
-            removed.add(docId);
-        }
-        log.info("[知识库] 按域删除完成：命中 {} 个文档，已清空 {} 个，域={}",
-                hit.size(), removed.size(), targets);
-        return List.copyOf(removed);
-    }
-
-    /** 索引状态：是否存在、切片总数、文档数（切片总数用 count 精确取，不受列表上限影响） */
-    public Map<String, Object> status() {
-        String index = ragProperties.getIndexName();
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("index", index);
-        boolean exists = indexExists(index);
-        result.put("indexExists", exists);
-        if (!exists) {
-            result.put("documents", 0);
-            result.put("chunks", 0);
-            result.put("hint", "索引不存在，上传文档或触发重建后会自动创建");
-            return result;
-        }
-        result.put("documents", list().size());
-        result.put("chunks", countAll(index));
-        return result;
-    }
-
-    // ==================== 内部实现 ====================
-
-    private UploadResult ingest(byte[] content, String fileName, boolean replace,
-                                List<String> domains) throws InterruptedException {
-        // 串行锁在任务内部获取：排队等待不占用额外池线程，池大小可保持很小
-        if (!ingestPermit.tryAcquire(ragProperties.getIngestLockWaitSeconds(), TimeUnit.SECONDS)) {
-            throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
-                    "知识库导入繁忙：等待超过 " + ragProperties.getIngestLockWaitSeconds()
-                            + " 秒仍未拿到导入锁，请稍后重试");
-        }
-        String docId = null;
-        String index = null;
-        try {
-            index = ensureIndex();
-            String lowerName = lower(fileName);
-            List<DocumentItem> existing = list().stream()
-                    .filter(d -> lowerName.equals(d.fileNameLower()))
-                    .toList();
-            if (!existing.isEmpty()) {
-                if (!replace) {
-                    throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_DOCUMENT_DUPLICATE,
-                            "已存在同名文档：" + fileName + "（同名判定不区分大小写）。"
-                                    + "如需替换请带 replace=true，或先删除原文档");
-                }
-                for (DocumentItem old : existing) {
-                    deleteByDocId(index, old.docId());
-                }
-                log.info("[知识库] 覆盖更新：已清除同名旧文档 {} 个", existing.size());
-            }
-
-            docId = UUID.randomUUID().toString();
-            Document doc = buildDocument(content, fileName, docId, lowerName, domains);
-            int processed = DocumentIngestor.ingestExternalDocuments(
-                    List.of(doc), esClient, index, embeddingStore, embeddingModel);
-            if (processed <= 0) {
-                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
-                        "文档未处理成功：" + fileName);
-            }
-            int chunks = countByDocId(index, docId);
-            if (chunks <= 0) {
-                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
-                        "导入后未写入任何片段，可能文档内容为空或向量化失败：" + fileName);
-            }
-            log.info("[知识库] 上传完成：文件={}，docId={}，切片={}", fileName, docId, chunks);
-            return new UploadResult(docId, fileName, content.length, chunks);
-        } catch (KnowledgeBaseException e) {
-            rollback(index, docId);
-            throw e;
-        } catch (Exception e) {
-            rollback(index, docId);
-            throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
-                    "知识库文档导入失败：" + e.getMessage(), e);
-        } finally {
-            ingestPermit.release();
+                    "读取知识库索引[" + index + "]文档列表失败：" + e.getMessage(), e);
         }
     }
 
@@ -382,48 +485,30 @@ public class KnowledgeBaseService {
         }
     }
 
-    /** 索引不存在则创建（维度取三处同源的公共取值点） */
-    private String ensureIndex() {
-        String index = ragProperties.getIndexName();
-        int dimensions = modelHolder.effectiveEmbeddingDimension();
-        EsIndexManager.createIndexWithIkMapping(esClient, index, dimensions);
-        return index;
-    }
-
     private Document buildDocument(byte[] content, String fileName, String docId,
-                                   String lowerName, List<String> domains) {
+                                   String lowerName, String domain) {
         Document doc = Document.from(new String(content, StandardCharsets.UTF_8));
         Metadata md = doc.metadata();
         md.put("file_name", fileName);
         md.put("file_name_lower", lowerName);
         md.put("doc_id", docId);
         md.put("upload_time", Instant.now().toString());
-        // 列表是 ES 过滤需要的形态；Metadata 没有 put(String,Object) 重载，只能走 putAll
+        // 归属域只用于管控台展示与排查；检索的域边界由「查哪个索引」保证
         Map<String, Object> extra = new LinkedHashMap<>();
-        extra.put("domains", domains);
+        extra.put(EsIndexManager.DOMAIN_FIELD, domain);
         md.putAll(extra);
         return doc;
     }
 
     /**
-     * 读取切片元数据里的可用域；与工具声明同构：没有该字段（或为空）即挂在根域 {@code default}。
+     * 读取切片元数据里的归属域；字段缺失或为空时按根域算（历史数据与"未声明"同义）。
      */
-    static List<String> domainsOf(Map<String, Object> md) {
-        Object raw = md.get("domains");
-        if (raw instanceof List<?> list) {
-            List<String> out = new ArrayList<>();
-            for (Object value : list) {
-                if (value != null && !value.toString().isBlank()) {
-                    out.add(value.toString());
-                }
-            }
-            if (!out.isEmpty()) {
-                return List.copyOf(out);
-            }
-        } else if (raw != null && !raw.toString().isBlank()) {
-            return List.of(raw.toString());
+    static String domainOf(Map<String, Object> md) {
+        Object raw = md.get(EsIndexManager.DOMAIN_FIELD);
+        if (raw != null && !raw.toString().isBlank()) {
+            return raw.toString();
         }
-        return List.of(Domains.DEFAULT);
+        return Domains.DEFAULT;
     }
 
     /** 校验扩展名在白名单内，返回去空白的文件名 */
@@ -476,15 +561,6 @@ public class KnowledgeBaseService {
         } catch (Exception e) {
             log.warn("[知识库] 统计索引总片段数失败（index={}）: {}", index, e.getMessage());
             return 0;
-        }
-    }
-
-    private boolean indexExists(String index) {
-        try {
-            return esClient.indices().exists(e -> e.index(index)).value();
-        } catch (Exception e) {
-            log.warn("[知识库] 判断索引是否存在失败（index={}）: {}", index, e.getMessage());
-            return false;
         }
     }
 

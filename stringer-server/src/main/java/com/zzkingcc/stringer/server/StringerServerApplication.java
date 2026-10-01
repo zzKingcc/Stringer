@@ -1,12 +1,12 @@
 package com.zzkingcc.stringer.server;
 
 import ch.qos.logback.classic.Logger;
+import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.server.env.RuntimeEnvironment;
 import com.zzkingcc.stringer.server.env.StorageLocations;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -53,9 +53,6 @@ public class StringerServerApplication {
     private final com.zzkingcc.stringer.server.auth.AccountStore accountStore;
     private final StorageLocations storageLocations;
 
-    @Value("${stringer.rag.index-name:}")
-    private String indexName;
-
     public StringerServerApplication(ToolRouter toolRouter,
                                      com.zzkingcc.stringer.server.settings.InfraSettingsHolder infraHolder,
                                      com.zzkingcc.stringer.server.auth.AccountStore accountStore,
@@ -91,8 +88,8 @@ public class StringerServerApplication {
                 toolRouter.getToolDescriptors().size(),
                 toolRouter.getToolsRequiringApproval().size());
         log.info("  工具域      : {}", toolRouter.getKnownProfiles());
-        log.info("  Elasticsearch: {}   索引 {}{}", infra.getEs().describe(), indexName,
-                infraHolder.isEsConfigured() ? "" : "   ← 未配置，请到管控台「存储配置」页填写");
+        log.info("  Elasticsearch: {}   知识库索引 {}{}", infra.getEs().describe(), KbIndexes.WILDCARD,
+                infraHolder.isEsConfigured() ? "（一域一索引，按需创建）" : "   ← 未配置，请到管控台「存储配置」页填写");
         log.info("  Redis        : {}{}", infra.getRedis().describe(),
                 infraHolder.isRedisConfigured() ? "" : "   ← 未配置，请到管控台「存储配置」页填写");
         logFileStatus(logPath);

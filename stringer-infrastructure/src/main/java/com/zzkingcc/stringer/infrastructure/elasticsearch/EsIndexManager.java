@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,17 +22,55 @@ import java.util.Map;
 public class EsIndexManager {
 
     /**
-     * 切片元数据里"可用域"的字段名（与 {@code @Tool(domains = {...})} 同构：完整路径域）。
+     * 切片元数据里"所属域"的字段名（完整路径域，单个值）。
      *
-     * <p>必须是 {@code keyword}：动态映射会把它变成 {@code text}（默认分词器），
-     * 域名会被切开，{@code terms} 过滤就永远匹配不上。</p>
+     * <p>索引本身已经是<b>一域一索引</b>，检索不再靠这个字段过滤；它只用于管控台列表展示，
+     * 以及索引名无法反查域路径（名里是哈希）时仍能读出归属。必须是 {@code keyword}。</p>
      */
-    public static final String DOMAINS_FIELD = "domains";
-
-    /** ES 查询路径 */
-    public static final String DOMAINS_QUERY_FIELD = "metadata." + DOMAINS_FIELD;
+    public static final String DOMAIN_FIELD = "domain";
 
     private EsIndexManager() {}
+
+    /** 索引是否存在 */
+    public static boolean exists(ElasticsearchClient esClient, String indexName) {
+        try {
+            return esClient.indices().exists(e -> e.index(indexName)).value();
+        } catch (Exception e) {
+            log.warn("[ES] 判断索引[{}]是否存在失败: {}", indexName, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 列出匹配 {@code pattern}（支持通配）的索引名，按字典序返回；一个都没有时返回空列表。
+     */
+    public static List<String> listIndices(ElasticsearchClient esClient, String pattern) {
+        try {
+            var resp = esClient.indices().get(g -> g.index(pattern).ignoreUnavailable(true).allowNoIndices(true));
+            return resp.indices().keySet().stream().sorted().toList();
+        } catch (Exception e) {
+            log.warn("[ES] 枚举索引[{}]失败: {}", pattern, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 删除单个索引；不存在视为成功。
+     *
+     * @return 是否确实删掉了一个已存在的索引
+     */
+    public static boolean deleteIndex(ElasticsearchClient esClient, String indexName) {
+        try {
+            if (!exists(esClient, indexName)) {
+                return false;
+            }
+            esClient.indices().delete(d -> d.index(indexName));
+            log.info("[ES] 已删除索引: {}", indexName);
+            return true;
+        } catch (Exception e) {
+            throw new IllegalStateException("删除索引[" + indexName + "]失败：" + e.getMessage(), e);
+        }
+    }
 
     /** 启动诊断：输出 ES 版本、集群健康、索引存在性及字段结构 */
     public static void diagnoseElasticsearch(ElasticsearchClient esClient, String indexName) {
@@ -78,19 +117,6 @@ public class EsIndexManager {
         }
     }
 
-    /** 按需删除旧索引 */
-    public static void deleteIndexIfNeeded(ElasticsearchClient esClient, String indexName, boolean deleteOnStartup) {
-        if (!deleteOnStartup) return;
-        try {
-            if (esClient.indices().exists(r -> r.index(indexName)).value()) {
-                esClient.indices().delete(d -> d.index(indexName));
-                log.warn("[ES] 已删除旧索引: {}", indexName);
-            }
-        } catch (Exception e) {
-            log.warn("[ES] 删除旧索引[{}]失败，将继续重建流程：{}", indexName, e.getMessage());
-        }
-    }
-
     /**
      * 读取索引当前的向量维度。
      */
@@ -126,13 +152,11 @@ public class EsIndexManager {
                 if (current != null && current != dims) {
                     log.error("[ES] 索引[{}]已存在且向量维度不一致：现有 mapping dims={}，当前配置需要 {}。"
                                     + "写入会因维度不符被拒绝，需删除索引后重建"
-                                    + "（管控台「知识库」页点「重建索引」，或置 stringer.rag.es.delete-on-startup=true 后重启）。",
+                                    + "（管控台「知识库」页点「触发重建」）。",
                             indexName, current, dims);
                 } else {
                     log.info("[ES] 索引[{}]已存在（mapping dims={}），跳过创建IK mapping", indexName, current);
                 }
-                // 存量索引补字段：domains 是新增的（知识库按域检索），mapping 允许加新字段，不允许改旧字段类型
-                ensureDomainsMapping(esClient, indexName);
                 return;
             }
 
@@ -165,7 +189,7 @@ public class EsIndexManager {
                               "file_name":     { "type": "keyword" },
                               "section_title": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
                               "content_hash":  { "type": "keyword" },
-                              "domains":       { "type": "keyword" }
+                              "domain":        { "type": "keyword" }
                             }
                           }
                         }
@@ -194,36 +218,6 @@ public class EsIndexManager {
                     原始原因：{}
                     ===============================================
                     """, indexName, e.getMessage());
-        }
-    }
-
-    /**
-     * 存量索引补 {@code metadata.domains} 字段（知识库按域检索需要）。
-     *
-     * <p>为什么必须显式声明为 {@code keyword}：靠动态映射的话字符串会被映射成 {@code text}
-     * （默认分词器），域名被切开后 {@code terms} 就永远匹配不上。
-     * 加字段是 ES 允许的操作（改已有字段类型才不允许）。</p>
-     */
-    private static void ensureDomainsMapping(ElasticsearchClient esClient, String indexName) {
-        try {
-            var state = esClient.indices().get(g -> g.index(indexName)).get(indexName);
-            if (state != null && state.mappings() != null && state.mappings().properties() != null) {
-                Property metadata = state.mappings().properties().get("metadata");
-                if (metadata != null && metadata.isObject()
-                        && metadata.object().properties().containsKey(DOMAINS_FIELD)) {
-                    return;
-                }
-            }
-            esClient.indices().putMapping(p -> p
-                    .index(indexName)
-                    .withJson(new java.io.StringReader(
-                            "{\"properties\":{\"metadata\":{\"type\":\"object\","
-                                    + "\"properties\":{\"" + DOMAINS_FIELD + "\":{\"type\":\"keyword\"}}}}}")));
-            log.info("[ES] 索引[{}] 已补上 metadata.domains(keyword) 字段（知识库按域检索需要）", indexName);
-        } catch (Exception e) {
-            // 补字段失败不该阻断启动：过滤条件仍会生效，只是"全域可见"的文档可能查不到，留日志可查
-            log.warn("[ES] 索引[{}] 补充 metadata.domains 字段失败，按域检索可能过滤不到文档: {}",
-                    indexName, e.getMessage());
         }
     }
 

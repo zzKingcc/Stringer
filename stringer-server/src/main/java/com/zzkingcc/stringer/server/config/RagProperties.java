@@ -7,30 +7,16 @@ import org.springframework.util.unit.DataSize;
 import java.util.List;
 
 /**
- * 向量索引与知识库上传配置（平台自有，统一前缀 {@code stringer.rag}）。
+ * 知识库上传配置（平台自有，统一前缀 {@code stringer.rag}）。
+ *
+ * <p>知识库索引是<b>一域一索引</b>，索引名由域路径确定性派生（见 {@code KbIndexes}），
+ * 因此这里不再有「索引名」配置 —— 索引在首次上传时按需创建。</p>
+ *
  * @author zzkingcc
  */
 @Data
 @ConfigurationProperties(prefix = "stringer.rag")
 public class RagProperties {
-
-    /** 索引名；必须与 yaml 的 {@code stringer.rag.index-name} 一致，否则 yaml 未显式配置时会落到另一个索引上 */
-    private String indexName = "stringer_knowledge";
-
-    /**
-     * 启动建索引时是否先删除旧索引。
-     */
-    private boolean deleteOnStartup = false;
-
-    /**
-     * 是否在启动阶段建索引（{@code false} 则完全跳过）。
-     */
-    private boolean bootstrapEnabled = true;
-
-    /**
-     * 启动建索引是否严格（fail-fast）。
-     */
-    private boolean bootstrapStrict = false;
 
     /**
      * 单个上传文件的大小上限（默认 10MB）。

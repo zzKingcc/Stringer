@@ -106,6 +106,20 @@ stringer:
     # 导入失败等不阻断启动：索引完全是运行期按需建出来的
     ingest-pool-size: 2
     ingest-queue-capacity: 16
+    # 上传白名单：本轮只支持纯文本
+    allowed-extensions:
+      - txt
+    # 切片参数（只这三项可调，其余阈值都是代码常量）
+    # max-chars 是长度上限而不是固定长度：撞到标题就提前断、整段不足就是实际字数
+    chunking:
+      max-chars: 400
+      overlap-sentences: 1
+      min-chars: 60
+
+  # 切片预览文件的落盘目录（与 config / logs 同级）
+  # 上传完成后把该文档的全部切片写成一个 UTF-8 txt，管控台只展示这个路径，不提供在线查看。
+  export:
+    path: ${STRINGER_EXPORT_PATH:/var/lib/stringer/chunks}
 
   logging:
     path: ${STRINGER_LOG_PATH:/var/log/stringer}

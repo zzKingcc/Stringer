@@ -22,14 +22,14 @@ public interface DocumentProcessStrategy {
      * @param embeddingStore 
      * @param embeddingModel 
      * @param sourceTag      来源标签（"本地"/"外部"）
-     * @return 
+     * @return 处理报告（文档数 + 切片诊断计数）
      */
-    int process(List<Document> documents,
-                ElasticsearchClient esClient,
-                String indexName,
-                EmbeddingStore embeddingStore,
-                EmbeddingModel embeddingModel,
-                String sourceTag);
+    IngestReport process(List<Document> documents,
+                         ElasticsearchClient esClient,
+                         String indexName,
+                         EmbeddingStore embeddingStore,
+                         EmbeddingModel embeddingModel,
+                         String sourceTag);
 
     /**
      * @return 本策略支持的文件扩展名集合（小写，不含点），用于工厂匹配

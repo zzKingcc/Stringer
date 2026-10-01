@@ -10,6 +10,8 @@ import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.infrastructure.ingestion.DocumentIngestor;
+import com.zzkingcc.stringer.infrastructure.ingestion.processor.IngestReport;
+import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtNormalizer;
 import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.settings.LlmModelHolder;
 import dev.langchain4j.data.document.Document;
@@ -23,7 +25,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -67,6 +68,7 @@ public class KnowledgeBaseService {
     private final EmbeddingModel embeddingModel;
     private final RagProperties ragProperties;
     private final LlmModelHolder modelHolder;
+    private final ChunkExporter chunkExporter;
     private final ThreadPoolExecutor ingestExecutor;
     private final Semaphore ingestPermit = new Semaphore(1);
 
@@ -76,11 +78,13 @@ public class KnowledgeBaseService {
     public KnowledgeBaseService(@Qualifier("stringerElasticsearchClient") ElasticsearchClient esClient,
                                 @Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
                                 RagProperties ragProperties,
-                                LlmModelHolder modelHolder) {
+                                LlmModelHolder modelHolder,
+                                ChunkExporter chunkExporter) {
         this.esClient = esClient;
         this.embeddingModel = embeddingModel;
         this.ragProperties = ragProperties;
         this.modelHolder = modelHolder;
+        this.chunkExporter = chunkExporter;
         AtomicLong seq = new AtomicLong();
         this.ingestExecutor = new ThreadPoolExecutor(
                 ragProperties.getIngestPoolSize(),
@@ -104,12 +108,22 @@ public class KnowledgeBaseService {
         ingestExecutor.shutdown();
     }
 
-    /** 上传结果 */
-    public record UploadResult(String docId, String fileName, long size, int chunks, String domain) {}
+    /**
+     * 上传结果。
+     *
+     * @param encoding     实际识别到的源文件编码（全链路统一 UTF-8 后，这个值只作诊断）
+     * @param sections     识别到的标题数
+     * @param droppedLines 清洗阶段删掉的行数
+     * @param exportPath   切片预览 txt 的落盘路径（导出失败时为 null）
+     */
+    public record UploadResult(String docId, String fileName, long size, int chunks, String domain,
+                               int sections, int droppedLines, String encoding, String exportPath) {
+    }
 
     /** 索引内已入库的文档条目 */
     public record DocumentItem(String docId, String fileName, String fileNameLower,
-                               int chunks, String domain) {}
+                               int chunks, String domain, String exportPath) {
+    }
 
     // ==================== 域 → 索引 ====================
 
@@ -278,10 +292,13 @@ public class KnowledgeBaseService {
                     "文件 " + name + " 超过大小上限：" + content.length + " 字节，上限 " + max + " 字节");
         }
         String effective = normalizeDomain(domain);
-        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，replace={}，域={}",
-                name, content.length, replace, effective);
+        // 统一字符集只在这一处做一次：字节 → UTF-8 文本，后面全链路只处理 UTF-8。
+        // 放在提交任务之前，是为了在拿导入锁之前就把"编码判不出"这类问题拒掉。
+        TxtNormalizer.Decoded decoded = TxtNormalizer.decode(content);
+        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，编码={}，replace={}，域={}",
+                name, content.length, decoded.encoding(), replace, effective);
 
-        Future<UploadResult> future = submit(content, name, replace, effective);
+        Future<UploadResult> future = submit(decoded, content.length, name, replace, effective);
         try {
             return future.get();
         } catch (InterruptedException e) {
@@ -298,9 +315,10 @@ public class KnowledgeBaseService {
     }
 
     /** 提交导入任务；队列满时明确拒绝，而不是无界堆积 */
-    private Future<UploadResult> submit(byte[] content, String fileName, boolean replace, String domain) {
+    private Future<UploadResult> submit(TxtNormalizer.Decoded decoded, long size,
+                                        String fileName, boolean replace, String domain) {
         try {
-            return ingestExecutor.submit(() -> ingest(content, fileName, replace, domain));
+            return ingestExecutor.submit(() -> ingest(decoded, size, fileName, replace, domain));
         } catch (RejectedExecutionException e) {
             log.warn("[知识库] 导入队列已满（容量 {}），拒绝本次上传：{}",
                     ragProperties.getIngestQueueCapacity(), fileName);
@@ -335,7 +353,8 @@ public class KnowledgeBaseService {
         for (String index : existingIndices()) {
             if (countByDocId(index, docId) > 0) {
                 deleteByDocId(index, docId);
-                log.info("[知识库] 已删除文档 docId={}（索引 {}，文件名随之释放）", docId, index);
+                chunkExporter.deleteByDocId(docId);
+                log.info("[知识库] 已删除文档 docId={}（索引 {}，文件名随之释放，切片预览文件一并清除）", docId, index);
                 return true;
             }
         }
@@ -371,8 +390,8 @@ public class KnowledgeBaseService {
 
     // ==================== 内部实现 ====================
 
-    private UploadResult ingest(byte[] content, String fileName, boolean replace,
-                                String domain) throws InterruptedException {
+    private UploadResult ingest(TxtNormalizer.Decoded decoded, long size, String fileName,
+                                boolean replace, String domain) throws InterruptedException {
         // 串行锁在任务内部获取：排队等待不占用额外池线程，池大小可保持很小
         if (!ingestPermit.tryAcquire(ragProperties.getIngestLockWaitSeconds(), TimeUnit.SECONDS)) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
@@ -396,15 +415,16 @@ public class KnowledgeBaseService {
                 }
                 for (DocumentItem old : existing) {
                     deleteByDocId(index, old.docId());
+                    chunkExporter.deleteByDocId(old.docId());
                 }
                 log.info("[知识库] 覆盖更新：已清除域 {} 下同名旧文档 {} 个", domain, existing.size());
             }
 
             docId = UUID.randomUUID().toString();
-            Document doc = buildDocument(content, fileName, docId, lowerName, domain);
-            int processed = DocumentIngestor.ingestExternalDocuments(
+            Document doc = buildDocument(decoded.text(), fileName, docId, lowerName, domain);
+            IngestReport report = DocumentIngestor.ingestExternalDocuments(
                     List.of(doc), esClient, index, storeFor(index), embeddingModel);
-            if (processed <= 0) {
+            if (report.documents() <= 0) {
                 throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
                         "文档未处理成功：" + fileName);
             }
@@ -413,9 +433,16 @@ public class KnowledgeBaseService {
                 throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
                         "导入后未写入任何片段，可能文档内容为空或向量化失败：" + fileName);
             }
-            log.info("[知识库] 上传完成：文件={}，域={}，索引={}，docId={}，切片={}",
-                    fileName, domain, index, docId, chunks);
-            return new UploadResult(docId, fileName, content.length, chunks, domain);
+            // 切片预览：读回索引里真正入库的切片写成 txt，管控台只展示这个路径。
+            // 导出失败不算上传失败 —— 它只是给人核对用的辅助产物。
+            java.nio.file.Path exported = chunkExporter.export(index, docId, fileName, domain);
+            String exportPath = exported == null ? null : exported.toAbsolutePath().toString();
+
+            log.info("[知识库] 上传完成：文件={}，域={}，索引={}，docId={}，切片={}，标题={}，删噪={} 行，编码={}",
+                    fileName, domain, index, docId, chunks, report.sections(), report.droppedLines(),
+                    decoded.encoding());
+            return new UploadResult(docId, fileName, size, chunks, domain,
+                    report.sections(), report.droppedLines(), decoded.encoding(), exportPath);
         } catch (KnowledgeBaseException e) {
             rollback(index, docId);
             throw e;
@@ -462,7 +489,8 @@ public class KnowledgeBaseService {
             idToName.forEach((id, fileName) ->
                     items.add(new DocumentItem(id, fileName, lower(fileName),
                             idToChunks.getOrDefault(id, 0),
-                            idToDomain.getOrDefault(id, Domains.DEFAULT))));
+                            idToDomain.getOrDefault(id, Domains.DEFAULT),
+                            exportPathOf(fileName, id))));
             return items;
         } catch (Exception e) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
@@ -485,9 +513,9 @@ public class KnowledgeBaseService {
         }
     }
 
-    private Document buildDocument(byte[] content, String fileName, String docId,
+    private Document buildDocument(String text, String fileName, String docId,
                                    String lowerName, String domain) {
-        Document doc = Document.from(new String(content, StandardCharsets.UTF_8));
+        Document doc = Document.from(text == null ? "" : text);
         Metadata md = doc.metadata();
         md.put("file_name", fileName);
         md.put("file_name_lower", lowerName);
@@ -498,6 +526,16 @@ public class KnowledgeBaseService {
         extra.put(EsIndexManager.DOMAIN_FIELD, domain);
         md.putAll(extra);
         return doc;
+    }
+
+    /** 该文档的切片预览文件路径；文件不存在时返回 {@code null}（管控台只展示真实存在的路径） */
+    private String exportPathOf(String fileName, String docId) {
+        try {
+            java.nio.file.Path path = chunkExporter.pathOf(fileName, docId);
+            return java.nio.file.Files.exists(path) ? path.toAbsolutePath().toString() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

@@ -21,16 +21,16 @@ public class UnknownDocumentProcessStrategy implements DocumentProcessStrategy {
     }
 
     @Override
-    public int process(List<Document> documents,
-                       ElasticsearchClient esClient,
-                       String indexName,
-                       EmbeddingStore embeddingStore,
-                       EmbeddingModel embeddingModel,
-                       String sourceTag) {
+    public IngestReport process(List<Document> documents,
+                                ElasticsearchClient esClient,
+                                String indexName,
+                                EmbeddingStore embeddingStore,
+                                EmbeddingModel embeddingModel,
+                                String sourceTag) {
         int docCount = documents.size();
         log.info("[分片写入-{}][{}] ⚠ 共[{}]个文件的扩展名未识别或未识别，当前版本暂不支持该类型，已跳过。",
                 sourceTag, strategyName(), docCount);
-        return 0;
+        return IngestReport.EMPTY;
     }
 
     @Override

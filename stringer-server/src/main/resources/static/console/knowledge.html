@@ -32,7 +32,7 @@
                 同名文档<b>不区分大小写</b>，默认拒绝；勾选「覆盖更新」则先删旧再写入。
             </p>
             <div class="btn-row">
-                <input type="file" id="fileInput" accept=".md,.txt,.markdown,.text">
+                <input type="file" id="fileInput" accept=".txt">
                 <label class="hint" style="margin:0;">
                     <input type="checkbox" id="replaceChk"> 覆盖更新（已存在同名时替换）
                 </label>
@@ -143,14 +143,22 @@
                     + '<td>' + esc(d.fileName || '') + '</td>'
                     + '<td>' + domainLabel(d.domain) + '</td>'
                     + '<td>' + (d.chunks || 0) + '</td>'
+                    + '<td>' + (d.exportPath
+                        ? '<code class="path" title="点击复制">' + esc(d.exportPath) + '</code>'
+                        : '<span class="hint">—</span>') + '</td>'
                     + '<td><button class="danger" data-doc="' + esc(d.docId || '') + '">删除</button></td>'
                     + '</tr>';
             }).join('');
             box.className = '';
-            box.innerHTML = '<table><thead><tr><th>docId</th><th>文件名</th><th>归属域</th><th>切片数</th><th>操作</th>'
+            box.innerHTML = '<table><thead><tr><th>docId</th><th>文件名</th><th>归属域</th><th>切片数</th><th>切片文件</th><th>操作</th>'
                 + '</tr></thead><tbody>' + rows + '</tbody></table>';
             box.querySelectorAll('button[data-doc]').forEach(function (btn) {
                 btn.addEventListener('click', function () { removeDoc(btn.getAttribute('data-doc')); });
+            });
+            box.querySelectorAll('code.path').forEach(function (code) {
+                code.addEventListener('click', function () {
+                    if (navigator.clipboard) { navigator.clipboard.writeText(code.textContent); }
+                });
             });
         }).catch(function (e) {
             box.className = 'hint';

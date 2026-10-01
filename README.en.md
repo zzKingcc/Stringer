@@ -74,11 +74,11 @@
 
 The Stringer server is a **platform-neutral single-file fat JAR**: one build artifact runs directly with `java -jar` on Linux, Windows and macOS (and other Unix-like systems) — no per-target rebuild.
 
-- **OS detection at startup**: `RuntimeEnvironment` reads `System.getProperty("os.name")` before Spring wires up, picks the config and log directories for the detected OS family, and creates them up front.
-  - Linux / other Unix: `/var/lib/stringer/config`, `/var/log/stringer`
-  - Windows: `%ProgramData%\Stringer\config`, `%ProgramData%\Stringer\logs`
-  - macOS: `/Library/Application Support/Stringer/config`, `/Library/Logs/Stringer`
-- **Override precedence**: CLI `--key` ＞ JVM system property `-Dkey` ＞ env var `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` ＞ platform default.
+- **OS detection at startup**: `RuntimeEnvironment` reads `System.getProperty("os.name")` before Spring wires up, picks the config / log / chunk-export directories for the detected OS family, and creates them up front.
+  - Linux / other Unix: `/var/lib/stringer/config`, `/var/log/stringer`, `/var/lib/stringer/chunks`
+  - Windows: `%ProgramData%\Stringer\config`, `%ProgramData%\Stringer\logs`, `%ProgramData%\Stringer\chunks`
+  - macOS: `/Library/Application Support/Stringer/config`, `/Library/Logs/Stringer`, `/Library/Application Support/Stringer/chunks`
+- **Override precedence**: CLI `--key` ＞ JVM system property `-Dkey` ＞ env var `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` / `STRINGER_EXPORT_PATH` ＞ platform default.
 - **Containers**: for Docker / K8s just swap the base image (e.g. `eclipse-temurin:21-jre`); the JAR stays the same. The container runtime (kubernetes / docker / podman) is shown on the startup banner for easier troubleshooting.
 
 ## Quick start

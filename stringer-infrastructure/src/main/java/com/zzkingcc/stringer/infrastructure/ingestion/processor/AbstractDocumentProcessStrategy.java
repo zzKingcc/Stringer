@@ -41,17 +41,18 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
     private static final int EMBEDDING_BATCH_SIZE = 25;
 
     @Override
-    public final int process(List<Document> documents,
-                             ElasticsearchClient esClient,
-                             String indexName,
-                             EmbeddingStore embeddingStore,
-                             EmbeddingModel embeddingModel,
-                             String sourceTag) {
+    public final IngestReport process(List<Document> documents,
+                                      ElasticsearchClient esClient,
+                                      String indexName,
+                                      EmbeddingStore embeddingStore,
+                                      EmbeddingModel embeddingModel,
+                                      String sourceTag) {
         int docCount = documents.size();
         log.info("[分片写入-{}][{}] 开始处理 {} 个文档", sourceTag, strategyName(), docCount);
 
         // 1. 分片（子类实现差异化逻辑）
-        List<TextSegment> allSegments = splitDocuments(documents);
+        SplitResult split = splitDocuments(documents);
+        List<TextSegment> allSegments = split.segments();
         log.info("[分片写入-{}][{}] 分片完成：{} 个文档 → {} 个 TextSegment，" +
                         "最小字符 {}，最大字符 {}，平均字符 {}",
                 sourceTag, strategyName(), docCount, allSegments.size(),
@@ -59,17 +60,16 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
                 allSegments.stream().mapToInt(s -> s.text().length()).max().orElse(0),
                 allSegments.stream().mapToInt(s -> s.text().length()).average().orElse(0d));
 
+        IngestReport report = new IngestReport(docCount, split.sections(), split.droppedLines());
+
         if (allSegments.isEmpty()) {
             log.warn("[分片写入-{}][{}] 分片结果为空，跳过后续流程", sourceTag, strategyName());
-            return docCount;
+            return report;
         }
 
-        // 2. 根据内容生成唯一 content_hash
+        // 2. 根据切片正文生成唯一 content_hash（不含文件名 —— 改了文件名重传也该去重）
         for (TextSegment seg : allSegments) {
-            String hash = computeContentHash(
-                    seg.metadata().getString("file_name"),
-                    seg.metadata().getString("section_title"),
-                    seg.text());
+            String hash = computeContentHash(seg.text());
             seg.metadata().put("content_hash", hash);
         }
 
@@ -101,7 +101,7 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
 
         if (newSegments.isEmpty()) {
             log.info("[分片写入-{}][{}] 去重后无新增片段，跳过写入", sourceTag, strategyName());
-            return docCount;
+            return report;
         }
 
         // 5. 分批向量化 + 写入（受 text-embedding-v2 单次请求最大 25 行限制）
@@ -131,24 +131,24 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
                     "向量化写入失败：" + e.getMessage(), e);
         }
 
-        return docCount;
+        return report;
     }
 
     /**
-     * 子类实现：将文档列表切分为文本片段
+     * 子类实现：将文档列表切分为文本片段，并带回切片诊断计数
      */
-    protected abstract List<TextSegment> splitDocuments(List<Document> documents);
+    protected abstract SplitResult splitDocuments(List<Document> documents);
 
     /**
-     * 计算 content_hash：SHA-256(file_name + section_title + text)
+     * 计算 content_hash：SHA-256(切片正文)。
+     *
+     * <p><b>只算正文，不含文件名与标题</b> —— 正文里已经带了 section_path，所以重复内容一定同哈希；
+     * 而"改了文件名重传"不会因此变成新内容，去重才有意义。</p>
      */
-    protected String computeContentHash(String fileName, String sectionTitle, String text) {
+    protected String computeContentHash(String text) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            String input = (fileName == null ? "" : fileName) + "|"
-                    + (sectionTitle == null ? "" : sectionTitle) + "|"
-                    + (text == null ? "" : text);
-            byte[] hash = md.digest(input.getBytes(StandardCharsets.UTF_8));
+            byte[] hash = md.digest((text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (Exception e) {
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_DEDUP_ERROR, "SHA-256 哈希计算失败，去重逻辑不可用: " + e.getMessage(), e);

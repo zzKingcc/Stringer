@@ -49,6 +49,15 @@ public final class RuntimeEnvironment {
         };
     }
 
+    /** 切片预览文件的默认目录（与配置/日志同级），随运行系统变化 */
+    public static String defaultExportPath() {
+        return switch (osFamily()) {
+            case WINDOWS -> programData() + "\\Stringer\\chunks";
+            case MACOS -> "/Library/Application Support/Stringer/chunks";
+            case LINUX, OTHER -> "/var/lib/stringer/chunks";
+        };
+    }
+
     /** 横幅用的一行环境摘要：操作系统 / 架构 / JDK 版本与厂商 */
     public static String describe() {
         return safeProperty("os.name", "unknown") + " / " + safeProperty("os.arch", "unknown")

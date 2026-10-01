@@ -74,11 +74,11 @@
 
 Stringer 服务端是**平台无关的单文件 fat jar**：一份构建产物，在 Linux、Windows、 macOS（含其他 Unix 类）上直接 `java -jar` 即可运行，无需为目标系统重新构建。
 
-- **启动期自动探测运行系统**：`RuntimeEnvironment` 在 Spring 装配前用 `System.getProperty("os.name")` 判定 OS 族，自动选定配置 / 日志目录并提前建好。
-  - Linux / 其他 Unix：`/var/lib/stringer/config`、`/var/log/stringer`
-  - Windows：`%ProgramData%\Stringer\config`、`%ProgramData%\Stringer\logs`
-  - macOS：`/Library/Application Support/Stringer/config`、`/Library/Logs/Stringer`
-- **覆盖优先级**：命令行 `--key` ＞ JVM 系统属性 `-Dkey` ＞ 环境变量 `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` ＞ 平台默认。
+- **启动期自动探测运行系统**：`RuntimeEnvironment` 在 Spring 装配前用 `System.getProperty("os.name")` 判定 OS 族，自动选定配置 / 日志 / 切片导出目录并提前建好。
+  - Linux / 其他 Unix：`/var/lib/stringer/config`、`/var/log/stringer`、`/var/lib/stringer/chunks`
+  - Windows：`%ProgramData%\Stringer\config`、`%ProgramData%\Stringer\logs`、`%ProgramData%\Stringer\chunks`
+  - macOS：`/Library/Application Support/Stringer/config`、`/Library/Logs/Stringer`、`/Library/Application Support/Stringer/chunks`
+- **覆盖优先级**：命令行 `--key` ＞ JVM 系统属性 `-Dkey` ＞ 环境变量 `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` / `STRINGER_EXPORT_PATH` ＞ 平台默认。
 - **容器部署**：Docker / K8s 只需换对应基底镜像（如 `eclipse-temurin:21-jre`），jar 不变；容器运行时（kubernetes / docker / podman）会在启动横幅中显示，便于排障。
 
 ## 快速开始
@@ -264,6 +264,7 @@ stringer-server
 - [API 文档](docs/API.md) —— 全部 HTTP 端点、SSE 事件契约、错误码总表、starter 与工具实例 SDK
 - [实例文档](docs/INSTANCE.md) —— 配置与接入实操：服务端配置、客户端 starter 接入、工具实例 SDK、本地 Bean 工具、域机制、端到端跑通
 - [SDK 使用手册](docs/SDK-USAGE.md) —— 注解与对话 SDK 的可复制示例：最小工具、`@ToolParam`/`@ToolDomains`/`@ToolAdvanced`、审批恢复、事件流、SSE 裸调
+- [TXT 入库清洗与切片设计](docs/TXT-INGESTION-DESIGN.md) —— 编码探测、页眉页脚识别与清洗、结构推断、预算打包、切片元数据契约、质量验证（设计稿，待落地）
 
 ## License
 

@@ -247,16 +247,19 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 导入方式 | 部署方上传（管控台 / HTTP / starter），服务端不内置文档 |
-| 支持类型 | `stringer.rag.allowed-extensions`，默认 `md`、`txt`、`markdown`、`text` |
+| 支持类型 | `stringer.rag.allowed-extensions`，当前只有 `txt`（md / pdf / html 属后续扩展，策略工厂已留好位置） |
 | 大小上限 | `stringer.rag.max-file-size`，默认 10MB |
+| 字符集 | **全链路统一 UTF-8**：入口探测一次（BOM → 严格 UTF-8 → GB18030）并转码；判不出编码则**拒绝该文件**，不猜 |
 | 归属域 | 上传时指定单个域（完整路径，留空＝根域 `default`）；路径非法直接拒绝 |
 | 同一性判定 | **同一域内**同名不区分大小写；默认拒绝，带 `replace=true` 则先删旧再写入 |
 | 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名）。docId 里看不出所在域，故逐个索引查找 |
 | 唯一键 | `doc_id`（UUID，删除与聚合的依据）与 `file_name`（展示与同名校验） |
-| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title`、`domain`（所属域，keyword） |
-| 切片规则 | 按中文章节边界（`一、` `二、` `三、` 等）切分，超长段落退化为递归切分 |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`domain`、`section_path`、`section_title`、`chunk_seq`、`chunk_total`、`content_hash`。`metadata` 在 mapping 里是 `dynamic:false` + 全部显式声明 |
+| 去重键 | `content_hash = SHA256(切片正文)`，**不含文件名** —— 改了文件名重传也算同一份内容 |
+| 切片规则 | 四步：统一字符集 → 清洗 → 认标题 → 按句子切片。`max-chars` 是**上限不是固定长度**（撞标题即断）。完整规则见 [`TXT-INGESTION-DESIGN.md`](TXT-INGESTION-DESIGN.md) |
+| 切片预览 | 上传后把该文档的切片写成 UTF-8 txt 落到 `stringer.export.path`（默认 `%ProgramData%\Stringer\chunks`），管控台只展示路径 |
 | 并发 | 导入全局串行，等待上限 `stringer.rag.ingest-lock-wait-seconds`（默认 60s） |
-| 失败处理 | 导入失败回滚本次已写入的切片；失败必须上抛，不得返回成功计数 |
+| 失败处理 | 导入失败回滚本次已写入的切片；失败必须上抛，不得返回成功计数。切片导出失败不影响入库 |
 
 ### 8.3 检索：按域解析通道 + 双轨融合
 

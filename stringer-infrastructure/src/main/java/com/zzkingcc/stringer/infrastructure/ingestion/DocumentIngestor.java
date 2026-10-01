@@ -3,6 +3,7 @@ package com.zzkingcc.stringer.infrastructure.ingestion;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategy;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategyFactory;
+import com.zzkingcc.stringer.infrastructure.ingestion.processor.IngestReport;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -29,15 +30,15 @@ public class DocumentIngestor {
      * @param indexName
      * @param embeddingStore
      * @param embeddingModel
-     * @return 成功处理的文档数
+     * @return 处理报告（文档数 + 切片诊断计数）
      */
-    public static int ingestExternalDocuments(List<Document> documents,
-                                              ElasticsearchClient esClient,
-                                              String indexName,
-                                              EmbeddingStore embeddingStore,
-                                              EmbeddingModel embeddingModel) {
+    public static IngestReport ingestExternalDocuments(List<Document> documents,
+                                                       ElasticsearchClient esClient,
+                                                       String indexName,
+                                                       EmbeddingStore embeddingStore,
+                                                       EmbeddingModel embeddingModel) {
         if (documents == null || documents.isEmpty()) {
-            return 0;
+            return IngestReport.EMPTY;
         }
         return doIngest(documents, esClient, indexName, embeddingStore, embeddingModel, "外部");
     }
@@ -51,14 +52,14 @@ public class DocumentIngestor {
      * @param embeddingStore
      * @param embeddingModel
      * @param sourceTag      来源标签（"外部"）
-     * @return
+     * @return 处理报告
      */
-    private static int doIngest(List<Document> documents,
-                                ElasticsearchClient esClient,
-                                String indexName,
-                                EmbeddingStore embeddingStore,
-                                EmbeddingModel embeddingModel,
-                                String sourceTag) {
+    private static IngestReport doIngest(List<Document> documents,
+                                         ElasticsearchClient esClient,
+                                         String indexName,
+                                         EmbeddingStore embeddingStore,
+                                         EmbeddingModel embeddingModel,
+                                         String sourceTag) {
         int docCount = documents.size();
 
         // 1、按扩展名分组到对应策略
@@ -78,16 +79,16 @@ public class DocumentIngestor {
         log.info(summary.toString());
 
         // 3、依次调用每个策略
-        int totalProcessed = 0;
+        IngestReport total = IngestReport.EMPTY;
         for (Map.Entry<DocumentProcessStrategy, List<Document>> e : group.entrySet()) {
             DocumentProcessStrategy strategy = e.getKey();
             List<Document> docsOfStrategy = e.getValue();
             try {
-                int processed = strategy.process(
+                IngestReport report = strategy.process(
                         docsOfStrategy, esClient, indexName, embeddingStore, embeddingModel, sourceTag);
-                totalProcessed += processed;
-                log.debug("[知识库导入-{}] 策略[{}]处理完成：返回 {} 个文档",
-                        sourceTag, strategy.strategyName(), processed);
+                total = total.plus(report);
+                log.debug("[知识库导入-{}] 策略[{}]处理完成：{} 个文档",
+                        sourceTag, strategy.strategyName(), report.documents());
             } catch (Exception ex) {
                 // 失败必须上抛，不能"跳过该组"了事：吞掉会让本次导入返回一个非零计数，
                 // 调用方据此判成功并跳过失败回滚，留下"半个文档"且占住文件名。
@@ -97,7 +98,8 @@ public class DocumentIngestor {
             }
         }
 
-        log.info("[知识库导入-{}] 全部分组处理结束，总处理文档数：{}", sourceTag, totalProcessed);
-        return totalProcessed;
+        log.info("[知识库导入-{}] 全部分组处理结束，总处理文档数：{}，标题 {} 个，删噪 {} 行",
+                sourceTag, total.documents(), total.sections(), total.droppedLines());
+        return total;
     }
 }

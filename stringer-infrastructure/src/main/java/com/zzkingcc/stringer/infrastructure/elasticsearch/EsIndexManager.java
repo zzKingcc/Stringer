@@ -161,6 +161,10 @@ public class EsIndexManager {
             }
 
             // 使用原始 JSON 构建 mapping（Java API Builder 对 analyzer 支持不直观）
+            // metadata 用 dynamic:false + 全部字段显式声明：
+            //   1) 防字段污染（切片器将来加字段不会悄悄变成 text 把检索带偏）；
+            //   2) 修一个老问题 —— doc_id 以前没声明，被动态映射成 text，
+            //      而删除/统计用的是 term(metadata.doc_id) 查询，UUID 被分词后基本查不中。
             String mappingJson = """
                     {
                       "mappings": {
@@ -184,12 +188,25 @@ public class EsIndexManager {
                           },
                           "metadata": {
                             "type": "object",
-                            "enabled": true,
+                            "dynamic": false,
                             "properties": {
-                              "file_name":     { "type": "keyword" },
-                              "section_title": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
-                              "content_hash":  { "type": "keyword" },
-                              "domain":        { "type": "keyword" }
+                              "doc_id":          { "type": "keyword" },
+                              "file_name":       { "type": "keyword" },
+                              "file_name_lower": { "type": "keyword" },
+                              "upload_time":     { "type": "keyword" },
+                              "domain":          { "type": "keyword" },
+                              "content_hash":    { "type": "keyword" },
+                              "chunk_seq":       { "type": "integer" },
+                              "chunk_total":     { "type": "integer" },
+                              "section_title":   { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+                              "section_path": {
+                                "type": "text",
+                                "analyzer": "ik_max_word",
+                                "search_analyzer": "ik_smart",
+                                "fields": {
+                                  "keyword": { "type": "keyword", "ignore_above": 512 }
+                                }
+                              }
                             }
                           }
                         }

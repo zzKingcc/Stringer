@@ -1,8 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
-import com.zzkingcc.stringer.infrastructure.ingestion.splitter.ChineseArticleDocumentSplitter;
+import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtChunking;
 import dev.langchain4j.data.document.Document;
-import dev.langchain4j.data.segment.TextSegment;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -12,10 +11,10 @@ import java.util.Locale;
 /**
  * PDF 文档处理策略（.pdf）
  *
- * <p>PDF 经 Tika/PdfBox 提取后的纯文本存在大量排版换行（句子被视觉换行打断）、
- * 连续空行、不规则空白等问题，直接分片会导致片段质量差。
- * 本策略在分片前先做文本清洗——按段落分组、段内断行修复、空行压缩——
- * 再交给 {@link ChineseArticleDocumentSplitter} 做章节识别分片。</p>
+ * <p><b>当前不可达</b>（上传白名单只有 {@code txt}，且入口按 UTF-8 解码、没有引入 Tika/PdfBox），
+ * 但接口与实现都保留 —— 将来接上 PDF 抽取后，把抽取出的纯文本先过 {@link #cleanPdfText(String)}
+ * 再做排版断行修复，然后交给与 txt 相同的切片器即可，不用重写一套。</p>
+ *
  * @author zzkingcc
  */
 @Slf4j
@@ -23,10 +22,8 @@ public class PdfDocumentProcessStrategy extends AbstractDocumentProcessStrategy 
 
     public static final List<String> PDF_EXTENSIONS = List.of("pdf");
 
-    private final ChineseArticleDocumentSplitter splitter = new ChineseArticleDocumentSplitter();
-
     @Override
-    protected List<TextSegment> splitDocuments(List<Document> documents) {
+    protected SplitResult splitDocuments(List<Document> documents) {
         List<Document> cleaned = new ArrayList<>();
         for (Document doc : documents) {
             String raw = doc.text();
@@ -41,7 +38,7 @@ public class PdfDocumentProcessStrategy extends AbstractDocumentProcessStrategy 
             }
             cleaned.add(Document.from(cleanedText, doc.metadata()));
         }
-        return splitter.splitAll(cleaned);
+        return TxtChunking.newSplitter().splitAllWithStats(cleaned);
     }
 
     /**

@@ -23,10 +23,11 @@
 | --- | --- | --- |
 | `stringer.settings.path` | `/var/lib/stringer/config` | 账号、模型设置、存储连接、域提示词 |
 | `stringer.logging.path` | `/var/log/stringer` | 只在开启文件日志时使用 |
+| `stringer.export.path` | `/var/lib/stringer/chunks` | 切片预览 txt（上传后每文档一个，供人工核对切点） |
 | `stringer.logging.level` | `INFO` | 根日志级别 |
 
-- 两个目录都是**服务器绝对路径**，不随"从哪个目录启动"漂移；目录不存在时由写入方自动创建。
-- 可用环境变量 `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` 覆盖。
+- 三个目录都是**服务器绝对路径**，不随"从哪个目录启动"漂移；目录不存在时由写入方自动创建。
+- 可用环境变量 `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` / `STRINGER_EXPORT_PATH` 覆盖。
 - **本机开发务必覆盖 `STRINGER_SETTINGS_PATH`**，否则会写到本盘根目录下的 `var/lib/...`。
 - 落盘的四个 json：`accounts.json`（账号，BCrypt 哈希）、`llm-settings.json`（模型与 Key）、
   `infra-settings.json`（ES / Redis 连接）、`prompts.json`（域提示词）。
@@ -73,7 +74,7 @@ WantedBy=multi-user.target
 ```bash
 # 首次部署
 sudo useradd -r -s /sbin/nologin stringer
-sudo install -d -o stringer -g stringer /opt/stringer /var/lib/stringer/config /var/log/stringer
+sudo install -d -o stringer -g stringer /opt/stringer /var/lib/stringer/config /var/lib/stringer/chunks /var/log/stringer
 sudo install -o stringer -g stringer -m 644 stringer-server.jar /opt/stringer/
 sudo systemctl daemon-reload && sudo systemctl enable --now stringer
 ```
@@ -86,6 +87,7 @@ cp stringer-server/target/stringer-v1.0-beta.1.jar . # 放到与 Dockerfile 同�
 docker build -t stringer-server:v1.0-beta.1 .
 docker run -d --name stringer -p 9527:9527 \
   -v stringer-config:/var/lib/stringer/config \
+  -v stringer-chunks:/var/lib/stringer/chunks \
   stringer-server:v1.0-beta.1
 docker logs -f stringer
 ```

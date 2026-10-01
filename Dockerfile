@@ -6,6 +6,7 @@
 # 3. 运行：
 #      docker run -d --name stringer -p 9527:9527 \
 #        -v stringer-config:/var/lib/stringer/config \
+#        -v stringer-chunks:/var/lib/stringer/chunks \
 #        stringer-server:v1.0-beta.1
 #
 # 约定：
@@ -14,12 +15,14 @@
 #      不挂卷则重建容器等于账号回落种子、所有配置重填；
 #   3. 日志默认只输出控制台（docker logs -f stringer）。要落盘再加：
 #        --logging.config=classpath:logback-file.xml   并挂 -v stringer-logs:/var/log/stringer
+#   4. 切片预览目录默认 /var/lib/stringer/chunks（上传后每个文档一个 txt，供人工核对切点）。
+#      不挂卷也能用，只是重建容器后会丢；要长期留就挂 -v stringer-chunks:/var/lib/stringer/chunks
 
 FROM eclipse-temurin:21-jre
 
 RUN groupadd -r stringer \
  && useradd -r -g stringer -d /opt/stringer -s /sbin/nologin stringer \
- && mkdir -p /opt/stringer /var/lib/stringer/config /var/log/stringer \
+ && mkdir -p /opt/stringer /var/lib/stringer/config /var/lib/stringer/chunks /var/log/stringer \
  && chown -R stringer:stringer /opt/stringer /var/lib/stringer /var/log/stringer
 
 WORKDIR /opt/stringer

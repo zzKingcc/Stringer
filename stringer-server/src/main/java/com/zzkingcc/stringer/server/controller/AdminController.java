@@ -32,6 +32,7 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.zzkingcc.stringer.server.knowledge.ChunkExporter;
 import com.zzkingcc.stringer.server.knowledge.KnowledgeBaseService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -87,6 +88,8 @@ public class AdminController {
     private final InstanceRegistry instanceRegistry;
     private final InstanceLifecycle instanceLifecycle;
     private final KnowledgeBaseService knowledgeBaseService;
+    /** 切片预览导出：文档列表要展示导出文件路径与导出目录 */
+    private final ChunkExporter chunkExporter;
     private final ModelProfileRegistry modelProfileRegistry;
 
     public AdminController(ToolRouter toolRouter,
@@ -104,6 +107,7 @@ public class AdminController {
                            InstanceRegistry instanceRegistry,
                            InstanceLifecycle instanceLifecycle,
                            KnowledgeBaseService knowledgeBaseService,
+                           ChunkExporter chunkExporter,
                            DomainRegistry domainRegistry,
                            ModelProfileRegistry modelProfileRegistry) {
         this.toolRouter = toolRouter;
@@ -121,6 +125,7 @@ public class AdminController {
         this.instanceRegistry = instanceRegistry;
         this.instanceLifecycle = instanceLifecycle;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.chunkExporter = chunkExporter;
         this.domainRegistry = domainRegistry;
         this.modelProfileRegistry = modelProfileRegistry;
     }
@@ -838,11 +843,14 @@ public class AdminController {
             row.put("fileName", item.fileName());
             row.put("chunks", item.chunks());
             row.put("domain", item.domain());
+            // 切片预览文件的落盘路径（导出目录固定，管控台只负责显示与复制）
+            row.put("exportPath", item.exportPath());
             documents.add(row);
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 0);
         body.put("count", documents.size());
+        body.put("exportDir", chunkExporter.exportDir().toAbsolutePath().toString());
         body.put("documents", documents);
         return body;
     }
@@ -868,6 +876,11 @@ public class AdminController {
         body.put("size", result.size());
         body.put("chunks", result.chunks());
         body.put("domain", result.domain());
+        // 切片质量诊断：批量上传时靠这几个数就能发现"这批文件切坏了"
+        body.put("sections", result.sections());
+        body.put("droppedLines", result.droppedLines());
+        body.put("encoding", result.encoding());
+        body.put("exportPath", result.exportPath());
         return body;
     }
 

@@ -14,8 +14,8 @@ import java.util.Locale;
  * <p>分片交给 {@code TxtSplitter}（统一字符集 → 清洗 → 认标题 → 按句子切片），
  * 去重与向量化流程由 {@link AbstractDocumentProcessStrategy} 统一封装。</p>
  *
- * <p>md / pdf / html 等格式<b>不是不要了，是还没做</b> —— 加的时候按同一接口新增策略，
- * 工厂与现有策略都不动。</p>
+ * <p>md 走 {@code MarkdownDocumentProcessStrategy}（md 有原生结构，#{@code #} 前缀是确定信息，
+ * 不该退化成"按纯文本猜标题"）；docx / pdf 将来按同一接口新增策略，工厂与现有策略都不动。</p>
  *
  * @author zzkingcc
  */

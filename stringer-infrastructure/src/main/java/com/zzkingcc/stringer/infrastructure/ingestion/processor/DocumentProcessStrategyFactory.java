@@ -21,9 +21,10 @@ public class DocumentProcessStrategyFactory {
 
     /** 已注册策略实例 */
     private static final List<DocumentProcessStrategy> ALL_STRATEGIES = List.of(
-            new TextDocumentProcessStrategy(),    // .txt .md .markdown .text
-            new PdfDocumentProcessStrategy(),      // .pdf
-            UnknownDocumentProcessStrategy.INSTANCE      // 未知文件类型
+            new TextDocumentProcessStrategy(),          // .txt
+            new MarkdownDocumentProcessStrategy(),      // .md .markdown
+            new PdfDocumentProcessStrategy(),           // .pdf
+            UnknownDocumentProcessStrategy.INSTANCE     // 未知文件类型
     );
 
     /** 扩展名 → 策略 的映射缓存 */

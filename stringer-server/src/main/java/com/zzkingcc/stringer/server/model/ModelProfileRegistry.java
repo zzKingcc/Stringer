@@ -169,6 +169,12 @@ public class ModelProfileRegistry {
         if (!hasText(domain)) {
             return "域标识不能为空";
         }
+        // 域标识必须是从根域出发的完整路径：绑到一个树里不存在的域，要等到调用时才炸 10004，
+        // 不如在写入时就拒绝 —— 绑定是唯一写入口，校验放这里最集中
+        String pathReason = Domains.validatePath(domain);
+        if (pathReason != null) {
+            return pathReason;
+        }
         String key = Domains.normalize(domain);
         ModelProfileSettings next = copyOf(settings);
 

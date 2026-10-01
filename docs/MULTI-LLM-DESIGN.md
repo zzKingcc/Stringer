@@ -4,6 +4,8 @@
 > 定位：对应 `DESIGN-1.0.md` §2（域模型）与 §6 路线图中的 T4（多 LLM 模型网关）。
 > 范围：本文只设计**模型档案与解析**；域级覆盖（审批/超时/配额）与知识空间绑定不在本轮。
 
+> ⚠️ **落地偏差**：本文是历史设计评审稿，实际落地的模型子系统已与此稿有多处不同，请以 `DESIGN.md` §9 与源码为准。要点：① 域 ↔ 模型改为 **1 对多**（有序别名列表，整体覆盖，空＝无可调用）；② **取消内置 `default` 模型别名**，未绑定的域直接报 `NotConfiguredException`，不再回落全局对话模型；③ **删除改为级联清理**（不再"被引用就拒绝"）；④ 档案改用 **3 维 schema**（`endpoints` / `input` / `output` + `capabilities` + `dimensions`），**无 `type` 字段**，是否对话看 `endpoints` 含 `chat`。
+
 ---
 
 ## 0 一句话方案
@@ -40,45 +42,56 @@
 ```jsonc
 // config/models.json
 {
-  "defaultAlias": "default",
-  "profiles": {
-    "default": {                                  // 兼容：由现有 llm-settings.json 自动生成
-      "type": "chat",
-      "baseUrl": "http://localhost:11434/v1",
-      "apiKey": "******",
-      "modelName": "qwen2.5:7b",
-      "temperature": 0.5,
-      "maxTokens": 2048,
-      "capabilities": ["streaming", "tools"],     // 能力声明（见 2.3）
-      "fallbacks": []                             // 降级链：本档案失败后依次尝试
-    },
+  "domainBindings": {                 // 域 → 别名【有序列表】；整体覆盖；空数组＝该域无可调用
+    "customer-service": ["smart", "local-qwen"],
+    "contract-review": ["smart"]
+  },
+  "profiles": {                       // 别名 → 档案（对话 / 向量都在这里，靠 endpoints 区分）
     "smart": {
-      "type": "chat",
+      "endpoints": ["chat"],          // 端点族：是否对话看是否含 "chat"
+      "input": ["text"],
+      "output": ["text"],
       "baseUrl": "https://api.example.com/v1",
       "apiKey": "******",
       "modelName": "gpt-4o",
       "temperature": 0.3,
       "maxTokens": 4096,
-      "capabilities": ["streaming", "tools", "vision"],
-      "fallbacks": ["default"]
+      "capabilities": ["streaming", "tools"],   // 布尔能力声明（见 2.3）；无 "vision"
+      "fallbacks": ["local-qwen"]               // 降级链：本档案失败后依次尝试同列表其它别名
+    },
+    "local-qwen": {
+      "endpoints": ["chat"],
+      "baseUrl": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "modelName": "qwen2.5:7b",
+      "temperature": 0.5,
+      "maxTokens": 2048,
+      "capabilities": ["streaming", "tools"],
+      "fallbacks": []
     },
     "emb-bge": {
-      "type": "embedding",
+      "endpoints": ["embedding"],     // 向量：是否向量看是否含 "embedding"
       "baseUrl": "https://api.example.com/v1",
       "apiKey": "******",
       "modelName": "bge-m3",
-      "dimensions": 1024                            // 留空＝按实测
+      "dimensions": 1024              // 留空＝按实测
     }
   }
 }
 ```
 
-### 2.2 类型与角色的关系
+// 注：不再有 "default" 这个保留别名，也不再由 llm-settings.json 自动合成档案；
+// 落盘结构无 "type" 字段；删除档案会级联摘掉所有域绑定（见第 7 节）。
 
-| 档案 `type` | 可被哪些角色引用 | 说明 |
+### 2.2 端点族与用途的关系
+
+| 档案 `endpoints` 含 | 用途 | 说明 |
 | --- | --- | --- |
-| `chat` | `chat` / `planner` / `summarizer` / `rerank`（用对话模型做重排） | 一个档案可服务多个角色 |
-| `embedding` | `embedding`（**只被知识空间引用**，见第 6 节） | 不与对话链路混用 |
+| `chat` | 对话链路（本轮只做 chat） | 一个档案可服务多用途，靠 `endpoints` 声明它支持哪些端点族 |
+| `embedding` | 向量（**只被知识空间引用**，见第 6 节；实际仍走 `llm-settings.json` 的单一向量配置） | 不与对话链路混用 |
+| `rerank` / `images` / `tts` / `asr` / `video` | 其它端点族（规划中） | 多模态按 `endpoints` 扩展，可多选 |
+
+> 注：档案**没有 `type` 字段**，`isChat()` = `endpoints.contains("chat")`。角色的拆分（`planner` / `summarizer`）本轮未做，域直接绑 chat 档案。
 
 ### 2.3 能力声明（`capabilities`）
 
@@ -99,27 +112,21 @@
 ### 3.1 绑定结构
 
 ```jsonc
-// 域配置里的 modelBindings 段（S5 之前可先落在 config/domain-models.json）
+// config/models.json 的 domainBindings 段：域 → 别名【有序列表】
 {
-  "customer-service": {
-    "chat": "default",        // 主对话
-    "summarizer": "fast"      // 历史压缩用便宜模型
-  },
-  "contract-review": {
-    "chat": "smart",
-    "planner": "smart"
-  }
+  // 首个为当前对话模型，其余为降级 / 多 agent 备用
+  "customer-service": ["smart", "local-qwen"],
+  "contract-review": ["smart"]
 }
+// 空数组 / 缺省＝该域"无可调用"；整体覆盖；不再有"单值 + 默认别名回落"那套
 ```
 
-### 3.2 解析优先级（从高到低）
+### 3.2 解析优先级（域 → 别名列表 → 档案）
 
-1. 域 + 角色 的显式绑定
-2. 域绑定的 `chat`（其他角色未绑定时回落它）
-3. `defaultAlias`（全局兜底）
-4. 现有 `llm-settings.json` 合成的 `default` 档案
+1. `domainBindings[domain]`：该域显式绑定的别名<b>有序列表</b>；按序试，首个 `isUsable()` 且 `isChat()` 的档案即命中。
+2. 列表为空 / 全部不可用 → **不再回落任何默认值**，由 `DefaultModelResolver` 抛 `NotConfiguredException`（`90005`）。
 
-**任一环命中即止，找不到就报 `90005 DEPENDENCY_NOT_CONFIGURED`** —— 降级到"猜一个能用的"会让问题更隐蔽。
+> 历史稿里"角色回落 / `defaultAlias` / 内置 `default` 档案"四级链路已取消：域必须先显式配置自己的模型，未配置即明确失败 —— **宁可明确报 `90005`，也不静默降级到"猜一个能用的"**（那样会让问题更隐蔽）。
 
 ---
 
@@ -242,12 +249,13 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/admin/model-profiles` | 档案列表（Key 脱敏）+ `defaultAlias` |
-| POST | `/admin/model-profiles` | 创建/更新档案（`alias` 为键） |
-| DELETE | `/admin/model-profiles/{alias}` | 删除档案；**被域引用时拒绝**并列出引用它的域 |
-| POST | `/admin/model-profiles/{alias}/test` | 测试连接（复用现有测试逻辑，返回实测可用性 + 可用模型名） |
-| GET | `/admin/model-profiles/{alias}/models` | 拉该档案端点的模型名列表（现有 `/admin/models` 的"按档案"版本） |
-| GET/POST | `/admin/domains/{id}/model-bindings` | 域的模型绑定读写（S5 并入域配置后可合并） |
+| GET | `/admin/model-profiles` | 档案列表（Key 脱敏，含 `endpoints` / `input` / `output` / `capabilities` / `usedByDomains`）+ `domainBindings`（域→别名列表）；**不再返回 `defaultAlias`** |
+| POST | `/admin/model-profiles` | 创建/更新档案（`alias` 为键；字段为 `endpoints` / `input` / `output` / `baseUrl` / `apiKey` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`，**无 `type`**） |
+| POST | `/admin/model-profiles/probe` | 实测一个模型的端点族 / 模态 / 能力 / 维度（不落盘） |
+| POST | `/admin/model-profiles/{alias}/probe` | 用档案已存配置重新探测并写回档案 |
+| POST | `/admin/model-profiles/{alias}/test` | 测试连接（返回实测可用性 + 模型名） |
+| DELETE | `/admin/model-profiles/{alias}` | 删除档案并**级联清理**所有域绑定（不再"被引用就拒绝"） |
+| PUT | `/admin/model-bindings/{domain}` | 设置域的可调用别名列表（整体覆盖，顺序即优先级；空＝解绑；`default` 不可作为别名） |
 
 **删除保护**是必须的：删掉一个还在被域引用的档案，等于让那个域在下次调用时报 `90005`。
 
@@ -278,7 +286,7 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 
 | # | 问题 | 选项 | 我的建议 |
 | --- | --- | --- | --- |
-| 1 | 档案落盘位置 | 新文件 `config/models.json` / 塞进现有 `llm-settings.json` | **新文件**：旧文件继续作为 `default` 档案的读写视图，两者并存一个版本周期 |
+| 1 | 档案落盘位置 | 新文件 `config/models.json` / 塞进现有 `llm-settings.json` | **新文件**：`llm-settings.json` 只保留全局 chat + 单一 embedding；`models.json` 的档案**不再由它合成 `default`**，两者各管各的 |
 | 2 | 域绑定的存储 | 独立 `config/domain-models.json` / 等 S5 并入域配置 | **先独立文件**，S5 做域配置时再迁，避免两件事耦合 |
 | 3 | 角色先做几个 | 只做 `chat` / 一次做全（chat、planner、summarizer、rerank） | **先只做 `chat` + `summarizer`**：前者刚需，后者能立刻省钱；planner/rerank 等编排与检索深化时再加 |
 | 4 | 降级策略 | 不降级 / 档案级降级链 / 域级覆盖降级链 | **档案级**：换供应商是运维动作，不该要求动域 |
@@ -295,7 +303,7 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | 向量维度唯一入口 `effectiveEmbeddingDimension()` | 保留；多 embedding 只做"可切换"，入口语义不变 |
 | 执行单元内冻结 | 模型在**单元开始时解析一次**，单元内不变（与域、提示词同一条冻结规则） |
 | 主循环形状不变 | 只改 `agentNode` 里取模型的那一行 |
-| 域不可绕过 | 解析的输入就是域，没绑定的域走 `defaultAlias`，不会"用错模型却不自知" |
+| 域不可绕过 | 解析的输入就是域：解析器存在时**未绑定的域直接抛 `NotConfiguredException`**（不回落任何默认），因此绝不会"用错模型却不自知" |
 
 ---
 
@@ -306,28 +314,28 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | # | 规则 | 实现位置 |
 | --- | --- | --- |
 | 1 | **档案不自动绑定任何域**，绑定只能由管控台手工指定 | `ModelProfileRegistry.save()` 只写档案，不碰 `domainBindings` |
-| 2 | **一个域只绑一个模型**，后设定的顶替之前的 | `domainBindings` 是 `域 → 别名` 单值映射，`bind()` 即覆盖并记日志 |
-| 3 | **向量模型只能一个** | 本轮**不为 embedding 建档案**，沿用「模型设置」页那唯一一套（单索引单维度） |
-| 4 | 未绑定的域 | 走 `defaultAlias`（默认＝内置 `default`＝「模型设置」页那套），因此"没配任何绑定"＝升级前行为 |
+| 2 | **一个域可绑一组有序模型别名** | `domainBindings` 是 `域 → 别名列表` 映射（有序，整体覆盖）；首个为当前对话模型，其余留给多 agent / 降级；空列表＝该域"无可调用" |
+| 3 | **向量模型仍只一个** | 单一 embedding 走 `llm-settings.json`（单索引单维度）；`models.json` 可登记 embedding 档案，但暂不被检索链路消费 |
+| 4 | 未绑定的域 | **无可调用**：调用时抛 `NotConfiguredException`（`90005`）；不再回落任何默认模型，"没配绑定"＝该域直接失败而非静默用全局模型 |
 
 ### 11.2 已落地
 
 | 模块 | 改动 |
 | --- | --- |
-| `stringer-runtime` | 新增 `runtime/model/ModelResolver` 接口（`streamingChat(domain)`）；`AgentOrchestrationService` 增加**可选** resolver 字段与构造重载，`agentNode` 按域取模型（取不到回落构造期注入的模型），新增 `resolveModel()` |
-| `stringer-server` | 新增 `model/` 包：`ModelProfile`（record，含 `fingerprint()` / `supportsTools()` / `capabilityHint()`）、`ModelProfileSettings`（落盘结构）、`ModelProfileStore`（`config/models.json`）、`ModelProfileRegistry`（唯一真相，含"后设覆盖"与"被引用拒删"）、`ModelClientFactory`（按指纹缓存，每个别名只留当前指纹）、`DefaultModelResolver`（内置 default 走 `LlmModelHolder` 代理，自建档案走工厂） |
+| `stringer-runtime` | 新增 `runtime/model/ModelResolver` 接口（`streamingChat(domain)`）；`AgentOrchestrationService` 增加**可选** resolver 字段与构造重载，`agentNode` 按域取模型，新增 `resolveModel()`：resolver 为 `null`（未装配档案体系）时用构造期注入的模型；**resolver 存在则不再回落，解析失败如实抛出** |
+| `stringer-server` | 新增 `model/` 包：`ModelProfile`（record，3 维 schema：`endpoints` / `input` / `output` + `capabilities` + `dimensions`，`isChat()`＝`endpoints` 含 `chat`；含 `fingerprint()` / `supportsTools()` / `capabilityHint()`）、`ModelProfileSettings`（落盘结构）、`ModelProfileStore`（`config/models.json`）、`ModelProfileRegistry`（唯一真相，含"后设覆盖"与"级联清绑定"）、`ModelClientFactory`（按指纹缓存，每个别名只留当前指纹）、`DefaultModelResolver`（只认自建档案，未绑定 / 不可用直接抛 `NotConfiguredException`，无内置 default 旁路） |
 | `stringer-server` | 新增 `config/ModelProfileConfiguration`；`GraphConfiguration.agentService` 注入 `ModelResolver` 并传给内核 |
-| `stringer-server` | 新增 `AdminModelProfileController`：`GET/POST /admin/model-profiles`、`DELETE /admin/model-profiles/{alias}`、`POST /admin/model-profiles/{alias}/test`、`PUT /admin/model-bindings/{domain}`（alias 空＝解绑） |
+| `stringer-server` | 新增 `AdminModelProfileController`：`GET/POST /admin/model-profiles`、`POST /admin/model-profiles/probe`、`POST /admin/model-profiles/{alias}/probe`、`POST /admin/model-profiles/{alias}/test`、`DELETE /admin/model-profiles/{alias}`（级联清绑定）、`PUT /admin/model-bindings/{domain}`（`aliases` 空＝解绑） |
 | 管控台 | `console/models.html` 新增「模型档案」卡（列表 + 编辑 + 测试 + 删除）与「域 → 模型绑定」卡（域清单 × 当前绑定 × 下拉设置），规则文案写进页面 |
 
 ### 11.3 两个刻意的设计取舍
 
-1. **内置 `default` 不走档案注册表**，而是继续由 `LlmModelHolder` 承载 —— 于是「模型设置」页的热替换能力对 default 完全保留，`openAiEmbeddingModel` 的 4 个注入点一行未动。
+1. **没有内置 `default` 模型别名**：对话模型只来自自建档案，域未绑定即明确失败；`LlmModelHolder`（`llm-settings.json`）的对话模型仅作"解析器缺失"时的兜底与 `chatConfigured` 指示来源，`openAiEmbeddingModel` 的 4 个注入点一行未动（向量仍走它）。
 2. **`api` 模块不放解析接口**，放在 `runtime` —— 因为 `api` 没引 langchain4j，把模型类型塞进对外契约会污染 SDK 依赖。
 
 ### 11.4 尚未落地
 
 - 降级链（`fallbacks` 已能存，M3 才生效）与按档案熔断
-- 角色概念（`planner` / `summarizer`）—— 按"一个域只绑一个模型"的规则，本轮不做
+- 角色概念（`planner` / `summarizer`）—— 当前的"域绑有序别名列表"已为此留位（列表里扩一层角色语义即可），本轮仍不做
 - 事件带 `modelAlias`；成本按域/档案归集
 - 域空间页直接改绑定（当前在「模型设置」页；域空间页只读展示）

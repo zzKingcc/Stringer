@@ -4,6 +4,7 @@ import com.zzkingcc.stringer.api.agent.Domains;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -14,13 +15,15 @@ import java.util.Set;
 /**
  * 模型档案注册表 —— 档案与「域 → 档案」绑定的唯一真相。
  *
- * <p>三条规则（与产品口径一致）：</p>
+ * <p>两条规则（与产品口径一致）：</p>
  * <ol>
  *   <li><b>档案不自动绑定任何域</b>：绑定只能由管控台显式写入；新档案建完就是"未绑定"状态；</li>
- *   <li><b>一个域只绑一个模型</b>：绑定是单值，再次设置即<b>覆盖</b>前一次；</li>
- *   <li><b>未绑定的域走 {@link #BUILTIN_DEFAULT}</b>，即管控台「模型设置」页那一套 —— 于是"没配任何绑定"
- *       与升级前的行为完全一致。</li>
+ *   <li><b>一个域只绑一组模型</b>：绑定是<b>有序列表</b>，整体覆盖，列表首个为当前使用、其余留给多 agent / 降级；
+ *       空列表即"无可调用模型"。</li>
  * </ol>
+ *
+ * <p><b>没有内置对话模型</b>：对话模型只来自「模型设置」页里用户自建的模型档案，不再有"未绑定域回落内置 default"
+ * 这一套。域必须先显式配置自己的模型，否则调用时直接报"未配置"（由 {@code DefaultModelResolver} 抛出）。</p>
  *
  * <p>内存态 + 落盘：每次写操作先改内存、再整体落盘（写盘失败会抛异常，调用方必须感知）。</p>
  *
@@ -28,9 +31,6 @@ import java.util.Set;
  */
 @Slf4j
 public class ModelProfileRegistry {
-
-    /** 内置别名：指向管控台「模型设置」页那一套，由 {@code LlmModelHolder} 承载 */
-    public static final String BUILTIN_DEFAULT = Domains.DEFAULT;
 
     private final ModelProfileStore store;
 
@@ -40,55 +40,59 @@ public class ModelProfileRegistry {
     public ModelProfileRegistry(ModelProfileStore store) {
         this.store = store;
         this.settings = store.load();
-        log.info("[模型档案] 初始化：档案 {} 个 {}，域绑定 {} 条，默认别名 {}；未绑定的域走内置 {}",
-                settings.getChatProfiles().size(), settings.getChatProfiles().keySet(),
-                settings.getDomainBindings().size(), settings.getDefaultAlias(), BUILTIN_DEFAULT);
+        log.info("[模型档案] 初始化：档案 {} 个 {}，域绑定 {} 条",
+                settings.getProfiles().size(), settings.getProfiles().keySet(),
+                settings.getDomainBindings().size());
     }
 
     // ==================== 解析 ====================
 
     /**
-     * 解析该域应使用的档案别名。
+     * 解析该域的可调用模型别名列表（按设定顺序）。
      *
-     * <p>顺序：域绑定 → {@code defaultAlias} → 内置 {@code default}。命中即止。</p>
+     * <p>仅返回该域<b>显式绑定</b>的列表；域未绑定任何模型时返回空列表 —— 调用方据此判断"无可调用"，
+     * 不再回落到任何内置默认值。</p>
      */
-    public String resolveAlias(String domain) {
+    public List<String> resolveAliases(String domain) {
         String key = Domains.normalize(domain);
-        String bound = settings.getDomainBindings().get(key);
-        if (hasText(bound)) {
-            return bound.trim();
+        List<String> bound = settings.getDomainBindings().get(key);
+        if (bound != null && !bound.isEmpty()) {
+            return List.copyOf(bound);
         }
-        String fallback = settings.getDefaultAlias();
-        return hasText(fallback) ? fallback.trim() : BUILTIN_DEFAULT;
-    }
-
-    /** 该别名是否指向内置 default（＝走 LlmModelHolder，享受模型设置页的热替换） */
-    public boolean isBuiltinDefault(String alias) {
-        return BUILTIN_DEFAULT.equals(alias);
+        /* 未绑定 = 该域<b>没有任何可调用模型</b>，不再回落到内置 default。
+           域必须先显式配置自己的模型；新建域即处于此状态，由管控台提示「无可调用模型」。 */
+        return List.of();
     }
 
     /**
-     * 取档案。内置 {@code default} 不在这里 —— 它由 {@code LlmModelHolder} 承载，不在本注册表内。
+     * 取档案。全部对话 / 向量模型都存于本注册表，没有"内置 default"那一类了。
      */
     public Optional<ModelProfile> profile(String alias) {
         if (!hasText(alias)) {
             return Optional.empty();
         }
-        ModelProfileSettings.ProfileData data = settings.getChatProfiles().get(alias.trim());
+        ModelProfileSettings.ProfileData data = settings.getProfiles().get(alias.trim());
         return data == null ? Optional.empty() : Optional.of(data.toProfile(alias.trim()));
     }
 
     /** 全部档案（按别名排序） */
     public List<ModelProfile> profiles() {
         List<ModelProfile> list = new ArrayList<>();
-        settings.getChatProfiles().forEach((alias, data) -> list.add(data.toProfile(alias)));
+        settings.getProfiles().forEach((alias, data) -> list.add(data.toProfile(alias)));
         list.sort(java.util.Comparator.comparing(ModelProfile::alias));
         return List.copyOf(list);
     }
 
-    /** 域 → 别名 的绑定视图（不可变副本） */
-    public Map<String, String> domainBindings() {
-        return Map.copyOf(new LinkedHashMap<>(settings.getDomainBindings()));
+    /** 是否存在任意可用的对话类模型（供「对话模型是否就绪」这类全局判据使用） */
+    public boolean hasChatModel() {
+        return profiles().stream().anyMatch(p -> p.isChat() && p.isUsable());
+    }
+
+    /** 域 → 别名列表 的绑定视图（不可变副本，保序） */
+    public Map<String, List<String>> domainBindings() {
+        Map<String, List<String>> copy = new LinkedHashMap<>();
+        settings.getDomainBindings().forEach((domain, aliases) -> copy.put(domain, List.copyOf(aliases)));
+        return Collections.unmodifiableMap(copy);
     }
 
     /** 当前配置快照（供管控台展示） */
@@ -108,15 +112,12 @@ public class ModelProfileRegistry {
             return "别名不能为空";
         }
         String alias = profile.alias().trim();
-        if (BUILTIN_DEFAULT.equals(alias)) {
-            return "别名 " + BUILTIN_DEFAULT + " 为内置保留（对应「模型设置」页那套配置），请换一个别名";
-        }
         if (!profile.isUsable()) {
             return "服务商地址、API Key、模型名都不能为空";
         }
 
         ModelProfileSettings next = copyOf(settings);
-        next.getChatProfiles().put(alias, ModelProfileSettings.ProfileData.from(profile));
+        next.getProfiles().put(alias, ModelProfileSettings.ProfileData.from(profile));
         persist(next);
         log.info("[模型档案] 已保存档案 {}（model={}，baseUrl={}）—— 绑定它的域立即生效",
                 alias, profile.modelName(), profile.baseUrl());
@@ -124,67 +125,97 @@ public class ModelProfileRegistry {
     }
 
     /**
-     * 删除档案。<b>仍被域绑定时拒绝</b> —— 否则那些域下次调用会直接失败。
+     * 删除档案，并<b>级联清理所有域对该别名的绑定</b>。
      *
-     * @return 删除结果（含拒绝原因与被哪些域引用）
+     * <p>不再"仍被绑定就拒绝"：级联摘掉后，那些域立即进入"无可调用"状态，由管控台（域空间页）明确提示，
+     * 而不是把删除拦在半路。返回结果里带出被清掉了绑定的域，便于前端提示。</p>
+     *
+     * @return 删除结果（含被级联清理的域）
      */
     public synchronized DeleteResult delete(String alias) {
         if (!hasText(alias)) {
             return new DeleteResult(false, "别名不能为空", List.of());
         }
         String key = alias.trim();
-        if (BUILTIN_DEFAULT.equals(key)) {
-            return new DeleteResult(false, "内置 " + BUILTIN_DEFAULT + " 不可删除（它是未绑定域的落点）", List.of());
-        }
-        if (!settings.getChatProfiles().containsKey(key)) {
+        if (!settings.getProfiles().containsKey(key)) {
             return new DeleteResult(false, "档案不存在：" + key, List.of());
         }
-        Set<String> usedBy = domainsUsing(key);
-        if (!usedBy.isEmpty()) {
-            return new DeleteResult(false,
-                    "档案 " + key + " 仍被以下域绑定，请先解绑或改绑：" + usedBy, List.copyOf(usedBy));
-        }
 
+        /* 级联：先把该别名从所有域的绑定里摘掉，再删档案。
+           copyOf 已深拷贝，摘掉的是副本，写失败也不会脏内存。 */
         ModelProfileSettings next = copyOf(settings);
-        next.getChatProfiles().remove(key);
+        Set<String> affected = new LinkedHashSet<>();
+        next.getDomainBindings().forEach((domain, aliases) -> {
+            if (aliases != null && aliases.remove(key)) {
+                affected.add(domain);
+            }
+        });
+        /* 摘空了的域绑定直接移除，保持落盘干净 */
+        next.getDomainBindings().entrySet().removeIf(e -> e.getValue() == null || e.getValue().isEmpty());
+        next.getProfiles().remove(key);
         persist(next);
-        log.info("[模型档案] 已删除档案 {}", key);
-        return new DeleteResult(true, null, List.of());
+        log.info("[模型档案] 已删除档案 {}；级联清理了 {} 个域的绑定：{}",
+                key, affected.size(), affected);
+        return new DeleteResult(true, null, List.copyOf(affected));
     }
 
     /**
-     * 绑定域到档案。<b>单值覆盖</b>：该域原先绑的别名会被顶替。
+     * 设置域的可调用模型列表。<b>整体覆盖</b>，列表顺序即优先级。
      *
-     * @param alias 空白表示<b>解绑</b>（解绑后该域走默认别名）
+     * @param aliases 空/空白表示<b>解绑</b>（解绑后该域即"无可调用模型"）
      * @return 失败原因；{@code null} 表示成功
      */
-    public synchronized String bind(String domain, String alias) {
+    public synchronized String bind(String domain, List<String> aliases) {
         if (!hasText(domain)) {
             return "域标识不能为空";
         }
         String key = Domains.normalize(domain);
         ModelProfileSettings next = copyOf(settings);
 
-        if (!hasText(alias)) {
-            String previous = next.getDomainBindings().remove(key);
+        List<String> cleaned = cleanAliases(aliases);
+        if (cleaned.isEmpty()) {
+            List<String> previous = next.getDomainBindings().remove(key);
             persist(next);
-            log.info("[模型档案] 已解绑域 {}（原绑定 {}），该域改走默认别名 {}",
-                    key, previous, settings.getDefaultAlias());
+            log.info("[模型档案] 已解绑域 {}（原可调用列表 {}），该域进入无可调用状态",
+                    key, previous);
             return null;
         }
 
-        String target = alias.trim();
-        if (!isBuiltinDefault(target) && !settings.getChatProfiles().containsKey(target)) {
-            return "档案不存在：" + target + "（可绑定内置 " + BUILTIN_DEFAULT + "，或先创建该档案）";
+        for (String target : cleaned) {
+            /* default 已不再作为可绑定的模型别名；绑定只能指向自建档案 */
+            if (Domains.DEFAULT.equals(target)) {
+                return "default 已不再作为可绑定的模型别名，请选择自建模型档案";
+            }
+            if (!settings.getProfiles().containsKey(target)) {
+                return "档案不存在：" + target + "（请先到「模型设置」创建该档案）";
+            }
         }
-        String previous = next.getDomainBindings().put(key, target);
+        List<String> previous = next.getDomainBindings().put(key, cleaned);
         persist(next);
         if (previous == null) {
-            log.info("[模型档案] 域 {} 绑定档案 {}", key, target);
+            log.info("[模型档案] 域 {} 的可调用列表设为 {}", key, cleaned);
         } else {
-            log.info("[模型档案] 域 {} 的绑定由 {} 改为 {}（单值覆盖）", key, previous, target);
+            log.info("[模型档案] 域 {} 的可调用列表由 {} 改为 {}（整体覆盖）", key, previous, cleaned);
         }
         return null;
+    }
+
+    /** 去空白、去重、保序 */
+    private static List<String> cleanAliases(List<String> aliases) {
+        List<String> out = new ArrayList<>();
+        if (aliases == null) {
+            return out;
+        }
+        for (String alias : aliases) {
+            if (alias == null || alias.isBlank()) {
+                continue;
+            }
+            String value = alias.trim();
+            if (!out.contains(value)) {
+                out.add(value);
+            }
+        }
+        return out;
     }
 
     /** 删除档案时的结果 */
@@ -193,11 +224,11 @@ public class ModelProfileRegistry {
 
     // ==================== 内部 ====================
 
-    /** 引用了该别名的域 */
+    /** 可调用列表里含该别名的域 */
     public Set<String> domainsUsing(String alias) {
         Set<String> result = new LinkedHashSet<>();
-        settings.getDomainBindings().forEach((domain, bound) -> {
-            if (alias != null && alias.equals(bound)) {
+        settings.getDomainBindings().forEach((domain, aliases) -> {
+            if (alias != null && aliases != null && aliases.contains(alias)) {
                 result.add(domain);
             }
         });
@@ -209,12 +240,14 @@ public class ModelProfileRegistry {
      */
     private static ModelProfileSettings copyOf(ModelProfileSettings source) {
         ModelProfileSettings copy = new ModelProfileSettings();
-        copy.setDefaultAlias(source.getDefaultAlias());
-        copy.setDomainBindings(new LinkedHashMap<>(source.getDomainBindings()));
+        Map<String, List<String>> bindings = new LinkedHashMap<>();
+        source.getDomainBindings().forEach((domain, aliases) ->
+                bindings.put(domain, new ArrayList<>(aliases)));
+        copy.setDomainBindings(bindings);
         Map<String, ModelProfileSettings.ProfileData> profiles = new LinkedHashMap<>();
-        source.getChatProfiles().forEach((alias, data) -> profiles.put(alias,
+        source.getProfiles().forEach((alias, data) -> profiles.put(alias,
                 ModelProfileSettings.ProfileData.from(data.toProfile(alias))));
-        copy.setChatProfiles(profiles);
+        copy.setProfiles(profiles);
         return copy;
     }
 

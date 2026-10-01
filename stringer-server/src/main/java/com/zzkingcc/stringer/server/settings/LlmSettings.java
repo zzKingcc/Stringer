@@ -3,6 +3,9 @@ package com.zzkingcc.stringer.server.settings;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 模型服务商设置（管控台可编辑）
  * @author zzkingcc
@@ -25,6 +28,9 @@ public class LlmSettings {
     /** 单次最大 token */
     private Integer chatMaxTokens;
 
+    /** 对话模型能力（探测得出：streaming / tools / vision；仅展示用） */
+    private List<String> chatCapabilities = new ArrayList<>();
+
     /** 向量模型服务商地址（留空则复用对话模型地址） */
     private String embeddingBaseUrl;
 
@@ -38,6 +44,9 @@ public class LlmSettings {
      * 向量维度（可空）。
      */
     private Integer embeddingDimensions;
+
+    /** 向量模型能力（探测得出；仅展示用） */
+    private List<String> embeddingCapabilities = new ArrayList<>();
 
     // ===== 派生值 =====
 

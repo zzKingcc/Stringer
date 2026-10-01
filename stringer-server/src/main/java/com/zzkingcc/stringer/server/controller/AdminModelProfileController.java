@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.server.controller;
 
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.BaseException;
+import com.zzkingcc.stringer.server.model.ModelProbe;
 import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.model.ModelProfileStore;
@@ -31,9 +32,10 @@ import java.util.Map;
  * <p>三条产品规则的落点：</p>
  * <ol>
  *   <li>档案建完<b>不自动绑任何域</b>，绑定只能通过本接口显式设置；</li>
- *   <li>一个域<b>只绑一个</b>档案，再次设置即覆盖；</li>
- *   <li>内置别名 {@code default} 不可删、不可被占用 —— 它是未绑定域的落点，
- *       对应管控台「模型设置」页那套配置。</li>
+ *   <li>一个域绑一组<b>可调用模型</b>（有序，整体覆盖）—— 首个是当前使用的模型，
+ *       其余留给多 agent / 降级；</li>
+ *   <li>没有内置 {@code default} 模型：对话只走用户自建档案，域必须先显式配置模型，
+ *       未配置即"无可调用"。</li>
  * </ol>
  *
  * <p>路径在 {@code /admin/**} 之下，鉴权由凭证拦截器统一处理。</p>
@@ -49,13 +51,16 @@ public class AdminModelProfileController {
     private final ModelProfileRegistry registry;
     private final ModelProfileStore store;
     private final LlmModelHolder holder;
+    private final ModelProbe probe;
 
     public AdminModelProfileController(ModelProfileRegistry registry,
                                        ModelProfileStore store,
-                                       LlmModelHolder holder) {
+                                       LlmModelHolder holder,
+                                       ModelProbe probe) {
         this.registry = registry;
         this.store = store;
         this.holder = holder;
+        this.probe = probe;
     }
 
     /**
@@ -70,9 +75,6 @@ public class AdminModelProfileController {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 0);
-        body.put("builtinAlias", ModelProfileRegistry.BUILTIN_DEFAULT);
-        body.put("defaultAlias", registry.snapshot().getDefaultAlias());
-        body.put("builtinChat", builtinChatView());
         body.put("profiles", profiles);
         body.put("domainBindings", registry.domainBindings());
         body.put("settingsFile", store.filePath());
@@ -82,27 +84,92 @@ public class AdminModelProfileController {
     /**
      * 新建或整体覆盖一个档案（同名即覆盖）。
      *
-     * <p>{@code apiKey} 留空表示<b>沿用原值</b> —— 管控台只回填脱敏后的 Key，不应要求用户重填。</p>
+     * <p>{@code apiKey} <b>必填</b> —— 管控台只回填脱敏后的 Key，所以编辑时也必须重新填写。</p>
      */
     @PostMapping("/model-profiles")
     public Map<String, Object> save(@RequestBody ProfileBody body) {
         if (body == null || body.getAlias() == null || body.getAlias().isBlank()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "别名不能为空");
         }
+        if (body.getApiKey() == null || body.getApiKey().isBlank()) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, "API Key 不能为空");
+        }
         String alias = body.getAlias().trim();
-        ModelProfile existing = registry.profile(alias).orElse(null);
-        String apiKey = body.getApiKey() == null || body.getApiKey().isBlank()
-                ? (existing == null ? null : existing.apiKey())
-                : body.getApiKey();
+        String apiKey = body.getApiKey().trim();
 
-        ModelProfile profile = new ModelProfile(alias, body.getBaseUrl(), apiKey, body.getModelName(),
-                body.getTemperature(), body.getMaxTokens(), body.getCapabilities(), body.getFallbacks());
+        ModelProfile profile = new ModelProfile(alias, body.getEndpoints(), body.getInput(), body.getOutput(),
+                body.getBaseUrl(), apiKey, body.getModelName(), body.getTemperature(), body.getMaxTokens(),
+                body.getDimensions(), body.getCapabilities(), body.getFallbacks());
 
         String failure = registry.save(profile);
         if (failure != null) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
         }
         return result("saved", alias);
+    }
+
+    /**
+     * 探测：用<b>实测</b>判定一个模型的能力画像（端点族 / 输入模态 / 输出模态 / 布尔能力）。
+     *
+     * <p>与「测试连接」的区别：测试是"这个<b>已保存</b>的档案能不能用"，探测是"这个<b>模型是什么</b>"。</p>
+     */
+    @PostMapping("/model-profiles/probe")
+    public Map<String, Object> probeModel(@RequestBody(required = false) ProfileBody body) {
+        if (body == null) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, "请求体不能为空");
+        }
+        return probeBody(runProbe(body.getBaseUrl(), body.getApiKey(), body.getModelName()));
+    }
+
+    /**
+     * 对<b>已保存</b>的档案重新探测：用档案里存的 Key 探，并把结果<b>写回档案</b>。
+     *
+     * <p>管控台卡片上的「测试」走这里 —— 探完卡片上的标签即刷新。</p>
+     */
+    @PostMapping("/model-profiles/{alias}/probe")
+    public Map<String, Object> probeSaved(@PathVariable("alias") String alias) {
+        ModelProfile existing = registry.profile(alias)
+                .orElseThrow(() -> new BaseException(ErrorCode.INVALID_PARAMETER, "档案不存在：" + alias));
+
+        ModelProbe.Result probed = runProbe(existing.baseUrl(), existing.apiKey(), existing.modelName());
+
+        ModelProfile updated = new ModelProfile(existing.alias(), probed.endpoints(), probed.input(),
+                probed.output(), existing.baseUrl(), existing.apiKey(), existing.modelName(),
+                existing.temperature(), existing.maxTokens(),
+                probed.dimension() != null ? probed.dimension() : existing.dimensions(),
+                probed.capabilities(), existing.fallbacks());
+        String failure = registry.save(updated);
+        if (failure != null) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
+        }
+
+        Map<String, Object> out = probeBody(probed);
+        out.put("alias", alias);
+        out.put("profile", profileView(updated));
+        return out;
+    }
+
+    private ModelProbe.Result runProbe(String baseUrl, String apiKey, String modelName) {
+        try {
+            return probe.probe(baseUrl, apiKey, modelName);
+        } catch (IllegalStateException e) {
+            throw new BaseException(ErrorCode.LLM_UNAVAILABLE, "探测失败：" + e.getMessage());
+        } catch (Exception e) {
+            throw new BaseException(ErrorCode.LLM_UNAVAILABLE, "探测失败：" + LlmFailureDescriber.describe(e));
+        }
+    }
+
+    private static Map<String, Object> probeBody(ModelProbe.Result result) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("code", 0);
+        out.put("success", true);
+        out.put("endpoints", result.endpoints());
+        out.put("input", result.input());
+        out.put("output", result.output());
+        out.put("capabilities", result.capabilities());
+        out.put("dimension", result.dimension());
+        out.put("message", result.note());
+        return out;
     }
 
     /**
@@ -148,18 +215,19 @@ public class AdminModelProfileController {
     }
 
     /**
-     * 绑定域到档案（单值覆盖）；{@code alias} 传空表示解绑，解绑后该域走默认别名。
+     * 设置域的可调用模型列表（**整体覆盖**，顺序即优先级）；{@code aliases} 空表示解绑，解绑后该域走默认别名。
      */
     @PutMapping("/model-bindings/{domain}")
     public Map<String, Object> bind(@PathVariable("domain") String domain,
                                     @RequestBody(required = false) BindBody body) {
-        String alias = body == null ? null : body.getAlias();
-        String failure = registry.bind(domain, alias);
+        List<String> aliases = body == null ? null : body.getAliases();
+        String failure = registry.bind(domain, aliases);
         if (failure != null) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
         }
-        Map<String, Object> result = result(alias == null || alias.isBlank() ? "unbound" : "bound", domain);
-        result.put("alias", alias == null ? "" : alias.trim());
+        boolean unbound = aliases == null || aliases.isEmpty();
+        Map<String, Object> result = result(unbound ? "unbound" : "bound", domain);
+        result.put("aliases", registry.resolveAliases(domain));
         result.put("domainBindings", registry.domainBindings());
         return result;
     }
@@ -169,36 +237,19 @@ public class AdminModelProfileController {
     private Map<String, Object> profileView(ModelProfile profile) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("alias", profile.alias());
+        item.put("endpoints", profile.endpoints());
+        item.put("input", profile.input());
+        item.put("output", profile.output());
         item.put("baseUrl", profile.baseUrl());
         item.put("modelName", profile.modelName());
         item.put("apiKeyMasked", profile.maskedApiKey());
         item.put("temperature", profile.temperature());
         item.put("maxTokens", profile.maxTokens());
+        item.put("dimensions", profile.dimensions());
         item.put("capabilities", profile.capabilities());
         item.put("fallbacks", profile.fallbacks());
         item.put("capabilityHint", profile.capabilityHint());
         item.put("usedByDomains", registry.domainsUsing(profile.alias()));
-        return item;
-    }
-
-    /**
-     * 内置 default 的当前值（＝管控台「模型设置」页那套，只读展示，改它请去模型设置页）。
-     */
-    private Map<String, Object> builtinChatView() {
-        LlmSettings settings = holder.currentSettings();
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("alias", ModelProfileRegistry.BUILTIN_DEFAULT);
-        if (settings == null) {
-            item.put("configured", false);
-            return item;
-        }
-        item.put("configured", settings.isUsable());
-        item.put("baseUrl", settings.getChatBaseUrl());
-        item.put("modelName", settings.getChatModelName());
-        item.put("apiKeyMasked", settings.getMaskedChatApiKey());
-        item.put("temperature", settings.getChatTemperature());
-        item.put("maxTokens", settings.getChatMaxTokens());
-        item.put("usedByDomains", registry.domainsUsing(ModelProfileRegistry.BUILTIN_DEFAULT));
         return item;
     }
 
@@ -211,22 +262,30 @@ public class AdminModelProfileController {
         return body;
     }
 
-    /** 新建/覆盖档案的请求体 */
+    /** 新建/覆盖档案的请求体（探测接口复用其中 baseUrl / apiKey / modelName） */
     @Data
     public static class ProfileBody {
         private String alias;
+        /** 端点族（可多选；空 = chat） */
+        private List<String> endpoints;
+        /** 输入模态 */
+        private List<String> input;
+        /** 输出模态 */
+        private List<String> output;
         private String baseUrl;
         private String apiKey;
         private String modelName;
         private Double temperature;
         private Integer maxTokens;
+        /** 向量维度（仅 embedding 用） */
+        private Integer dimensions;
         private List<String> capabilities;
         private List<String> fallbacks;
     }
 
-    /** 绑定请求体（alias 留空 = 解绑） */
+    /** 绑定请求体（aliases 空 = 解绑；顺序即优先级） */
     @Data
     public static class BindBody {
-        private String alias;
+        private List<String> aliases;
     }
 }

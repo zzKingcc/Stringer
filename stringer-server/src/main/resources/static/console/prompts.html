@@ -93,11 +93,14 @@
                     </tbody>
                 </table>
             </div>
-            <div class="hint">
-                可见工具 = 该域真实能用的工具集（显式声明通配 <span class="mono">*</span> 的工具对所有域可见；
-                <b>声明留空的工具只属于兜底域 <span class="mono">default</span></b>，不会出现在其他域里）。
-                <b>提示词不决定工具可见性</b>：就算某个域一个字都没配，它对工具的限制照样生效，缺提示词只是体验降级。
-            </div>
+            <details class="disclose">
+                <summary>可见工具与提示词的关系</summary>
+                <div class="disclose-body">
+                    可见工具 = 该域真实能用的工具集（显式声明通配 <span class="mono">*</span> 的工具对所有域可见；
+                    <b>声明留空的工具只属于兜底域 <span class="mono">default</span></b>，不会出现在其他域里）。
+                    <b>提示词不决定工具可见性</b>：就算某个域一个字都没配，它对工具的限制照样生效，缺提示词只是体验降级。
+                </div>
+            </details>
         </div>
 
         <div class="card" id="editorCard" style="display:none;">

@@ -154,13 +154,20 @@ public class LlmModelHolder {
                 ? fromUi.getChatTemperature() : yChat.getTemperature());
         merged.setChatMaxTokens(fromUi.getChatMaxTokens() != null
                 ? fromUi.getChatMaxTokens() : yChat.getMaxTokens());
+        merged.setChatCapabilities(copy(fromUi.getChatCapabilities()));
 
         merged.setEmbeddingBaseUrl(pick(fromUi.getEmbeddingBaseUrl(), yEmb.getBaseUrl()));
         merged.setEmbeddingApiKey(pick(fromUi.getEmbeddingApiKey(), yEmb.getApiKey()));
         merged.setEmbeddingModelName(pick(fromUi.getEmbeddingModelName(), yEmb.getModelName()));
         merged.setEmbeddingDimensions(fromUi.getEmbeddingDimensions() != null
                 ? fromUi.getEmbeddingDimensions() : yEmb.getDimensions());
+        merged.setEmbeddingCapabilities(copy(fromUi.getEmbeddingCapabilities()));
         return merged;
+    }
+
+    /** 能力声明不是"可回落 yaml"的部署参数，原样带过去即可（空表也要带上，别留 null） */
+    private static java.util.List<String> copy(java.util.List<String> list) {
+        return list == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(list);
     }
 
     private static String pick(String primary, String fallback) {

@@ -5,7 +5,6 @@ import com.zzkingcc.stringer.server.model.DefaultModelResolver;
 import com.zzkingcc.stringer.server.model.ModelClientFactory;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.model.ModelProfileStore;
-import com.zzkingcc.stringer.server.settings.LlmModelHolder;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,13 +39,12 @@ public class ModelProfileConfiguration {
     }
 
     /**
-     * 模型解析器：内置 {@code default} 走 {@link LlmModelHolder}（保持热替换），自建档案走工厂。
+     * 模型解析器：对话模型只来自用户自建的模型档案，没有内置 default。
      */
     @Bean
     @ConditionalOnMissingBean(ModelResolver.class)
     public ModelResolver modelResolver(ModelProfileRegistry registry,
-                                       ModelClientFactory factory,
-                                       LlmModelHolder holder) {
-        return new DefaultModelResolver(registry, factory, holder);
+                                       ModelClientFactory factory) {
+        return new DefaultModelResolver(registry, factory);
     }
 }

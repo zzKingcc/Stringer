@@ -1,7 +1,9 @@
 package com.zzkingcc.stringer.server.controller;
 
 import com.zzkingcc.stringer.api.agent.Domains;
+import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
+import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.InstanceLifecycle;
@@ -14,6 +16,7 @@ import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.config.RedisProperties;
 import com.zzkingcc.stringer.server.config.RetrievalConfiguration;
 import com.zzkingcc.stringer.server.config.PromptProperties;
+import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.prompt.DomainSystemPromptResolver;
 import com.zzkingcc.stringer.server.settings.EsCompatibility;
 import com.zzkingcc.stringer.server.settings.InfraSettings;
@@ -90,6 +93,7 @@ public class AdminController {
     private final InstanceRegistry instanceRegistry;
     private final InstanceLifecycle instanceLifecycle;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final ModelProfileRegistry modelProfileRegistry;
 
     public AdminController(ToolRouter toolRouter,
                            RetrievalConfiguration retrievalConfiguration,
@@ -109,7 +113,8 @@ public class AdminController {
                            InstanceRegistry instanceRegistry,
                            InstanceLifecycle instanceLifecycle,
                            KnowledgeBaseService knowledgeBaseService,
-                           DomainRegistry domainRegistry) {
+                           DomainRegistry domainRegistry,
+                           ModelProfileRegistry modelProfileRegistry) {
         this.toolRouter = toolRouter;
         this.retrievalConfiguration = retrievalConfiguration;
         this.esClient = esClient;
@@ -129,6 +134,7 @@ public class AdminController {
         this.instanceLifecycle = instanceLifecycle;
         this.knowledgeBaseService = knowledgeBaseService;
         this.domainRegistry = domainRegistry;
+        this.modelProfileRegistry = modelProfileRegistry;
     }
 
     /**
@@ -144,11 +150,13 @@ public class AdminController {
         body.put("chatModelName", current.getChatModelName());
         body.put("chatTemperature", current.getChatTemperature());
         body.put("chatMaxTokens", current.getChatMaxTokens());
+        body.put("chatCapabilities", current.getChatCapabilities());
         body.put("embeddingBaseUrl", current.getEmbeddingBaseUrl());
         body.put("embeddingApiKeyMasked", current.getMaskedEmbeddingApiKey());
         body.put("embeddingModelName", current.getEmbeddingModelName());
         body.put("embeddingDimensions", current.getEmbeddingDimensions());
-        body.put("chatConfigured", modelHolder.isConfigured());
+        body.put("embeddingCapabilities", current.getEmbeddingCapabilities());
+        body.put("chatConfigured", modelHolder.isConfigured() || modelProfileRegistry.hasChatModel());
         body.put("embeddingConfigured", modelHolder.isEmbeddingConfigured());
         body.put("settingsFile", settingsStore.filePath());
         return body;
@@ -220,7 +228,7 @@ public class AdminController {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);
-        result.put("chatConfigured", modelHolder.isConfigured());
+        result.put("chatConfigured", modelHolder.isConfigured() || modelProfileRegistry.hasChatModel());
         result.put("embeddingConfigured", modelHolder.isEmbeddingConfigured());
         fillKeyState(result);
         result.put("rebuilt", rebuilt);
@@ -228,6 +236,54 @@ public class AdminController {
         result.put("message", rebuilt
                 ? "已保存并立即生效，知识库索引已按新维度 " + dim.newDims() + " 重建"
                 : (dim.note() != null ? "已保存并立即生效（" + dim.note() + "）" : "已保存并立即生效"));
+        return result;
+    }
+
+    /**
+     * 清空内置的某个模型配置（{@code kind} = {@code chat} / {@code embedding}）。
+     *
+     * <p>只清目标那一组，另一组原样保留。清空后该模型视为「未配置」；
+     * 若 yaml 里也没有兜底值，则<b>未绑定任何档案的域将没有可用模型</b> —— 管控台需二次确认。</p>
+     */
+    @DeleteMapping("/settings/{kind}")
+    public Map<String, Object> clearSettings(@PathVariable("kind") String kind) {
+        boolean embedding = "embedding".equalsIgnoreCase(kind);
+        if (!embedding && !"chat".equalsIgnoreCase(kind)) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, "kind 只能是 chat 或 embedding");
+        }
+
+        LlmSettings current = modelHolder.currentSettings();
+        LlmSettings next = new LlmSettings();
+        if (current != null) {
+            if (embedding) {
+                next.setChatBaseUrl(current.getChatBaseUrl());
+                next.setChatApiKey(current.getChatApiKey());
+                next.setChatModelName(current.getChatModelName());
+                next.setChatTemperature(current.getChatTemperature());
+                next.setChatMaxTokens(current.getChatMaxTokens());
+                next.setChatCapabilities(current.getChatCapabilities());
+            } else {
+                next.setEmbeddingBaseUrl(current.getEmbeddingBaseUrl());
+                next.setEmbeddingApiKey(current.getEmbeddingApiKey());
+                next.setEmbeddingModelName(current.getEmbeddingModelName());
+                next.setEmbeddingDimensions(current.getEmbeddingDimensions());
+                next.setEmbeddingCapabilities(current.getEmbeddingCapabilities());
+            }
+        }
+
+        log.warn("[管控] 清空内置{}的配置", embedding ? "向量模型" : "对话模型");
+        try {
+            modelHolder.apply(next);
+        } catch (IllegalStateException e) {
+            return failBody(e.getMessage());
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("chatConfigured", modelHolder.isConfigured() || modelProfileRegistry.hasChatModel());
+        result.put("embeddingConfigured", modelHolder.isEmbeddingConfigured());
+        fillKeyState(result);
+        result.put("message", (embedding ? "向量模型" : "对话模型") + "配置已清空");
         return result;
     }
 

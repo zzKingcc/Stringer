@@ -260,36 +260,40 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ## 9 模型配置
 
-模型接入分两层：**内置 `default`**（管控台「模型设置」页那一套，单文本模型＋单向量模型）与**多 LLM 模型档案**（域可绑定到不同 OpenAI 兼容端点的档案）。未绑定任何档案的域统一走内置 `default`。
+模型接入分两层：**「模型设置」页的全局配置**（`config/llm-settings.json`，一套对话模型 + 一套向量模型；向量那套是知识库检索<b>唯一</b>在用的向量模型）与**多 LLM 模型档案**（`config/models.json`，域可绑定到不同 OpenAI 兼容端点的档案）。
+
+> **没有"内置 `default` 模型别名"这一说。** 对话模型只来自用户自建的模型档案：一个域若没有显式绑定任何可用的对话档案，调用时直接抛 `NotConfiguredException`（`90005` 类，`DEPENDENCY_NOT_CONFIGURED`），<b>不再回落到全局对话模型</b>。全局对话模型配置（`llm-settings.json` 的 chat 段）仅作为"解析器未装配"时的兜底与 `chatConfigured` 指示的一项来源；向量模型始终只走 `llm-settings.json`（单一实例，知识库检索用）。
 
 ### 9.1 模型档案（多 LLM，`config/models.json`）
 
 | 项 | 规定 |
 | --- | --- |
 | 单元 | `ModelProfile`：一个 OpenAI 兼容端点的<b>一份</b>配置（别名 `alias` 唯一；同一模型可配多份档案，域绑的是档案而非模型名） |
-| 字段 | `alias`、`baseUrl`、`apiKey`、`modelName`、`temperature`(可空)、`maxTokens`(可空)、`capabilities`(streaming / tools / vision)、`fallbacks`(降级链，M3 暂只存不生效) |
+| 字段（落盘 `ProfileData`） | `alias`、`endpoints`(端点族 List，可多选，空＝`["chat"]`)、`input` / `output`(输入 / 输出模态 List)、`baseUrl`、`apiKey`、`modelName`、`temperature`(Double，可空)、`maxTokens`(Integer，可空)、`dimensions`(Integer，仅 embedding 用，可空)、`capabilities`(布尔能力 List：`streaming` / `tools`)、`fallbacks`(降级链，暂只存不生效) |
+| 是否对话模型 | 不再有 `type` 字段；用 `isChat()` = `endpoints.contains("chat")` 判定；向量档案靠 `endpoints.contains("embedding")` |
 | 必填 | `baseUrl` / `apiKey` / `modelName` 三者齐备才 `isUsable()`；缺失则拒绝保存 |
 | 能力声明 | `capabilities` 由使用者显式写出；未声明 `tools` → 该域模型<b>不会调用任何工具</b>（只告警不拒绝）；缺失能力时 `capabilityHint()` 提示 |
-| 绑定规则 | <b>档案不自动绑定域</b>：新档案默认"未绑定"；绑定只能由管控台显式写；<b>一个域只绑一个档案</b>（单值，再次绑定即覆盖）；<b>未绑定域走 `defaultAlias`</b>（默认 `default`＝内置那套） |
-| 解析顺序 | `ModelProfileRegistry#resolveAlias(domain)`：域绑定 → `defaultAlias` → 内置 `default`（`Domains.DEFAULT`），命中即止 |
-| 内置 `default` | 别名 `default` 为保留字，不存入档案表，由 `LlmModelHolder` 承载；档案不存在 / 不可用 → `DefaultModelResolver` 回落内置 `default` 并告警（可用性优先，问题走日志） |
-| 域绑定 | `bind(domain, alias)`：`alias` 空白＝解绑（该域改走默认别名）；绑到不存在的档案被拒（可绑内置 `default` 或先建档案） |
-| 删除 | 档案仍被域绑定时<b>拒绝删除</b>（返回引用它的域清单）；内置 `default` 不可删 |
+| 绑定规则 | <b>档案不自动绑定域</b>：新档案默认"未绑定"；绑定只能由管控台显式写。<b>一个域可绑一组有序的模型别名</b>（整体覆盖，列表首个为当前使用的对话模型，其余留给多 agent / 降级）；<b>空列表＝该域"无可调用模型"</b> |
+| 解析顺序 | `ModelProfileRegistry#resolveAliases(domain)` 返回该域<b>显式绑定</b>的别名列表（有序）；列表为空 → 不再回落任何默认值，由 `DefaultModelResolver` 抛 `NotConfiguredException`；列表按序试：首个 `isUsable()` 且 `isChat()` 的档案即命中 |
+| 域绑定 | `bind(domain, aliases)`：`aliases` 空 / 全部空白＝<b>解绑</b>（该域进入"无可调用"状态）；列表整体覆盖；`default` 已不再作为可绑定的模型别名（绑定只能指向自建档案）；绑到不存在的档案被拒 |
+| 删除 | <b>级联清理</b>：删除档案时先把它从所有域的绑定里摘掉、摘空的域绑定直接移除，再删档案本身；那些域立即进入"无可调用"状态（由管控台「域空间」页明确提示），而不是把删除拦在半路。返回结果带出被摘掉绑定的域清单 |
 | 客户端缓存 | `ModelClientFactory` 按<b>档案指纹</b>（含 `baseUrl + modelName + 温度 + maxTokens + SHA-256(apiKey)` 的 SHA-256 前 16 位）缓存；轮换 Key / 端点 → 指纹变 → 自然换实例，旧实例被回收 |
-| 落盘 | `ModelProfileStore` → `config/models.json`；先改内存再整体落盘，落盘失败抛异常（调用方必须感知）；文件缺失 / 解析失败按空配置（所有域走内置 `default`） |
+| 落盘 | `ModelProfileStore` → `config/models.json`；先改内存再整体落盘，落盘失败抛异常（调用方必须感知）；文件缺失 / 解析失败按空配置（所有域均"无可调用"，需到管控台逐一配置） |
 
-### 9.2 内置 default（模型设置，`config/llm-settings.json`）
+### 9.2 「模型设置」全局配置（`config/llm-settings.json`）
+
+> 这一套是<b>全局</b>配置：一套对话模型 + 一套向量模型。向量那套是知识库检索<b>唯一</b>在用的向量模型（不进档案体系）。对话那套作为"解析器未装配"时的兜底与 `chatConfigured` 指示来源；<b>域不会因为没配而自动回落到它</b>——域要对话，必须显式绑定一个自建档案。
 
 | 项 | 规定 |
 | --- | --- |
 | 配置来源 | `config/llm-settings.json`（运行时，高） > yaml `stringer.ai.*`（低） |
-| 文本模型字段 | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`（0~2，默认 0.5）、`chatMaxTokens`（默认 2048） |
-| 向量模型字段 | `embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions`（可空） |
+| 文本模型字段 | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`（0~2，默认 0.5）、`chatMaxTokens`（默认 2048）、`chatCapabilities` |
+| 向量模型字段 | `embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions`（可空）、`embeddingCapabilities` |
 | 回落规则 | 向量模型地址与 Key 留空时复用文本模型的值 |
 | 空值语义 | 留空＝保持原值不变 |
 | 状态三态 | `未配置`（必填项有空） / `已配置·未验证`（填齐未测或已改动） / `已连接` |
 | 指纹 | `baseUrl + modelName + SHA-256(apiKey)`，文本与向量各存一份 |
-| 装配方式 | `LlmModelHolder` 委托代理：`openAiChatModel`、`openAiStreamingChatModel`、`openAiEmbeddingModel`；热替换为原子替换，注入点不变；模型档案解析到内置 `default` 时复用此代理，故「模型设置」页改了立即生效 |
+| 装配方式 | `LlmModelHolder` 委托代理：`openAiChatModel`、`openAiStreamingChatModel`、`openAiEmbeddingModel`；热替换为原子替换，注入点不变。向量模型经此代理供知识库检索；对话模型仅在<b>解析器缺失</b>时作为兜底 |
 
 ### 9.3 向量维度契约
 
@@ -468,7 +472,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- | --- |
 | `config/accounts.json` | `AccountStore` | `username`、`passwordHash`、`signingKey`、`createdAt`、`lastLoginAt`、`lastLoginFrom` |
 | `config/llm-settings.json` | `LlmSettingsStore` | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions` |
-| `config/models.json` | `ModelProfileStore` | `defaultAlias`、`domainBindings`（域→别名）、`chatProfiles`（别名→ `ProfileData{baseUrl, apiKey, modelName, temperature, maxTokens, capabilities, fallbacks}`） |
+| `config/models.json` | `ModelProfileStore` | `domainBindings`（域→别名<b>列表</b>，有序；空＝该域无可调用）、`profiles`（别名→ `ProfileData{endpoints, input, output, baseUrl, apiKey, modelName, temperature, maxTokens, dimensions, capabilities, fallbacks}`；无 `type` 字段，`isChat()`＝`endpoints` 含 `chat`） |
 | `config/infra-settings.json` | `InfraSettingsStore` | `es{host,port,scheme,username,password,connectTimeout,socketTimeout}`、`redis{host,port,password,database}` |
 | `config/prompts.json` | `DomainSettingsStore` | `base`、`prompts`（域名 → 提示词） |
 | `config/domains.json` | `DomainStore` | `manualDomains`（人工创建的域标识清单） |

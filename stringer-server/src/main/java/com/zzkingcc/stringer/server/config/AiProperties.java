@@ -25,12 +25,12 @@ public class AiProperties {
         private String baseUrl;
         /** API Key */
         private String apiKey;
-        /** 模型名 */
-        private String modelName = "qwen3.7-plus";
-        /** 采样温度 */
-        private Double temperature = 0.5;
-        /** 单次最大 token */
-        private Integer maxTokens = 2048;
+        /** 模型名（不写代码默认：未配置即 null，管控台填写优先，避免脚手架遗留的默认值在页面冒出来） */
+        private String modelName;
+        /** 采样温度（不写代码默认：未配置即 null，管控台填写优先） */
+        private Double temperature;
+        /** 单次最大 token（不写代码默认：未配置即 null，管控台填写优先） */
+        private Integer maxTokens;
     }
 
     @Data

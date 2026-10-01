@@ -1,22 +1,18 @@
 package com.zzkingcc.stringer.server.model;
 
+import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.runtime.model.ModelResolver;
-import com.zzkingcc.stringer.server.settings.LlmModelHolder;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
 
 /**
  * 默认模型解析器：把「域 → 档案 → 客户端」这条链路接起来。
  *
- * <p>两种结果：</p>
- * <ul>
- *   <li>别名是内置 {@code default}（含"域没绑定"的情况）→ 返回 {@code LlmModelHolder} 的<b>委派代理</b>。
- *       用代理而不是快照，是为了让管控台「模型设置」页改了之后立即生效 —— 与升级前的单模型行为一致。</li>
- *   <li>别名是自建档案 → 由 {@code ModelClientFactory} 按指纹缓存构建。</li>
- * </ul>
- *
- * <p>档案不存在或不可用（只有手工改坏配置文件才会发生）时<b>回落内置 default 并告警</b>：
- * 可用性优先，问题通过日志暴露，而不是让整轮对话直接失败。</p>
+ * <p>没有"内置 default"这一说：对话模型只来自用户自建的模型档案。别名命中档案后由
+ * {@code ModelClientFactory} 按指纹缓存构建；命中不了（域没绑 / 档案不存在 / 不可用 / 非对话类型）就如实抛出
+ * {@link NotConfiguredException}，让调用方拿到明确原因，而不是回落到一个幽灵模型。</p>
  *
  * @author zzkingcc
  */
@@ -25,37 +21,44 @@ public class DefaultModelResolver implements ModelResolver {
 
     private final ModelProfileRegistry registry;
     private final ModelClientFactory factory;
-    private final LlmModelHolder holder;
 
     public DefaultModelResolver(ModelProfileRegistry registry,
-                                ModelClientFactory factory,
-                                LlmModelHolder holder) {
+                                ModelClientFactory factory) {
         this.registry = registry;
         this.factory = factory;
-        this.holder = holder;
     }
 
     @Override
     public StreamingChatModel streamingChat(String domain) {
-        String alias = registry.resolveAlias(domain);
+        List<String> aliases = registry.resolveAliases(domain);
 
-        if (registry.isBuiltinDefault(alias)) {
-            return holder.streamingChatModel();
+        /* 域一个可调用模型都没配 → 如实抛出，由调用点转成明确失败。
+           不再回落任何内置 default：域必须先显式配置自己的模型（新建域即处于"无可调用"状态）。 */
+        if (aliases.isEmpty()) {
+            throw new NotConfiguredException("域 " + domain + " 未配置可调用模型"
+                    + " —— 请到管控台「域空间」为该域指定至少一个模型");
         }
 
-        ModelProfile profile = registry.profile(alias).orElse(null);
-        if (profile == null || !profile.isUsable()) {
-            log.warn("[模型档案] 域 {} 绑定的档案 {} 不存在或不可用，已回落内置 default；"
-                    + "请到管控台「模型设置」修正绑定（档案列表：{}）",
-                    domain, alias, registry.profiles().stream().map(ModelProfile::alias).toList());
-            return holder.streamingChatModel();
+        /* 域的可调用列表按顺序试：首个可用即用（列表只有一个时行为与"单值绑定"一致） */
+        for (String alias : aliases) {
+            ModelProfile profile = registry.profile(alias).orElse(null);
+            if (profile == null || !profile.isUsable() || !profile.isChat()) {
+                log.warn("[模型档案] 域 {} 的可调用模型 {} 不存在 / 不可用 / 非对话类型，尝试列表中的下一个（档案列表：{}）",
+                        domain, alias, registry.profiles().stream().map(ModelProfile::alias).toList());
+                continue;
+            }
+            if (!profile.supportsTools()) {
+                // 只告警不拒绝：先用便宜模型把链路跑通是合理诉求，但必须让人看见
+                log.warn("[模型档案] 域 {} 使用的档案 {} 未声明 {} 能力：模型将不会调用任何工具",
+                        domain, alias, ModelProfile.CAP_TOOLS);
+            }
+            return factory.streamingChat(profile);
         }
 
-        if (!profile.supportsTools()) {
-            // 只告警不拒绝：先用便宜模型把链路跑通是合理诉求，但必须让人看见
-            log.warn("[模型档案] 域 {} 使用的档案 {} 未声明 {} 能力：模型将不会调用任何工具",
-                    domain, alias, ModelProfile.CAP_TOOLS);
-        }
-        return factory.streamingChat(profile);
+        /* 列表里的档案全都不存在 / 不可用 / 非对话类型 → 同样不再回落任何默认模型 */
+        log.warn("[模型档案] 域 {} 的可调用列表 {} 均不可用（档案列表：{}）",
+                domain, aliases, registry.profiles().stream().map(ModelProfile::alias).toList());
+        throw new NotConfiguredException("域 " + domain + " 的可调用列表 " + aliases
+                + " 中没有可用模型 —— 请到管控台「域空间」重新指定");
     }
 }

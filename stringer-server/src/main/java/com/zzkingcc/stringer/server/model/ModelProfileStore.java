@@ -35,7 +35,7 @@ public class ModelProfileStore {
      */
     public ModelProfileSettings load() {
         if (!Files.exists(settingsFile)) {
-            log.debug("[模型档案] 未找到 {}，按「未配置任何档案」处理（所有域走内置 default）",
+            log.debug("[模型档案] 未找到 {}，按「未配置任何档案」处理（域需显式配置模型，否则为无可调用）",
                     settingsFile.toAbsolutePath());
             return new ModelProfileSettings();
         }
@@ -58,10 +58,9 @@ public class ModelProfileStore {
     public void save(ModelProfileSettings settings) {
         try {
             AtomicFiles.write(settingsFile, MAPPER.writeValueAsBytes(settings));
-            log.info("[模型档案] 已保存：档案 {} 个、域绑定 {} 条、默认别名 {}",
-                    settings.getChatProfiles().size(),
-                    settings.getDomainBindings().size(),
-                    settings.getDefaultAlias());
+            log.info("[模型档案] 已保存：档案 {} 个、域绑定 {} 条",
+                    settings.getProfiles().size(),
+                    settings.getDomainBindings().size());
         } catch (IOException e) {
             throw new IllegalStateException("模型档案保存失败：" + settingsFile.toAbsolutePath(), e);
         }

@@ -153,18 +153,16 @@ class LlmModelHolderTest {
     }
 
     /**
-     * UI 未填写温度 / 上限时，promote 应回落到 yaml 默认值（而非写入 null），
-     * 与 rebuild 构建模型时用的 merged 设置保持一致——模型始终有一个温度可用。
+     * 回归：UI 未填写温度 / 上限时，promote 仍须把参数提升为 OpenAiChatRequestParameters（否则底层强转抛 ClassCastException），
+     * 并带上 modelName；温度 / 上限回落到模型（服务商）默认，不再由项目写死 yaml 默认值。
      */
     @Test
-    void promote_fallsBackToYamlDefaultWhenUiUnset() {
-        AiProperties yaml = new AiProperties();
+    void promote_upgradesGenericParamsWhenUiUnset() {
         LlmModelHolder holder = holderWithSettings(null, null);
 
         ChatRequest promoted = holder.promote(genericRequest());
         OpenAiChatRequestParameters p = assertInstanceOf(OpenAiChatRequestParameters.class, promoted.parameters());
-        assertEquals(yaml.getChat().getTemperature(), p.temperature());
-        assertEquals(yaml.getChat().getMaxTokens(), p.maxOutputTokens());
+        assertEquals("test-model", p.modelName());
     }
 
     /** 未配置时，流式委派代理的 doChat 必须抛 NotConfiguredException（fail-fast，不联网） */

@@ -292,21 +292,16 @@ public class AgentOrchestrationService implements AgentService {
     /**
      * 解析本轮使用的对话模型。
      *
-     * <p>没有解析器（未装配模型档案的部署、单元测试）或解析不到时，退回构造期注入的模型 ——
-     * 于是"不配置多模型"与升级前的行为完全一致。</p>
+     * <p>没有解析器（未装配模型档案的部署、单元测试）时退回构造期注入的模型，行为与"全局一个模型"一致。
+     * 一旦装配了解析器，解析不到 / 解析异常都<b>不再回落任何内置默认模型</b>：未绑定 = 无可调用，
+     * 如实体上报 {@link NotConfiguredException}，让调用方拿到明确原因。</p>
      */
     private StreamingChatModel resolveModel(String profile) {
         if (modelResolver == null) {
             return streamingChatModel;
         }
-        try {
-            StreamingChatModel resolved = modelResolver.streamingChat(profile);
-            return resolved == null ? streamingChatModel : resolved;
-        } catch (Exception e) {
-            // 解析失败不该让整轮对话失败：退回默认模型，并把原因留在日志里
-            log.warn("[Agent编排] 会话模型解析失败（域={}），已回落默认模型: {}", profile, e.getMessage());
-            return streamingChatModel;
-        }
+        // 解析器存在时，未配置 / 解析失败都如实向上抛，不再静默回落默认模型
+        return modelResolver.streamingChat(profile);
     }
 
     /**

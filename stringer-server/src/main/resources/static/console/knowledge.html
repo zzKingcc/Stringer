@@ -45,11 +45,14 @@
                         <option value="*">*（全域可见）</option>
                     </select>
                 </label>
-                <span class="hint" style="margin:0;">
+            </div>
+            <details class="disclose">
+                <summary>可用域的作用</summary>
+                <div class="disclose-body">
                     决定<b>哪些对话能检索到这份文档</b>，与 <code>@Tool(domains = {...})</code> 同构：含 <code>*</code> → 全域；
                     不选 → 只属兜底域 <code>default</code>。检索工具本身仍由部署方声明到哪些域，两层叠加。
-                </span>
-            </div>
+                </div>
+            </details>
             <div id="uploadResult" class="result"></div>
         </div>
 
@@ -88,15 +91,19 @@
         return list.map(function (d) { return '<span class="pill">' + esc(d) + '</span>'; }).join(' ');
     }
 
+    /* 域清单走管控台同款 /admin/domains（COOKIE 载具），
+       不能用 /api/agent/domains（HEADER/API-key 载具）—— 管控台只带 Cookie，
+       后者会被判 10002 弹回登录页。该端点返回 domains = [{name, source, ...}]，
+       兜底域＝source === 'BUILTIN'（即 default）。 */
     function loadDomainOptions() {
         var select = document.getElementById('domainSelect');
-        Console.request('/api/agent/domains').then(function (data) {
-            var fallback = data.fallback || 'default';
-            (data.domains || []).forEach(function (id) {
-                if (id === '*') return;   // 已在 HTML 里作为首项
+        Console.request('/admin/domains').then(function (data) {
+            (data.domains || []).forEach(function (d) {
+                var name = (typeof d === 'string') ? d : d.name;
+                if (!name || name === '*') return;   // * 已在 HTML 里作为首项
                 var opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = id + (id === fallback ? '（兜底域）' : '');
+                opt.value = name;
+                opt.textContent = name + (d && d.source === 'BUILTIN' ? '（兜底域）' : '');
                 select.appendChild(opt);
             });
         }).catch(function () {

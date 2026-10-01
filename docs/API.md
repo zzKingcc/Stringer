@@ -201,6 +201,26 @@
 
 约定：`apiKey` 不回显，留空表示保持原值；向量模型的地址与 Key 留空时回落文本模型配置。
 
+### 4.2.1 模型档案与域绑定（多 LLM）
+
+模型档案（`config/models.json`）与「域 → 模型」绑定。对话模型只来自这里的自建档案，<b>没有内置 `default` 模型别名</b>：域未绑定任何可用档案 → 调用时抛 `NotConfiguredException`（`90005`）。
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/model-profiles` | — | `code`、`profiles[]`（每项含 `alias`、`endpoints`、`input`、`output`、`baseUrl`、`modelName`、`apiKeyMasked`、`temperature`、`maxTokens`、`dimensions`、`capabilities`、`fallbacks`、`capabilityHint`、`usedByDomains`）、`domainBindings`（域→别名列表）、`settingsFile` |
+| POST | `/admin/model-profiles` | body `ModelProfile`（`alias` / `apiKey` 必填，另含 `endpoints` / `input` / `output` / `baseUrl` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`） | `code`、`action`、`target`、`settingsFile`；`alias` 已存在则整体覆盖 |
+| POST | `/admin/model-profiles/probe` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：实测一个模型的端点族 / 模态 / 能力 / 维度 |
+| POST | `/admin/model-profiles/{alias}/probe` | path `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
+| POST | `/admin/model-profiles/{alias}/test` | path `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
+| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`。不再"被域引用就拒绝" |
+| PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`、`target`、`aliases`（解绑后该域当前列表）、`domainBindings`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定 |
+
+约定：
+- 档案的 `endpoints` 可多选（空＝`["chat"]`）；是否对话模型看 `endpoints` 是否含 `chat`（`isChat()`），向量看 `embedding`。**落盘结构无 `type` 字段**。
+- `bind` 的 `aliases` 为空 / 全空白＝解绑，该域进入"无可调用"状态；列表首个为当前使用的对话模型，其余留给多 agent / 降级。
+- `GET /admin/model-profiles` 不再返回 `builtinAlias` / `defaultAlias` / `builtinChat`（这些概念已取消）。
+- `chatConfigured`（`/admin/settings`）现已为 `llm-settings` 的 chat 已配置 **或** 任一可用对话档案存在（`registry.hasChatModel()`）。
+
 ### 4.3 工具、域与提示词
 
 | 方法 | 路径 | 入参 | 响应要点 |

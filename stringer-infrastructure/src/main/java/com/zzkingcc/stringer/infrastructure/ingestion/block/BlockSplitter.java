@@ -1,8 +1,8 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.block;
 
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.SplitResult;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.Chunker;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
 import lombok.extern.slf4j.Slf4j;
@@ -40,23 +40,23 @@ public final class BlockSplitter {
         this.chunker = new Chunker(maxChars, overlapSentences, minChars);
     }
 
-    /** 只出片段，不要诊断计数时用（与 txt 的 {@code DocumentSplitter} 同款语义） */
-    public List<TextSegment> split(Document document, List<Block> blocks) {
-        return splitWithStats(document, blocks, 0).segments();
+    /** 只出片段，不要诊断计数时用 */
+    public List<TextSegment> split(IngestDocument source, List<Block> blocks) {
+        return splitWithStats(source, blocks, 0).segments();
     }
 
     /**
      * 打包一个文档的 Block 流。
      *
-     * @param document     带 {@code file_name} / {@code doc_id} 的文档载体（二进制格式正文为空，只用它的 metadata）
+     * @param source       入库载具（只用它的 metadata 与文件名；二进制格式正文为空是正常的）
      * @param blocks       格式适配层产出的块序列
      * @param droppedLines 适配层丢掉的标记行数（原样带回 {@link SplitResult}，用于上传返回值诊断）
      */
-    public SplitResult splitWithStats(Document document, List<Block> blocks, int droppedLines) {
+    public SplitResult splitWithStats(IngestDocument source, List<Block> blocks, int droppedLines) {
         if (blocks == null || blocks.isEmpty()) {
             return SplitResult.empty();
         }
-        Packer packer = new Packer(stripExtension(safeFileName(document)));
+        Packer packer = new Packer(stripExtension(source.fileName()));
         int titles = 0;
 
         for (Block block : blocks) {
@@ -85,9 +85,9 @@ public final class BlockSplitter {
         }
         packer.flushPending();
 
-        List<TextSegment> segments = packer.build(document);
+        List<TextSegment> segments = packer.build(source);
         log.info("[结构化切片] 文件[{}]：识别标题 {} 个，产出切片 {} 片，适配层丢标记 {} 行",
-                safeFileName(document), titles, segments.size(), droppedLines);
+                source.fileName(), titles, segments.size(), droppedLines);
         return new SplitResult(segments, titles, droppedLines);
     }
 
@@ -214,7 +214,7 @@ public final class BlockSplitter {
             pageNo = 0;
         }
 
-        private List<TextSegment> build(Document document) {
+        private List<TextSegment> build(IngestDocument source) {
             int total = pieces.size();
             List<TextSegment> segments = new ArrayList<>(total);
             for (int i = 0; i < total; i++) {
@@ -224,7 +224,7 @@ public final class BlockSplitter {
                 // 与 txt 同一条约定：标题路径前置进正文，向量与 BM25 吃同一份文本
                 String full = path.isEmpty() ? body : path + "\n\n" + body;
 
-                Metadata metadata = document.metadata().copy();
+                Metadata metadata = source.metadata().copy();
                 metadata.put("section_path", path);
                 metadata.put("section_title", piece.title);
                 metadata.put("chunk_seq", i + 1);
@@ -347,28 +347,5 @@ public final class BlockSplitter {
         }
         int dot = fileName.lastIndexOf('.');
         return dot > 0 ? fileName.substring(0, dot) : fileName;
-    }
-
-    /** 三级回退取文件名：file_name → source → absolute_path */
-    private static String safeFileName(Document doc) {
-        try {
-            String name = doc.metadata().getString("file_name");
-            if (name != null && !name.isBlank()) {
-                return name;
-            }
-            String src = doc.metadata().getString("source");
-            if (src != null && !src.isBlank()) {
-                int sep = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
-                return sep >= 0 ? src.substring(sep + 1) : src;
-            }
-            String abs = doc.metadata().getString("absolute_path");
-            if (abs != null && !abs.isBlank()) {
-                int sep = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-                return sep >= 0 ? abs.substring(sep + 1) : abs;
-            }
-        } catch (Exception ignored) {
-            // metadata 缺失时按 unknown 处理
-        }
-        return "(unknown)";
     }
 }

@@ -6,6 +6,7 @@ import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -41,7 +42,7 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
     private static final int EMBEDDING_BATCH_SIZE = 25;
 
     @Override
-    public final IngestReport process(List<Document> documents,
+    public final IngestReport process(List<IngestDocument> documents,
                                       ElasticsearchClient esClient,
                                       String indexName,
                                       EmbeddingStore embeddingStore,
@@ -137,7 +138,7 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
     /**
      * 子类实现：将文档列表切分为文本片段，并带回切片诊断计数
      */
-    protected abstract SplitResult splitDocuments(List<Document> documents);
+    protected abstract SplitResult splitDocuments(List<IngestDocument> documents);
 
     /**
      * 计算 content_hash：SHA-256(切片正文)。
@@ -213,25 +214,28 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
     }
 
     /**
-     * 从 Document metadata 中提取来源文件名（三级回退：file_name → source → absolute_path）
+     * 文本类策略用：把 {@link IngestDocument} 还原成 langchain4j 的 {@code Document}。
+     *
+     * <p>只有文本类能走这一步 —— 二进制载体 {@link IngestDocument#text()} 为 {@code null}，
+     * 这里会跳过并告警（二进制策略应该取 {@link IngestDocument#content()}）。</p>
      */
-    protected String safeFileName(Document doc) {
-        try {
-            String name = doc.metadata().getString("file_name");
-            if (name != null && !name.isBlank()) return name;
-            String src = doc.metadata().getString("source");
-            if (src != null && !src.isBlank()) {
-                int sep = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
-                return sep >= 0 ? src.substring(sep + 1) : src;
+    protected static List<Document> asDocuments(List<IngestDocument> sources) {
+        List<Document> documents = new ArrayList<>(sources.size());
+        for (IngestDocument source : sources) {
+            String text = source.text();
+            if (text == null || text.isBlank()) {
+                log.warn("[分片] 文件[{}]没有可用文本（二进制格式走了文本管线？），跳过", source.fileName());
+                continue;
             }
-            String abs = doc.metadata().getString("absolute_path");
-            if (abs != null && !abs.isBlank()) {
-                int sep = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-                return sep >= 0 ? abs.substring(sep + 1) : abs;
-            }
-        } catch (Exception e) {
-            log.error("提取文件名时出错", e);
+            documents.add(Document.from(text, source.metadata()));
         }
-        return "(unknown)";
+        return documents;
+    }
+
+    /**
+     * 取文件名（写日志 / 报错提示用）
+     */
+    protected String safeFileName(IngestDocument doc) {
+        return doc.fileName();
     }
 }

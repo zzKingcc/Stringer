@@ -2,7 +2,7 @@ package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
-import dev.langchain4j.data.document.Document;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -64,20 +64,17 @@ public class DocumentProcessStrategyFactory {
     /**
      * 按照文档划分构建各处理器扫描链。
      * 
-     * @param documents 待分组的 Document 列表
+     * @param documents 待分组的文档列表
      * @return
      */
-    public static Map<DocumentProcessStrategy, List<Document>> groupByStrategy(List<Document> documents) {
-        Map<DocumentProcessStrategy, List<Document>> group = new LinkedHashMap<>();
+    public static Map<DocumentProcessStrategy, List<IngestDocument>> groupByStrategy(List<IngestDocument> documents) {
+        Map<DocumentProcessStrategy, List<IngestDocument>> group = new LinkedHashMap<>();
         for (DocumentProcessStrategy s : ALL_STRATEGIES) {
             group.put(s, new ArrayList<>());
         }
 
-        for (Document doc : documents) {
-            String name = extractFileName(doc);
-            DocumentProcessStrategy strategy = resolve(name);
-            // group.computeIfAbsent(strategy, k -> new ArrayList<>()).add(doc);
-            group.get(strategy).add(doc);
+        for (IngestDocument doc : documents) {
+            group.get(resolve(doc.fileName())).add(doc);
         }
 
         // 移除空组，减少上层循环输出
@@ -99,29 +96,5 @@ public class DocumentProcessStrategyFactory {
         int dot = fileName.lastIndexOf('.');
         if (dot < 0 || dot == fileName.length() - 1) return null;
         return fileName.substring(dot + 1);
-    }
-
-    //三级文件名提取
-    private static String extractFileName(Document doc) {
-        try {
-            //1、文件名
-            String name = doc.metadata().getString("file_name");
-            if (name != null && !name.isBlank()) return name;
-            //2、来源路径截取
-            String src = doc.metadata().getString("source");
-            if (src != null && !src.isBlank()) {
-                int sep = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
-                return sep >= 0 ? src.substring(sep + 1) : src;
-            }
-            //3、绝对路径截取
-            String abs = doc.metadata().getString("absolute_path");
-            if (abs != null && !abs.isBlank()) {
-                int sep = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-                return sep >= 0 ? abs.substring(sep + 1) : abs;
-            }
-        } catch (Exception e) {
-            log.error("提取文件名时出错", e);
-        }
-        return "(unknown)";
     }
 }

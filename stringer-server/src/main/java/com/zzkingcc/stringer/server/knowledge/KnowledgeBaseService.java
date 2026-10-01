@@ -10,11 +10,13 @@ import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.infrastructure.ingestion.DocumentIngestor;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
+import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategy;
+import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategyFactory;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.IngestReport;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtNormalizer;
 import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.settings.LlmModelHolder;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -292,13 +294,34 @@ public class KnowledgeBaseService {
                     "文件 " + name + " 超过大小上限：" + content.length + " 字节，上限 " + max + " 字节");
         }
         String effective = normalizeDomain(domain);
-        // 统一字符集只在这一处做一次：字节 → UTF-8 文本，后面全链路只处理 UTF-8。
-        // 放在提交任务之前，是为了在拿导入锁之前就把"编码判不出"这类问题拒掉。
-        TxtNormalizer.Decoded decoded = TxtNormalizer.decode(content);
-        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，编码={}，replace={}，域={}",
-                name, content.length, decoded.encoding(), replace, effective);
 
-        Future<UploadResult> future = submit(decoded, content.length, name, replace, effective);
+        // ===== 类型分叉 =====
+        // 文本类：在这里一次性转成 UTF-8 语义的文本。放在提交任务之前，是为了让"编码判不出"
+        // 这类问题在拿导入锁之前就被拒掉。
+        // 二进制类：绝不解码。二进制走统一字符集只有两种结果 —— 恰好能通过严格 UTF-8 就
+        // 静默灌进一堆乱码知识（最糟），或者报一句用户永远解决不了的"编码错误"。
+        DocumentProcessStrategy route = DocumentProcessStrategyFactory.resolve(name);
+        String encoding;
+        String text;
+        if (route.binary()) {
+            encoding = IngestDocument.BINARY_ENCODING;
+            text = null;
+        } else {
+            TxtNormalizer.Decoded decoded = TxtNormalizer.decode(content);
+            encoding = decoded.encoding();
+            text = decoded.text();
+        }
+        log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，类型={}，编码={}，replace={}，域={}",
+                name, content.length, route.strategyName(), encoding, replace, effective);
+
+        Metadata metadata = Metadata.from("file_name", name);
+        metadata.put("file_name_lower", lower(name));
+        metadata.put(EsIndexManager.DOMAIN_FIELD, effective);
+        IngestDocument source = route.binary()
+                ? IngestDocument.ofBinary(content, name, metadata)
+                : IngestDocument.ofText(text, content, name, metadata, encoding);
+
+        Future<UploadResult> future = submit(source, content.length, name, replace, effective);
         try {
             return future.get();
         } catch (InterruptedException e) {
@@ -315,10 +338,10 @@ public class KnowledgeBaseService {
     }
 
     /** 提交导入任务；队列满时明确拒绝，而不是无界堆积 */
-    private Future<UploadResult> submit(TxtNormalizer.Decoded decoded, long size,
+    private Future<UploadResult> submit(IngestDocument source, long size,
                                         String fileName, boolean replace, String domain) {
         try {
-            return ingestExecutor.submit(() -> ingest(decoded, size, fileName, replace, domain));
+            return ingestExecutor.submit(() -> ingest(source, size, fileName, replace, domain));
         } catch (RejectedExecutionException e) {
             log.warn("[知识库] 导入队列已满（容量 {}），拒绝本次上传：{}",
                     ragProperties.getIngestQueueCapacity(), fileName);
@@ -390,7 +413,7 @@ public class KnowledgeBaseService {
 
     // ==================== 内部实现 ====================
 
-    private UploadResult ingest(TxtNormalizer.Decoded decoded, long size, String fileName,
+    private UploadResult ingest(IngestDocument source, long size, String fileName,
                                 boolean replace, String domain) throws InterruptedException {
         // 串行锁在任务内部获取：排队等待不占用额外池线程，池大小可保持很小
         if (!ingestPermit.tryAcquire(ragProperties.getIngestLockWaitSeconds(), TimeUnit.SECONDS)) {
@@ -421,9 +444,10 @@ public class KnowledgeBaseService {
             }
 
             docId = UUID.randomUUID().toString();
-            Document doc = buildDocument(decoded.text(), fileName, docId, lowerName, domain);
+            source.metadata().put("doc_id", docId);
+            source.metadata().put("upload_time", Instant.now().toString());
             IngestReport report = DocumentIngestor.ingestExternalDocuments(
-                    List.of(doc), esClient, index, storeFor(index), embeddingModel);
+                    List.of(source), esClient, index, storeFor(index), embeddingModel);
             if (report.documents() <= 0) {
                 throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_INGEST_ERROR,
                         "文档未处理成功：" + fileName);
@@ -440,9 +464,9 @@ public class KnowledgeBaseService {
 
             log.info("[知识库] 上传完成：文件={}，域={}，索引={}，docId={}，切片={}，标题={}，删噪={} 行，编码={}",
                     fileName, domain, index, docId, chunks, report.sections(), report.droppedLines(),
-                    decoded.encoding());
+                    source.encoding());
             return new UploadResult(docId, fileName, size, chunks, domain,
-                    report.sections(), report.droppedLines(), decoded.encoding(), exportPath);
+                    report.sections(), report.droppedLines(), source.encoding(), exportPath);
         } catch (KnowledgeBaseException e) {
             rollback(index, docId);
             throw e;
@@ -511,21 +535,6 @@ public class KnowledgeBaseService {
         } catch (Exception e) {
             log.error("[知识库] 回滚失败（docId={}），残留片段需手工清理: {}", docId, e.getMessage());
         }
-    }
-
-    private Document buildDocument(String text, String fileName, String docId,
-                                   String lowerName, String domain) {
-        Document doc = Document.from(text == null ? "" : text);
-        Metadata md = doc.metadata();
-        md.put("file_name", fileName);
-        md.put("file_name_lower", lowerName);
-        md.put("doc_id", docId);
-        md.put("upload_time", Instant.now().toString());
-        // 归属域只用于管控台展示与排查；检索的域边界由「查哪个索引」保证
-        Map<String, Object> extra = new LinkedHashMap<>();
-        extra.put(EsIndexManager.DOMAIN_FIELD, domain);
-        md.putAll(extra);
-        return doc;
     }
 
     /** 该文档的切片预览文件路径；文件不存在时返回 {@code null}（管控台只展示真实存在的路径） */

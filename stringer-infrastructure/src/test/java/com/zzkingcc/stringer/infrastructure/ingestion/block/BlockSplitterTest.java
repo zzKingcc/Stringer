@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.block;
 
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.SplitResult;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
 import org.junit.jupiter.api.Test;
@@ -17,12 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class BlockSplitterTest {
 
-    /**
-     * 二进制格式（docx / pdf）进来时正文为空，这里用占位文本 ——
-     * langchain4j 的 {@code Document} 不接受空白文本，而切片层只消费它的 metadata。
-     */
-    private static Document doc(String fileName) {
-        return Document.from("(blocks)", Metadata.from("file_name", fileName));
+    private static IngestDocument doc(String fileName) {
+        return IngestDocument.ofText("(md 由 MarkdownReader 负责解析)", new byte[0],
+                fileName, Metadata.from("file_name", fileName), "UTF-8");
     }
 
     private static SplitResult split(List<Block> blocks) {

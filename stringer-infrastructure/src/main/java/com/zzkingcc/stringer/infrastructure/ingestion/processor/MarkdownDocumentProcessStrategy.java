@@ -1,10 +1,10 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.block.BlockChunking;
 import com.zzkingcc.stringer.infrastructure.ingestion.block.BlockSplitter;
 import com.zzkingcc.stringer.infrastructure.ingestion.markdown.MarkdownReader;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtNormalizer;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.segment.TextSegment;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,23 +29,23 @@ public class MarkdownDocumentProcessStrategy extends AbstractDocumentProcessStra
     public static final List<String> MARKDOWN_EXTENSIONS = List.of("md", "markdown");
 
     @Override
-    protected SplitResult splitDocuments(List<Document> documents) {
+    protected SplitResult splitDocuments(List<IngestDocument> documents) {
         BlockSplitter splitter = BlockChunking.newSplitter();
         List<TextSegment> all = new ArrayList<>();
         int titles = 0;
         int dropped = 0;
-        for (Document doc : documents) {
-            String text = TxtNormalizer.normalize(doc.text());
+        for (IngestDocument source : documents) {
+            String text = TxtNormalizer.normalize(source.text());
             if (text.isBlank()) {
-                log.warn("[markdown切片] 文件[{}]正文为空，跳过", safeFileName(doc));
+                log.warn("[markdown切片] 文件[{}]正文为空，跳过", safeFileName(source));
                 continue;
             }
             MarkdownReader.Result parsed = MarkdownReader.read(text);
             if (parsed.blocks().isEmpty()) {
-                log.warn("[markdown切片] 文件[{}]没有解析出任何内容块，跳过", safeFileName(doc));
+                log.warn("[markdown切片] 文件[{}]没有解析出任何内容块，跳过", safeFileName(source));
                 continue;
             }
-            SplitResult one = splitter.splitWithStats(doc, parsed.blocks(), parsed.dropped());
+            SplitResult one = splitter.splitWithStats(source, parsed.blocks(), parsed.dropped());
             all.addAll(one.segments());
             titles += one.sections();
             dropped += one.droppedLines();

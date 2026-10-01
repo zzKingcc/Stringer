@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import dev.langchain4j.data.document.Document;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +21,7 @@ public class UnknownDocumentProcessStrategy implements DocumentProcessStrategy {
     }
 
     @Override
-    public IngestReport process(List<Document> documents,
+    public IngestReport process(List<IngestDocument> documents,
                                 ElasticsearchClient esClient,
                                 String indexName,
                                 EmbeddingStore embeddingStore,
@@ -42,28 +42,5 @@ public class UnknownDocumentProcessStrategy implements DocumentProcessStrategy {
     @Override
     public String strategyName() {
         return "未知类型";
-    }
-
-    private String safeFileName(Document doc) {
-        try {
-            //1、文件名
-            String name = doc.metadata().getString("file_name");
-            if (name != null && !name.isBlank()) return name;
-            //2、来源路径截取
-            String src = doc.metadata().getString("source");
-            if (src != null && !src.isBlank()) {
-                int sep = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
-                return sep >= 0 ? src.substring(sep + 1) : src;
-            }
-            //3、绝对路径截取
-            String abs = doc.metadata().getString("absolute_path");
-            if (abs != null && !abs.isBlank()) {
-                int sep = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-                return sep >= 0 ? abs.substring(sep + 1) : abs;
-            }
-        } catch (Exception e) {
-            log.error("提取文件名时出错", e);
-        }
-        return "(unknown)";
     }
 }

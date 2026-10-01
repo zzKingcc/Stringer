@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import dev.langchain4j.data.document.Document;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 
@@ -24,7 +24,7 @@ public interface DocumentProcessStrategy {
      * @param sourceTag      来源标签（"本地"/"外部"）
      * @return 处理报告（文档数 + 切片诊断计数）
      */
-    IngestReport process(List<Document> documents,
+    IngestReport process(List<IngestDocument> documents,
                          ElasticsearchClient esClient,
                          String indexName,
                          EmbeddingStore embeddingStore,
@@ -35,6 +35,16 @@ public interface DocumentProcessStrategy {
      * @return 本策略支持的文件扩展名集合（小写，不含点），用于工厂匹配
      */
     List<String> supportedExtensions();
+
+    /**
+     * 是否为<b>二进制格式</b>（docx / pdf）。
+     *
+     * <p>决定上传入口的分叉：{@code true} 时<b>不解码</b>，原始字节交给 {@link IngestDocument#content()}；
+     * {@code false} 时入口先统一字符集，策略取 {@link IngestDocument#text()}。</p>
+     */
+    default boolean binary() {
+        return false;
+    }
 
     /**
      * @return 策略名称

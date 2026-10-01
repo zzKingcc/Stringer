@@ -1,8 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtChunking;
-import dev.langchain4j.data.document.Document;
-import dev.langchain4j.data.segment.TextSegment;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
@@ -26,8 +25,8 @@ public class TextDocumentProcessStrategy extends AbstractDocumentProcessStrategy
     public static final List<String> TEXT_EXTENSIONS = List.of("txt");
 
     @Override
-    protected SplitResult splitDocuments(List<Document> documents) {
-        return TxtChunking.newSplitter().splitAllWithStats(documents);
+    protected SplitResult splitDocuments(List<IngestDocument> documents) {
+        return TxtChunking.newSplitter().splitAllWithStats(asDocuments(documents));
     }
 
     @Override

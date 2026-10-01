@@ -4,7 +4,6 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategy;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategyFactory;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.IngestReport;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.extern.slf4j.Slf4j;
@@ -25,14 +24,14 @@ public class DocumentIngestor {
     /**
      * 导入外部提交的文档（上传接口的唯一入口）。
      *
-     * @param documents      待导入文档（已由调用方解析好，metadata 需带 file_name / doc_id）
+     * @param documents      待导入文档（文本类已统一字符集，二进制类持原始字节；metadata 需带 file_name / doc_id）
      * @param esClient
      * @param indexName
      * @param embeddingStore
      * @param embeddingModel
      * @return 处理报告（文档数 + 切片诊断计数）
      */
-    public static IngestReport ingestExternalDocuments(List<Document> documents,
+    public static IngestReport ingestExternalDocuments(List<IngestDocument> documents,
                                                        ElasticsearchClient esClient,
                                                        String indexName,
                                                        EmbeddingStore embeddingStore,
@@ -54,7 +53,7 @@ public class DocumentIngestor {
      * @param sourceTag      来源标签（"外部"）
      * @return 处理报告
      */
-    private static IngestReport doIngest(List<Document> documents,
+    private static IngestReport doIngest(List<IngestDocument> documents,
                                          ElasticsearchClient esClient,
                                          String indexName,
                                          EmbeddingStore embeddingStore,
@@ -63,7 +62,7 @@ public class DocumentIngestor {
         int docCount = documents.size();
 
         // 1、按扩展名分组到对应策略
-        Map<DocumentProcessStrategy, List<Document>> group =
+        Map<DocumentProcessStrategy, List<IngestDocument>> group =
                 DocumentProcessStrategyFactory.groupByStrategy(documents);
 
         // 2、打印分组统计
@@ -71,7 +70,7 @@ public class DocumentIngestor {
         summary.append("[知识库导入-").append(sourceTag).append("] 按文件类型分组：")
                 .append("共 ").append(docCount).append(" 个文档 → ");
         int idx = 0;
-        for (Map.Entry<DocumentProcessStrategy, List<Document>> e : group.entrySet()) {
+        for (Map.Entry<DocumentProcessStrategy, List<IngestDocument>> e : group.entrySet()) {
             if (idx++ > 0) summary.append(", ");
             summary.append(e.getKey().strategyName())
                     .append('=').append(e.getValue().size());
@@ -80,9 +79,9 @@ public class DocumentIngestor {
 
         // 3、依次调用每个策略
         IngestReport total = IngestReport.EMPTY;
-        for (Map.Entry<DocumentProcessStrategy, List<Document>> e : group.entrySet()) {
+        for (Map.Entry<DocumentProcessStrategy, List<IngestDocument>> e : group.entrySet()) {
             DocumentProcessStrategy strategy = e.getKey();
-            List<Document> docsOfStrategy = e.getValue();
+            List<IngestDocument> docsOfStrategy = e.getValue();
             try {
                 IngestReport report = strategy.process(
                         docsOfStrategy, esClient, indexName, embeddingStore, embeddingModel, sourceTag);

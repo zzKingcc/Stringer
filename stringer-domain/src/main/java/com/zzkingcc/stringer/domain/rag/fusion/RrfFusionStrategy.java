@@ -25,10 +25,19 @@ import java.util.stream.IntStream;
  * 「小索引里稀有词被抬高的分」当成 max，把其余结果压扁。向量分虽可比，但同一轮里
  * 两路量纲也不同。RRF 只看<b>名次</b>，天然免疫这一切。</p>
  *
- * <p>公式：{@code score(d) = Σ_L (w_L / (k + rank_L(d)))}，k 默认 60。
- * <b>权重按模态均摊</b>：每张向量表的 {@code w = vectorWeight / 向量表个数}，
- * 每张关键词表 {@code w = keywordWeight / 关键词表个数} —— 这样 向量:关键词 的比例
- * 不随域链长度（索引个数）漂移，否则祖先越多、向量表越多，BM25 会被越压越扁。</p>
+ * <p>公式：{@code score(d) = Σ_L (w_L / (k + rank_L(d)))}。其中：</p>
+ * <ul>
+ *   <li><b>权重按模态均摊</b>：每张向量表的基准 {@code w = vectorWeight / 向量表个数}，
+ *       每张关键词表 {@code w = keywordWeight / 关键词表个数} —— 这样 向量:关键词 的比例
+ *       不随域链长度（索引个数）漂移，否则祖先越多、向量表越多，BM25 会被越压越扁。
+ *       分摊只统计<b>有命中</b>的表，空表不占份额。</li>
+ *   <li><b>层级衰减</b>：表的基准权重再乘 {@code ancestorDecay ^ depth}（depth = 距查询域的距离，
+ *       见 {@link RankedList#depth()}），同模态内重新归一化 → 总量守恒，但本域自有知识优先于
+ *       从祖先继承来的知识。{@code ancestorDecay=1.0} 即等权。</li>
+ *   <li><b>标题 / 文件名增益是乘法</b>：{@code 分 × (1 + boost)}。RRF 的值域是
+ *       {@code w/(k+rank)}（单表名次 1 约 0.01 量级），若沿用加法，"0.15 分" 会变成它的十几倍，
+ *       排序直接被 boost 统治、且域链越长越严重。乘法在分数制与排名制下语义一致。</li>
+ * </ul>
  *
  * @author zzkingcc
  */
@@ -45,20 +54,26 @@ public class RrfFusionStrategy implements FusionStrategy {
                               FusionConfig fusion) {
         long start = System.currentTimeMillis();
 
-        List<RankedList> all = lists == null ? List.of() : lists;
-        long vectorLists = all.stream().filter(l -> l != null && l.modality() == Modality.VECTOR).count();
-        long keywordLists = all.stream().filter(l -> l != null && l.modality() == Modality.KEYWORD).count();
+        // 只有"有命中"的表才参与权重分摊 —— 空表若也占份额，权重就摊给了空气，
+        // 该模态剩下的表反而被压低（祖先域还没建索引时会频繁触发）。
+        List<RankedList> active = (lists == null ? List.<RankedList>of() : lists).stream()
+                .filter(l -> l != null && !l.isEmpty())
+                .toList();
+
+        double decay = normalizeDecay(fusion.ancestorDecay());
+        double vectorScale = scaleOf(active, Modality.VECTOR, decay);
+        double keywordScale = scaleOf(active, Modality.KEYWORD, decay);
         int k = Math.max(fusion.rrfK(), 1);
 
         Map<String, ScoreEntry> scoreMap = new LinkedHashMap<>();
-        for (RankedList list : all) {
-            if (list == null || list.contents().isEmpty()) {
+        for (RankedList list : active) {
+            boolean vector = list.modality() == Modality.VECTOR;
+            double scale = vector ? vectorScale : keywordScale;
+            if (scale <= 0.0) {
                 continue;
             }
-            boolean vector = list.modality() == Modality.VECTOR;
-            long count = vector ? vectorLists : keywordLists;
-            double perList = count <= 0 ? 0.0
-                    : (vector ? fusion.vectorWeight() : fusion.keywordWeight()) / count;
+            double perList = (vector ? fusion.vectorWeight() : fusion.keywordWeight())
+                    * weightOf(decay, list.depth()) / scale;
 
             int rank = 0;
             for (Content c : list.contents()) {
@@ -86,28 +101,57 @@ public class RrfFusionStrategy implements FusionStrategy {
         List<ScoreEntry> entries = new ArrayList<>(scoreMap.values());
         for (ScoreEntry e : entries) {
             double score = e.rrf;
-            String title = e.content.textSegment().metadata().getString("section_title");
-            if (title != null && !title.isBlank() && FusionSupport.containsAnyKeyword(title, e.queryText)) {
-                score += e.fusion.titleBoost();
+            if (FusionSupport.titleHit(e.content, e.queryText)) {
+                score *= 1.0 + e.fusion.titleBoost();
             }
-            String fileName = e.content.textSegment().metadata().getString("file_name");
-            if (fileName != null && !fileName.isBlank() && FusionSupport.containsAnyKeyword(fileName, e.queryText)) {
-                score += e.fusion.fileNameBoost();
+            if (FusionSupport.fileNameHit(e.content, e.queryText)) {
+                score *= 1.0 + e.fusion.fileNameBoost();
             }
             e.fusedScore = score;
         }
 
-        entries.sort(Comparator.comparingDouble(e -> -e.fusedScore));
+        entries.sort(byFusedScoreDesc());
         int topN = Math.min(Math.max(fusion.topN(), 1), entries.size());
 
         List<Content> result = IntStream.range(0, topN)
                 .mapToObj(i -> withScores(entries.get(i), i + 1))
                 .collect(Collectors.toList());
 
-        log.info("[RRF融合] 表数={}(向量{} / 关键词{}),去重后{}条,融合重排Top{},耗时{}ms",
-                all.size(), vectorLists, keywordLists, scoreMap.size(), topN,
-                System.currentTimeMillis() - start);
+        log.info("[RRF融合] 表数={}(向量{} / 关键词{}),去重后{}条,融合重排Top{},k={},衰减={},耗时{}ms",
+                active.size(), countOf(active, Modality.VECTOR), countOf(active, Modality.KEYWORD),
+                scoreMap.size(), topN, k, decay, System.currentTimeMillis() - start);
         return result;
+    }
+
+    /** 融合分降序；同分按原文顺序（chunk_seq）稳定排序，保证结果可复现 */
+    private static Comparator<ScoreEntry> byFusedScoreDesc() {
+        return Comparator.comparingDouble((ScoreEntry e) -> e.fusedScore).reversed()
+                .thenComparingInt(e -> FusionSupport.chunkSeq(e.content))
+                .thenComparing(e -> FusionSupport.hashContent(e.content));
+    }
+
+    /** 衰减系数收敛到 (0,1]：非法值（NaN / ≤0）按 1.0（不衰减）处理 */
+    private static double normalizeDecay(double ancestorDecay) {
+        if (Double.isNaN(ancestorDecay) || ancestorDecay <= 0.0) {
+            return 1.0;
+        }
+        return Math.min(ancestorDecay, 1.0);
+    }
+
+    private static double weightOf(double decay, int depth) {
+        return Math.pow(decay, Math.max(depth, 0));
+    }
+
+    /** 某模态全部有效表的衰减权重之和（分母），用于把衰减后的权重重新归一化到总量守恒 */
+    private static double scaleOf(List<RankedList> lists, Modality modality, double decay) {
+        return lists.stream()
+                .filter(l -> l.modality() == modality)
+                .mapToDouble(l -> weightOf(decay, l.depth()))
+                .sum();
+    }
+
+    private static long countOf(List<RankedList> lists, Modality modality) {
+        return lists.stream().filter(l -> l.modality() == modality).count();
     }
 
     /**

@@ -27,10 +27,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>召回通道不是固定的两路，而是<b>按当前域动态解析</b>：一域一索引，检索域 D 时
  * 对 D 自身与祖先链上的每个索引各召回「向量 + 关键词」两路（见 {@link DomainChannelProvider}）。
- * 域链越长通道越多，因此融合必须能在"单索引"与"多索引"之间切换：</p>
+ * 域链越长通道越多，因此融合必须能在"单来源"与"多来源"之间切换：</p>
  * <ul>
- *   <li>只有一个索引 → {@code DefaultFusionStrategy}（分数制，与升级前逐字节一致）；</li>
- *   <li>沿父类链取到多个索引 → {@code RrfFusionStrategy}（排名制，规避 BM25 跨索引不可比）。</li>
+ *   <li>结果实际只来自一个索引 → {@code DefaultFusionStrategy}（分数制，同索引内 BM25 可比）；</li>
+ *   <li>结果来自多个索引 → {@code RrfFusionStrategy}（排名制，规避 BM25 跨索引不可比）。</li>
  * </ul>
  * <p>{@link AdaptiveFusionStrategy} 就是这条双轨的自动切换入口。</p>
  *
@@ -92,14 +92,17 @@ public class RetrievalConfiguration {
                 retrievalProps.getTitleBoost(),
                 retrievalProps.getFileNameBoost(),
                 retrievalProps.getTopN(),
-                retrievalProps.getRrfK());
+                retrievalProps.getRrfK(),
+                retrievalProps.getAncestorDecay());
 
         // parallel=false 时传 null,检索器退化为串行召回
         Executor executor = retrievalProps.isParallel() ? retrievalExecutor : null;
 
-        log.info("[检索配置] 混合检索：向量 Top{}（minScore {}）/ 关键词 Top{}，融合 topN={}，RRF k={}",
+        log.info("[检索配置] 混合检索：向量 Top{}（minScore {}）/ 关键词 Top{}（minimum_should_match={}），"
+                        + "融合 topN={}，RRF k={}，层级衰减={}",
                 retrievalProps.getVectorTopK(), retrievalProps.getVectorMinScore(),
-                retrievalProps.getKeywordTopK(), retrievalProps.getTopN(), retrievalProps.getRrfK());
+                retrievalProps.getKeywordTopK(), retrievalProps.getMinimumShouldMatch(),
+                retrievalProps.getTopN(), retrievalProps.getRrfK(), retrievalProps.getAncestorDecay());
 
         return new CompositeRetriever(
                 new DomainChannelProvider(esClient, embeddingModel, retrievalProps),

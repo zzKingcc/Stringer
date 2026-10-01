@@ -50,6 +50,41 @@ final class FusionSupport {
         return vectorHit ? "vector" : "keyword";
     }
 
+    /**
+     * 切片序号（同一文档内的顺序）。
+     *
+     * <p>只用于<b>同分时的稳定排序</b>：融合分完全相同时按原文顺序排，
+     * 让结果可复现（否则 ES 返回顺序抖动会让同一问题两次答案不一致）。</p>
+     */
+    static int chunkSeq(Content content) {
+        try {
+            Integer seq = content.textSegment().metadata().getInteger("chunk_seq");
+            return seq == null ? Integer.MAX_VALUE : seq;
+        } catch (Exception e) {
+            return Integer.MAX_VALUE;
+        }
+    }
+
+    /** 标题是否命中查询词 */
+    static boolean titleHit(Content content, String query) {
+        String title = meta(content, "section_title");
+        return title != null && !title.isBlank() && containsAnyKeyword(title, query);
+    }
+
+    /** 文件名是否命中查询词 */
+    static boolean fileNameHit(Content content, String query) {
+        String fileName = meta(content, "file_name");
+        return fileName != null && !fileName.isBlank() && containsAnyKeyword(fileName, query);
+    }
+
+    private static String meta(Content content, String key) {
+        try {
+            return content.textSegment().metadata().getString(key);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** 判断文本中是否包含查询词的任意关键词（中文按单字/词匹配，英文按空格分词） */
     static boolean containsAnyKeyword(String text, String query) {
         if (text == null || query == null) {

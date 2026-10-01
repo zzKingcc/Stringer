@@ -116,8 +116,8 @@ class DefaultFusionStrategyTest {
     }
 
     /**
-     * 多张同模态的排名表在分数制下会拼回一路（这是"单索引轨"的假设）；
-     * 真正多索引时应由 {@link AdaptiveFusionStrategy} 走 RRF —— 此用例只钉住拼表行为。
+     * 多张同模态的排名表在分数制下会拼回一路（这是"单来源轨"的假设）；
+     * 真正多来源时应由 {@link AdaptiveFusionStrategy} 走 RRF —— 此用例只钉住拼表行为。
      */
     @Test
     void multipleListsOfSameModality_areConcatenated() {
@@ -130,5 +130,25 @@ class DefaultFusionStrategyTest {
                 new FusionConfig(1.0, 0.0, 0.0, 0.0, 10, 60));
         assertEquals(2, result.size());
         assertEquals("A", result.get(0).textSegment().text());
+    }
+
+    /**
+     * 增益是<b>乘法</b>而非加法：中间那条归一化 0.5，标题命中后应是 0.5×1.2=0.6，
+     * 加法会得到 0.5+0.2=0.7 —— 同一常量在两轨下含义必须一致，故统一为乘法。
+     */
+    @Test
+    void titleBoost_isMultiplicative_notAdditive() {
+        DefaultFusionStrategy s = new DefaultFusionStrategy();
+        Content top = content("top", 1.0f, null, null);
+        Content mid = content("mid", 0.5f, "退款政策", "a.md");
+        Content bottom = content("bottom", 0.0f, null, null);
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.2, 0.0, 10, 60);
+        List<Content> result = s.fuse("退款", List.of(vec(List.of(top, mid, bottom))), cfg);
+
+        Map<String, Double> scores = new LinkedHashMap<>();
+        result.forEach(c -> scores.put(c.textSegment().text(),
+                c.textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE)));
+        assertEquals(0.5 * 1.2, scores.get("mid"), 1e-9);
+        assertTrue(scores.get("mid") < scores.get("top"), "增益后仍不应越过更高分的那条");
     }
 }

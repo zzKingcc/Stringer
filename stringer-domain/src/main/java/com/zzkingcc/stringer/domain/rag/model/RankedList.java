@@ -15,13 +15,26 @@ import java.util.List;
  *
  * @param sourceId 来源标识（本项目中即索引名）
  * @param modality 模态
+ * @param depth    该来源<b>距查询域的距离</b>：0 = 查询域自身，1 = 父域，2 = 祖父域……
+ *                 合成单来源（通配检索）时恒为 0。排名制融合据此做<b>层级衰减</b>，
+ *                 让"本域自有知识"优先于"从祖先继承来的知识"
  * @param contents 该来源该模态的召回结果，按分数降序
  *
  * @author zzkingcc
  */
-public record RankedList(String sourceId, Modality modality, List<Content> contents) {
+public record RankedList(String sourceId, Modality modality, int depth, List<Content> contents) {
 
     public RankedList {
         contents = contents == null ? List.of() : List.copyOf(contents);
+    }
+
+    /** 单来源（或来源即查询域自身）的简写。 */
+    public RankedList(String sourceId, Modality modality, List<Content> contents) {
+        this(sourceId, modality, 0, contents);
+    }
+
+    /** 该表是否有命中 —— 空表不参与权重分摊，否则会把权重摊给空气。 */
+    public boolean isEmpty() {
+        return contents.isEmpty();
     }
 }

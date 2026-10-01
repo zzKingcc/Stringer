@@ -82,24 +82,36 @@ stringer:
     invoke-max-attempts: 2
 
   # 混合检索（向量 + 关键词并行召回与融合排序）
-  # 检索域 = 自身 + 祖先链；域链上每个索引各召回两路，单索引走分数制、多索引走 RRF（k 默认 60）
+  # 检索域 = 自身 + 祖先链；域链上每个索引各召回两路。
+  # 结果只来自单个索引 → 分数制；来自多个索引 → RRF（k 默认 10，带层级衰减）。
   retrieval:
     parallel: true
     timeout-ms: 5000
     core-pool-size: 4
     max-pool-size: 16
     queue-capacity: 200
-    # 每张索引的召回条数
-    vector-top-k: 15
-    keyword-top-k: 5
+    # 每张索引的召回条数（须 ≥ top-n）
+    vector-top-k: 30
+    keyword-top-k: 20
     # 向量最低余弦相似度（脚本里已 +1.0 回归，这里按原始余弦填）
-    vector-min-score: 0.2
+    vector-min-score: 0.35
+    # 关键词查询的 minimum_should_match：至少命中查询词的这个比例，用于压"只命中一个词"的噪音。
+    # 有效区间 40%~50%：ik_smart 把"会员退款的时效说明"切成 5 个词（助词"的"也占额度），
+    # 60% 会要求命中 3 个词、把正常问题打成零命中；30% 及以下等于没限制。留空 = 不限制。
+    minimum-should-match: "50%"
     vector-weight: 0.6
     keyword-weight: 0.4
+    # 标题 / 文件名命中时的乘法增益（分 × (1 + 该值)），不是加分
     title-boost: 0.15
     file-name-boost: 0.10
-    top-n: 10
-    rrf-k: 60
+    top-n: 15
+    rrf-k: 10
+    # 层级衰减：距查询域每远一层权重乘一次该值；1.0 = 本域与祖先等权
+    ancestor-decay: 0.7
+    # 每次检索最多注入几片给模型
+    inject-top-n: 8
+    # 注入的正文总字符预算（首条无论如何都保留）
+    max-context-chars: 3000
 
   # 知识库（一域一索引，索引名由域路径派生，首次上传时按需创建；故此处无索引名配置）
   rag:

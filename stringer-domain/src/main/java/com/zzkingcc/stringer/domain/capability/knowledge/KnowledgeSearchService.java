@@ -41,11 +41,24 @@ public class KnowledgeSearchService {
                 log.info("[知识库检索] 未检索到相关内容");
                 return "未检索到相关内容";
             }
-            int limit = Math.min(contents.size(), 5);
+            // 两道收口：条数上限（可配）+ 正文字符预算。
+            // 条数不是真正的瓶颈 —— 同样的条数，切片长短能差几倍；按字符收口才控得住上下文占用。
+            int limit = Math.min(contents.size(), RetrievalLimits.injectTopN());
+            int budget = RetrievalLimits.maxContextChars();
             StringBuilder sb = new StringBuilder();
+            int used = 0;
+            int injected = 0;
             for (int i = 0; i < limit; i++) {
                 Content c = contents.get(i);
-                sb.append("【片段").append(i + 1);
+                String body = c.textSegment().text();
+                // 首条无论如何都收 —— 否则预算配得偏小时一条都给不出去，检索形同关闭
+                if (injected > 0 && used + body.length() > budget) {
+                    break;
+                }
+                used += body.length();
+                injected++;
+
+                sb.append("【片段").append(injected);
                 Double fused = readScore(c, RetrievalScoreKeys.FUSED_SCORE);
                 if (fused != null) {
                     sb.append("｜相关度 ").append(String.format("%.2f", fused));
@@ -60,10 +73,11 @@ public class KnowledgeSearchService {
                     }
                     sb.append("\n");
                 }
-                sb.append(c.textSegment().text()).append("\n\n");
+                sb.append(body).append("\n\n");
             }
             String result = sb.toString();
-            log.info("[知识库检索] 检索到 {} 条相关内容，返回前 {} 条", contents.size(), limit);
+            log.info("[知识库检索] 检索到 {} 条相关内容，注入 {} 条（约 {} 字，预算 {}）",
+                    contents.size(), injected, used, budget);
             return result;
         } catch (Exception e) {
             // 走到这里说明检索链路本身有问题（上面返回空列表那条分支才是"没命中"）。

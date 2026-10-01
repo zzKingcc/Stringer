@@ -18,18 +18,19 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * 默认融合策略（<b>分数制</b>）—— 复刻升级前的两路融合算法，单索引场景使用：
+ * 默认融合策略（<b>分数制</b>）—— <b>单来源</b>场景使用（一域一索引时即"只查到本域或某个祖先的索引"）：
  *
  * <ul>
  *   <li>把多份排名表按模态拼回两路（向量 / 关键词），保持各表内部顺序；</li>
  *   <li>去重：按文本内容 SHA-256 判同一条；两路都命中只记一次，但两个通道分都保留</li>
  *   <li>归一化：向量分 / 关键词分各自做 min-max（单路缺失按 0 算）</li>
- *   <li>加权：{@code 向量权重×归一化向量分 + 关键词权重×归一化关键词分}，标题 / 文件名命中再各加 boost</li>
- *   <li>重排：按融合分降序，取 TopN，回写分项分 / 融合分 / 名次 / 命中通道</li>
+ *   <li>加权：{@code 向量权重×归一化向量分 + 关键词权重×归一化关键词分}，再乘标题 / 文件名增益</li>
+ *   <li>重排：按融合分降序（同分按 chunk_seq），取 TopN，回写分项分 / 融合分 / 名次 / 命中通道</li>
  * </ul>
  *
- * <p>单索引（1 张向量表 + 1 张关键词表）时与升级前逐字节一致。多索引场景由
- * {@link RrfFusionStrategy} 承担 —— 因为 BM25 分跨索引不可比，分数制在这里会失真。</p>
+ * <p>只在"实际有命中的来源数 ≤ 1"时被选中（见 {@link AdaptiveFusionStrategy}）—— 此时所有表同源，
+ * BM25 分数在同一索引内可比，分数制才成立。多来源场景由 {@link RrfFusionStrategy} 承担。
+ * 也因为是单来源，本策略<b>不使用</b> {@code RankedList#depth}（层级衰减无意义）。</p>
  *
  * @author zzkingcc
  */
@@ -91,7 +92,10 @@ public class DefaultFusionStrategy implements FusionStrategy {
         normalize(entries);
         computeFusedScores(entries);
 
-        entries.sort(Comparator.comparingDouble(e -> -e.fusedScore));
+        // 融合分降序；同分按原文顺序（chunk_seq）稳定排序，保证同一问题两次检索结果一致
+        entries.sort(Comparator.comparingDouble((ScoreEntry e) -> e.fusedScore).reversed()
+                .thenComparingInt(e -> FusionSupport.chunkSeq(e.content))
+                .thenComparing(e -> FusionSupport.hashContent(e.content)));
         int topN = Math.min(Math.max(fusion.topN(), 1), entries.size());
 
         List<Content> result = IntStream.range(0, topN)
@@ -140,21 +144,22 @@ public class DefaultFusionStrategy implements FusionStrategy {
     }
 
     /**
-     * 计算融合分数:加权求和 + boost
+     * 计算融合分数：加权求和 × 标题/文件名增益
+     *
+     * <p>增益是<b>乘法</b>（{@code 分 × (1 + boost)}），与 {@link RrfFusionStrategy} 语义一致。
+     * 加法 boost 在本轨（归一化分 0~1）看着合理，但在 RRF 轨（分约 0.01 量级）会变成十几倍、
+     * 直接统治排序 —— 同一个常量在两轨下含义不同是隐性坑，故统一为乘法。</p>
      */
     private void computeFusedScores(List<ScoreEntry> entries) {
         for (ScoreEntry e : entries) {
             double fused = e.fusion.vectorWeight() * (e.normVectorScore != null ? e.normVectorScore : 0.0)
                     + e.fusion.keywordWeight() * (e.normKeywordScore != null ? e.normKeywordScore : 0.0);
 
-            String title = e.content.textSegment().metadata().getString("section_title");
-            if (title != null && !title.isBlank() && FusionSupport.containsAnyKeyword(title, e.queryText)) {
-                fused += e.fusion.titleBoost();
+            if (FusionSupport.titleHit(e.content, e.queryText)) {
+                fused *= 1.0 + e.fusion.titleBoost();
             }
-
-            String fileName = e.content.textSegment().metadata().getString("file_name");
-            if (fileName != null && !fileName.isBlank() && FusionSupport.containsAnyKeyword(fileName, e.queryText)) {
-                fused += e.fusion.fileNameBoost();
+            if (FusionSupport.fileNameHit(e.content, e.queryText)) {
+                fused *= 1.0 + e.fusion.fileNameBoost();
             }
 
             e.fusedScore = fused;

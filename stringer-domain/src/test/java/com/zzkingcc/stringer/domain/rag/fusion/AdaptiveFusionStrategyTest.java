@@ -63,4 +63,24 @@ class AdaptiveFusionStrategyTest {
         assertTrue(s.fuse("q", null, CFG).isEmpty());
         assertTrue(s.fuse("q", List.of(), CFG).isEmpty());
     }
+
+    /**
+     * 判据是"<b>有命中</b>的来源数"，不是"通道里出现过几个来源"。
+     *
+     * <p>通道按域链无条件解析出来，祖先域没上传过文档时它根本没有索引。若按通道数判，
+     * 任何非根域都会被判成多来源、一律走 RRF —— 分数制只在根域生效，等于白留一轨。</p>
+     */
+    @Test
+    void singleNonEmptySourceAmongMany_usesScoreBasedTrack() {
+        AdaptiveFusionStrategy s = new AdaptiveFusionStrategy();
+        List<Content> result = s.fuse("q", List.of(
+                new RankedList("ancestor-without-index", Modality.VECTOR, 1, List.of()),
+                new RankedList("i2", Modality.VECTOR, 0, List.of(content("A", 0.9f))),
+                new RankedList("ancestor-without-index", Modality.KEYWORD, 1, List.of())),
+                CFG);
+        assertEquals(1, result.size());
+        assertEquals(1.0, result.get(0).textSegment().metadata()
+                .getDouble(RetrievalScoreKeys.FUSED_SCORE), 1e-9,
+                "只有一处有命中 -> 分数制：唯一一条被归一化为满分");
+    }
 }

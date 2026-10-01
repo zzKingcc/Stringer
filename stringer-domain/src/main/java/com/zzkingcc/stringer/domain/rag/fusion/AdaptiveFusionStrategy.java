@@ -6,16 +6,17 @@ import dev.langchain4j.rag.content.Content;
 import java.util.List;
 
 /**
- * 双轨融合策略：按<b>本次召回涉及的索引数</b>自动选择算法。
+ * 双轨融合策略：按<b>本次召回实际有命中的来源数</b>自动选择算法。
  *
  * <ul>
- *   <li><b>单索引</b>（来源数 ≤ 1）→ {@link DefaultFusionStrategy}（分数制），与升级前行为一致；</li>
- *   <li><b>多索引</b>（来源数 ≥ 2）→ {@link RrfFusionStrategy}（排名制），规避 BM25 跨索引不可比。</li>
+ *   <li><b>单来源</b>（有命中的来源 ≤ 1）→ {@link DefaultFusionStrategy}（分数制）；</li>
+ *   <li><b>多来源</b>（有命中的来源 ≥ 2）→ {@link RrfFusionStrategy}（排名制），规避 BM25 跨索引不可比。</li>
  * </ul>
  *
- * <p>这是本项目的默认融合入口 —— 双轨的意义在于：一个域只挂了自身索引时，
- * 结果与旧版逐字节一致；一旦沿父类链取到多个索引，自动切到免疫量纲问题的 RRF。
- * 将来若要统一为 RRF，只需把本类替换掉即可，召回编排无需改动。</p>
+ * <p>判据是"<b>有命中</b>"而不是"通道里出现过几个来源"：通道是按域链无条件解析出来的
+ * （祖先域没上传过文档时它根本没有索引），若按通道数判，则任何非根域都会被判成多来源、
+ * 一律走 RRF —— 分数制只在根域生效，等于白留一轨。按有命中的来源数判，才符合本意：
+ * 结果实际来自同一索引时，分数制（同索引内 BM25 可比）是更精确的选择。</p>
  *
  * @author zzkingcc
  */
@@ -36,6 +37,7 @@ public class AdaptiveFusionStrategy implements FusionStrategy {
     @Override
     public List<Content> fuse(String queryText, List<RankedList> lists, FusionConfig fusion) {
         long sources = lists == null ? 0 : lists.stream()
+                .filter(l -> l != null && !l.isEmpty())
                 .map(RankedList::sourceId)
                 .distinct()
                 .count();

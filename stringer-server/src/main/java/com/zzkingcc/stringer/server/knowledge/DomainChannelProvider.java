@@ -27,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>不预判索引是否存在 —— 某条祖先域还没上传过任何文档时它没有索引，此时通道安静地返回空
  * （检索器开了 {@code ignoreUnavailable / allowNoIndices}），比先探测一遍省掉 N 次往返。</p>
  *
+ * <p>每条通道带 <b>depth</b>（距查询域的距离，0 = 自身），供融合阶段做层级衰减：
+ * 本域自有知识优先于从祖先继承来的知识。</p>
+ *
  * <p>未绑定域（非对话路径：管控台预览、诊断等）走<b>通配</b>：对全部知识库索引做一次检索，
  * 保持升级前"全库检索"的行为，避免这些调用凭空查不到东西。</p>
  *
@@ -59,12 +62,16 @@ public class DomainChannelProvider implements CompositeRetriever.ChannelProvider
                     new Channel(KbIndexes.WILDCARD, Modality.KEYWORD, keyword(KbIndexes.WILDCARD)));
         }
 
+        // chainOf 是「由根向下」的顺序：[root, ..., 查询域自身]。
+        // depth 是"距查询域的距离"，0 = 自身，所以要反向算：末位是 0，越靠前越大。
         List<String> chain = Domains.chainOf(Domains.normalize(domain));
+        int last = chain.size() - 1;
         List<Channel> channels = new ArrayList<>(chain.size() * 2);
-        for (String step : chain) {
-            String index = KbIndexes.nameOf(step);
-            channels.add(new Channel(index, Modality.VECTOR, vector(index)));
-            channels.add(new Channel(index, Modality.KEYWORD, keyword(index)));
+        for (int i = 0; i < chain.size(); i++) {
+            String index = KbIndexes.nameOf(chain.get(i));
+            int depth = last - i;
+            channels.add(new Channel(index, Modality.VECTOR, vector(index), depth));
+            channels.add(new Channel(index, Modality.KEYWORD, keyword(index), depth));
         }
         return channels;
     }
@@ -76,6 +83,6 @@ public class DomainChannelProvider implements CompositeRetriever.ChannelProvider
 
     private ContentRetriever keyword(String index) {
         return keywordCache.computeIfAbsent(index, name -> new KeywordMatchContentRetriever(
-                esClient, name, properties.getKeywordTopK()));
+                esClient, name, properties.getKeywordTopK(), properties.getMinimumShouldMatch()));
     }
 }

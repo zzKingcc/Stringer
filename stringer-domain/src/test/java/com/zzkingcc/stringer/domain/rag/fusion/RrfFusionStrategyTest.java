@@ -117,4 +117,102 @@ class RrfFusionStrategyTest {
                 List.of(new RankedList("i1", Modality.VECTOR, List.of())),
                 FusionConfig.defaults()).isEmpty());
     }
+
+    /**
+     * 空表不参与权重分摊：否则"祖先域还没建索引"会把权重摊给空气，
+     * 让真正有命中的表被压低（域链上大部分祖先没有索引是常态）。
+     */
+    @Test
+    void emptyLists_doNotConsumeWeightShare() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        FusionConfig cfg = new FusionConfig(0.6, 0.4, 0.0, 0.0, 10, 60);
+        List<Content> result = s.fuse("q", List.of(
+                list("empty-ancestor", Modality.VECTOR),
+                list("i1", Modality.VECTOR, content("only", 0.9f))
+        ), cfg);
+
+        assertEquals(1, result.size());
+        // 唯一有命中的向量表应独占 vectorWeight，而不是只拿 0.6/2
+        assertEquals(0.6 / (60 + 1),
+                result.get(0).textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE), 1e-9);
+    }
+
+    /** 层级衰减：距查询域越远，权重越低；总量仍守恒。 */
+    @Test
+    void ancestorDecay_favorsQueryDomainOwnResults() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.0, 0.0, 10, 10, 0.7);
+        List<Content> result = s.fuse("q", List.of(
+                new RankedList("self", Modality.VECTOR, 0, List.of(content("own", 0.9f))),
+                new RankedList("parent", Modality.VECTOR, 1, List.of(content("inherited", 0.9f)))
+        ), cfg);
+
+        double own = score(result, "own");
+        double inherited = score(result, "inherited");
+        assertTrue(own > inherited, "本域自有知识应排在继承来的知识之前");
+        // 两者名次都是 1、权重比 = 1 : 0.7（再各自归一化），故分比值就是 1/0.7
+        assertEquals(1.0 / 0.7, own / inherited, 1e-9);
+    }
+
+    @Test
+    void ancestorDecayOne_meansEqualWeight() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.0, 0.0, 10, 10, 1.0);
+        List<Content> result = s.fuse("q", List.of(
+                new RankedList("self", Modality.VECTOR, 0, List.of(content("own", 0.9f))),
+                new RankedList("parent", Modality.VECTOR, 1, List.of(content("inherited", 0.9f)))
+        ), cfg);
+        assertEquals(score(result, "own"), score(result, "inherited"), 1e-9);
+    }
+
+    /**
+     * 增益必须是<b>乘法</b>：RRF 分约 0.01 量级，若沿用加法（+0.15）会变成十几倍，
+     * 排序直接被 boost 统治、且域链越长越严重。
+     */
+    @Test
+    void titleBoost_isMultiplicative() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.5, 0.0, 10, 10, 1.0);
+        List<Content> result = s.fuse("退款", List.of(
+                list("i1", Modality.VECTOR, content("plain", 0.9f)),
+                list("i2", Modality.VECTOR, titled("hit", "退款政策", 0.9f))
+        ), cfg);
+
+        assertEquals(score(result, "plain") * 1.5, score(result, "hit"), 1e-9,
+                "标题命中应是 ×1.5，而不是 +0.5");
+    }
+
+    /** 融合分完全相同时按 chunk_seq 稳定排序 —— 同一问题两次检索必须给同一份答案。 */
+    @Test
+    void tieOnFusedScore_orderedByChunkSeq() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        List<Content> result = s.fuse("q", List.of(
+                list("i1", Modality.VECTOR, seqContent("second", 0.9f, 2)),
+                list("i2", Modality.VECTOR, seqContent("first", 0.9f, 1))
+        ), FusionConfig.defaults());
+
+        assertEquals(List.of("first", "second"),
+                result.stream().map(c -> c.textSegment().text()).toList());
+    }
+
+    private static Content titled(String text, String title, float rawScore) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put(RetrievalScoreKeys.RAW_SCORE, (double) rawScore);
+        m.put("section_title", title);
+        return Content.from(TextSegment.from(text, Metadata.from(m)));
+    }
+
+    private static Content seqContent(String text, float rawScore, int chunkSeq) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put(RetrievalScoreKeys.RAW_SCORE, (double) rawScore);
+        m.put("chunk_seq", chunkSeq);
+        return Content.from(TextSegment.from(text, Metadata.from(m)));
+    }
+
+    private static double score(List<Content> result, String text) {
+        return result.stream()
+                .filter(c -> text.equals(c.textSegment().text()))
+                .findFirst().orElseThrow()
+                .textSegment().metadata().getDouble(RetrievalScoreKeys.FUSED_SCORE);
+    }
 }

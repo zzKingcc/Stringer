@@ -35,8 +35,20 @@ public class CompositeRetriever implements ContentRetriever {
     /** 超时兜底（未配置时的默认值） */
     private static final long DEFAULT_TIMEOUT_MS = 5000L;
 
-    /** 一条召回通道：某个索引上的某一路模态 */
-    public record Channel(String sourceId, Modality modality, ContentRetriever retriever) {
+    /**
+     * 一条召回通道：某个索引上的某一路模态。
+     *
+     * @param sourceId  来源标识（索引名）
+     * @param modality  模态
+     * @param retriever 该通道的检索器
+     * @param depth     该来源距<b>查询域</b>的距离（0 = 查询域自身）；融合阶段据此做层级衰减
+     */
+    public record Channel(String sourceId, Modality modality, ContentRetriever retriever, int depth) {
+
+        /** 单来源（或来源即查询域自身）的简写。 */
+        public Channel(String sourceId, Modality modality, ContentRetriever retriever) {
+            this(sourceId, modality, retriever, 0);
+        }
     }
 
     /**
@@ -97,7 +109,7 @@ public class CompositeRetriever implements ContentRetriever {
                 if (!r.failed()) {
                     succeeded++;
                 }
-                lists.add(new RankedList(ch.sourceId(), ch.modality(), r.contents()));
+                lists.add(new RankedList(ch.sourceId(), ch.modality(), ch.depth(), r.contents()));
             }
         } else {
             List<CompletableFuture<ChannelResult>> futures = new ArrayList<>(channels.size());
@@ -110,7 +122,7 @@ public class CompositeRetriever implements ContentRetriever {
                 if (!r.failed()) {
                     succeeded++;
                 }
-                lists.add(new RankedList(ch.sourceId(), ch.modality(), r.contents()));
+                lists.add(new RankedList(ch.sourceId(), ch.modality(), ch.depth(), r.contents()));
             }
         }
 

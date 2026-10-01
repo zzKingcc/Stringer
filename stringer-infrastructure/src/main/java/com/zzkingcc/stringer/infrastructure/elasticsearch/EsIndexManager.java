@@ -165,6 +165,10 @@ public class EsIndexManager {
             //   1) 防字段污染（切片器将来加字段不会悄悄变成 text 把检索带偏）；
             //   2) 修一个老问题 —— doc_id 以前没声明，被动态映射成 text，
             //      而删除/统计用的是 term(metadata.doc_id) 查询，UUID 被分词后基本查不中。
+            // text 挂两个子字段：
+            //   keyword  —— 精确等值（留档）；
+            //   standard —— 标准分词器，救 ik 会把英文词/数字/订单号切碎的场景
+            //               （ik_smart 对 "SKU-10086"、"v2.1" 这类标识符切出来的词往往对不上）。
             String mappingJson = """
                     {
                       "mappings": {
@@ -183,6 +187,10 @@ public class EsIndexManager {
                               "keyword": {
                                 "type": "keyword",
                                 "ignore_above": 256
+                              },
+                              "standard": {
+                                "type": "text",
+                                "analyzer": "standard"
                               }
                             }
                           },

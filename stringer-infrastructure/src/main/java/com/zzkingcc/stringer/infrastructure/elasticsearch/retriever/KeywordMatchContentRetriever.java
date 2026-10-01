@@ -17,36 +17,66 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 关键词精准匹配检索器
+ * 关键词精准匹配检索器（BM25）
+ *
+ * <p>多字段权重一次性表达"哪里命中更重要"，而不是把字段拆成多张排名表 ——
+ * 表数保持 = 索引 × 模态，融合阶段的按模态均摊权重才不会被字段数稀释。</p>
+ *
  * @author zzkingcc
  */
 public class KeywordMatchContentRetriever implements ContentRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(KeywordMatchContentRetriever.class);
 
+    /**
+     * 参与 BM25 的字段与权重。
+     *
+     * <ul>
+     *   <li>{@code text} —— 正文（切片时已把 section_path 前置进正文，标题词天然在内）；</li>
+     *   <li>{@code text.standard} —— 标准分词，救英文/数字/标识符（ik 会把它们切碎）；</li>
+     *   <li>{@code metadata.section_path} —— 完整层级路径，命中说明整条上下文相关；</li>
+     *   <li>{@code metadata.section_title} —— 末级标题，最直接的"这条讲的就是这个"。</li>
+     * </ul>
+     */
+    private static final List<String> SEARCH_FIELDS = List.of(
+            "text^1.0",
+            "text.standard^0.8",
+            "metadata.section_path^1.5",
+            "metadata.section_title^2.0"
+    );
+
     private final ElasticsearchClient esClient;
     private final String indexName;
     private final int maxResults;
+    private final String minimumShouldMatch;
 
     public KeywordMatchContentRetriever(
             ElasticsearchClient esClient,
             String indexName,
-            int maxResults) {
+            int maxResults,
+            String minimumShouldMatch) {
         this.esClient = esClient;
         this.indexName = indexName;
         this.maxResults = maxResults;
+        this.minimumShouldMatch = minimumShouldMatch;
     }
 
     @Override
     public List<Content> retrieve(dev.langchain4j.rag.query.Query query) {
         String queryText = query.text();
 
-        // multi_match 查询：text 字段权重 1.0，section_title 字段权重 2.0（标题命中优先级更高）
         Query matchQuery = new Query.Builder()
-                .multiMatch(m -> m
-                        .query(queryText)
-                        .fields("text^1.0", "metadata.section_title^2.0")
-                        .type(co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType.BestFields))
+                .multiMatch(m -> {
+                    m.query(queryText)
+                            .fields(SEARCH_FIELDS)
+                            .type(co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType.BestFields);
+                    // 压单字命中噪音：查询被切成 N 个词时，至少要命中这么多个才算一次匹配，
+                    // 否则"会"、"在"这类单字就能把整库文档拉回来。
+                    if (minimumShouldMatch != null && !minimumShouldMatch.isBlank()) {
+                        m.minimumShouldMatch(minimumShouldMatch);
+                    }
+                    return m;
+                })
                 .build();
 
         try {

@@ -10,7 +10,7 @@ package com.zzkingcc.stringer.api.agent;
  *     private final StringerAgent agent;
  *
  *     public OrderService(StringerAgentFactory factory) {
- *         this.agent = factory.forDomain("customer");   // null / 空白 → 兜底域 default
+ *         this.agent = factory.forDomain("default.customer");   // null / 空白 → 根域 default
  *     }
  *
  *     public String ask(String sessionId, String question) {
@@ -26,7 +26,7 @@ public interface StringerAgentFactory {
     /**
      * 取得绑定指定域的门面。
      *
-     * @param domainId 域标识；{@code null} / 空白 → 兜底域 {@link Domains#DEFAULT}
+     * @param domainId 域标识（完整路径）；{@code null} / 空白 → 根域 {@link Domains#DEFAULT}
      * @return 绑定该域的门面，<b>可重复使用</b>（无状态、线程安全）；同一域返回同一实例
      */
     StringerAgent forDomain(String domainId);

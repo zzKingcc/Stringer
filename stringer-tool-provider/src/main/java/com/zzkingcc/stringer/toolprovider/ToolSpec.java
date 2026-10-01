@@ -16,8 +16,8 @@ import java.util.Map;
  * @param description      给 LLM 的用途说明（写清"何时调用 / 何时不要调用"比参数描述更重要）
  * @param category         管理页分类（不参与任何过滤）
  * @param version          语义化版本
- * @param domains          可用域（<b>授权边界</b>）；<b>留空 = 只属于兜底域 {@code default}</b>，
- *                         {@code "*"} = 任何域可用（须显式声明）
+ * @param domains          可用域（<b>授权边界</b>）。每项都是<b>从根域出发的完整路径</b>，
+ *                         判定按累加（命中该域或其任一祖先即见）；留空 = 挂根域 = 全树可见；无通配
  * @param sideEffect       {@code READ} / {@code WRITE} / {@code DESTRUCTIVE}
  * @param idempotent       是否幂等（决定失败后能否自动重试）
  * @param toModel          结果是否回填 LLM
@@ -80,8 +80,8 @@ public record ToolSpec(String name,
     }
 
     /**
-     * 声明可用域（<b>授权边界</b>，覆盖式设置）。留空 = 只属于兜底域 {@code default}；
-     * {@code "*"} = 任何域可用（须显式写出）。
+     * 声明可用域（<b>授权边界</b>，覆盖式设置）。每项为完整路径，判定按累加；
+     * 留空 = 挂根域 = 全树可见；无通配。
      */
     public ToolSpec withDomains(String... domains) {
         return new ToolSpec(name, description, category, version, List.of(domains), sideEffect,

@@ -309,11 +309,6 @@ public class ToolRegistry {
         return find(name).map(Registered::endpoints).orElse(List.of());
     }
 
-    /** 在线实例标识（即在注册表里留下副本的实例），供管控台与摘除逻辑使用 */
-    public Set<String> instanceIds() {
-        return Set.copyOf(byInstance.keySet());
-    }
-
     /** 某实例注册过的工具名集合（副本仍在注册表内时有效） */
     public Set<String> toolsOfInstance(String instanceId) {
         return byInstance.getOrDefault(instanceId, Set.of());
@@ -402,7 +397,7 @@ public class ToolRegistry {
     /**
      * 该域是否可以被使用（入口层 fail-fast 的判据）。
      *
-     * <p>{@link #knownProfiles()} 恒含兜底域 {@code default}，因此判定等价于"该域是否已被注册"。</p>
+     * <p>{@link #knownProfiles()} 恒含根域 {@code default}，因此判定等价于"该域是否已被注册"。</p>
      */
     public boolean acceptsProfile(String domainId) {
         return knownProfiles().contains(domainId);

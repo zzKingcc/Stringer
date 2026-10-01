@@ -38,7 +38,7 @@ public class DomainController {
      * 列出可用的域。
      *
      * @return {@code code=0}；{@code domains} 全部可用域标识；{@code details} 每个域的来源与可见工具数；
-     *         {@code fallback} 兜底域标识（供调用方对齐语义）
+     *         {@code fallback} 根域标识（供调用方对齐语义）
      */
     @GetMapping("/api/agent/domains")
     public Map<String, Object> list() {

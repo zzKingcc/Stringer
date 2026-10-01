@@ -17,7 +17,7 @@ import java.util.List;
  * 混进其他域的文档会把本域结果挤掉，融合后再过滤就只剩一两条 —— 检索"成功了"但召回塌陷，
  * 而且这个现象没有任何报错。</p>
  *
- * <p>判定与工具的域声明同构：文档 {@code domains} 含当前域或 {@code "*"} 即命中。</p>
+ * <p>取值是「自身 ∪ 全部祖先」，与工具可见性同一套累加语义。</p>
  *
  * @author zzkingcc
  */
@@ -41,8 +41,7 @@ public final class DomainFilterQuery {
     /**
      * 构造过滤条件；检索<b>未绑定域</b>时返回 {@code null}（不做过滤）。
      *
-     * <p>未绑定只出现在非对话路径（管控台预览、重建等），保持升级前"全库检索"的行为 ——
-     * 否则这些调用会凭空查不到东西。</p>
+     * <p>未绑定只出现在非对话路径（管控台预览、重建），这些调用要查全库。</p>
      */
     public static Query build() {
         String domain = RetrievalScope.current();

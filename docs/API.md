@@ -81,7 +81,7 @@
 | --- | --- | --- | --- |
 | `sessionId` | String | 是 | 会话唯一键 |
 | `message` | String | 是 | 用户消息 |
-| `profile` | String | 否 | 域；**为空时回落兜底域 `default`**（本 JSON 契约如此）。走 SDK 则用 `StringerAgentFactory.forDomain(...)` 在绑定时确定域，根本传不出空值；该域不存在（10004）会被拒绝 |
+| `profile` | String | 否 | 域（**完整路径**，如 `default.sales`）；为空时归一化为根域 `default`。走 SDK 则用 `StringerAgentFactory.forDomain(...)` 在绑定时确定域，根本传不出空值；该域不存在（10004）会被拒绝 |
 | `tenantId` | String | 否 | 审计字段，写入日志；不承担隔离职责 |
 | `userId` | String | 否 | 同上 |
 | `attributes` | Map | 否 | 附加属性 |
@@ -96,7 +96,7 @@
 | --- | --- | --- | --- |
 | `sessionId` | query | 是 | 会话键 |
 | `approved` | query | 是 | boolean，是否批准待执行动作 |
-| — | body | 是 | `CallerContext`，建议显式携带 `profile`；为空按兜底域 `default` 处理（与中断域不一致会被拒 30002）；可选 `tenantId`、`userId` |
+| — | body | 是 | `CallerContext`，建议显式携带 `profile`；为空按根域 `default` 处理（与中断域不一致会被拒 30002）；可选 `tenantId`、`userId` |
 
 约束：`profile` 必须与中断时一致，否则拒绝。响应同为 `text/event-stream`。
 
@@ -230,7 +230,9 @@
 | GET | `/admin/prompts` | — | `base`、`prompts`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
 | POST | `/admin/prompts` | body `DomainSettings`（可空） | `success`、`message`、`settingsFile` |
 
-`domains` 与 `prompts` 是同一事实的两个视图。域有**三个来源**：**内置**（兜底域 `default`，启动即存在、不可删除）、**人工创建**（`POST /admin/domains`，落盘 `config/domains.json`，可删除）、**工具派生**（由工具的域声明产生，生命周期归工具）。因此「先建域、再让应用绑定它启动」是成立的；`10004` 只在「既非内置、又非人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable`。
+域是一棵树，标识是**从根域 `default` 出发的完整路径**。域有三个**来源**（`BUILTIN` 根域 / `MANUAL` 人工创建 / `DERIVED` 工具声明派生），**同级、不构成等级**；差异只在生命周期——`MANUAL` 落盘重启仍在，`DERIVED` 重启随声明重建。登记时沿链补齐缺失祖先，不留悬空节点；删除**递归**带走全部子孙，不向上提升，**只有根域不可删**。
+
+`10004` 只在「既非根域、又未被人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable` / `parentId` / `childrenCount`。
 
 ### 4.4 在线实例
 
@@ -257,8 +259,10 @@
 | POST | `/admin/kb/documents` | `multipart/form-data`，`file`（必填）、`replace`（默认 false）、`domains`（可重复，可选） | `code`、`success`、`docId`、`fileName`、`size`、`chunks`、`domains` |
 | DELETE | `/admin/kb/documents/{docId}` | path `docId` | `code`、`success`、`docId`、`deleted` |
 
-`domains` 声明该文档的<b>可用域</b>，与 `@Tool(domains = {...})` 同构：含 `*` → 全域可见（须显式写）；留空 / 不传 → 只属兜底域 `default`。
-一次传多个用重复参数：`?domains=customer&domains=admin`。
+`domains` 声明该文档的<b>可用域</b>，与 `@Tool(domains = {...})` 同构：每项都是**从根域出发的完整路径**，
+判按**累加**——挂在某域则其**全部后代域**都能检索到；留空 / 不传 → 挂根域 `default`＝全域可见。
+**无通配写法**，路径非法直接拒绝（静默会把文档写到树里不存在的域上，永远检索不到）。
+一次传多个用重复参数：`?domains=default.sales&domains=default.hr`。
 | GET | `/admin/kb/status` | — | `code` 与索引状态字段（`index`、`indexExists`、`documents`、`chunks`、`hint`） |
 | POST | `/admin/kb/rebuild` | — | `code`、`success`、`index`、`dimensions`、`message` |
 
@@ -298,7 +302,7 @@
 | 10006 | `AUTH_ALREADY_INITIALIZED` | 账号已存在，初始化入口已关闭 | 否 | 409 |
 | 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取 | 否 | 503 |
 | 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份 | 否 | 400 |
-| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域。**当前实现中域为空会回落兜底域 `default`**，该码仅在兜底域缺失时出现（受保护的 `default` 不会缺失，故实际不触发；保留为理论码） | 否 | 400 |
+| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域。**当前实现中域为空会归一化为根域 `default`**，该码仅在根域缺失时出现（根域不可删除，故实际不触发；保留为理论码） | 否 | 400 |
 | 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | 是 | 429 |
 | 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试 | 是 | 429 |
 | 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试 | 是 | 503 |
@@ -338,7 +342,7 @@
 | 90004 | `STORAGE_UNAVAILABLE` | 存储服务不可用 | 是 | 503 |
 | 90005 | `DEPENDENCY_NOT_CONFIGURED` | 服务依赖尚未配置 | 否 | 503 |
 
-区分要点：`90004`＝已配置但连不上（ERROR，可重试）；`90005`＝尚未配置（WARN，不可重试，提示去管控台补填）。`10008`/`10009`/`10004` 分别表示缺整份身份、缺域字段（**已由兜底域 `default` 兜住，实际不触发**）、域不存在 —— 处置不同，不可合并。
+区分要点：`90004`＝已配置但连不上（ERROR，可重试）；`90005`＝尚未配置（WARN，不可重试，提示去管控台补填）。`10008`/`10009`/`10004` 分别表示缺整份身份、缺域字段（**已归一化为根域 `default`，实际不触发**）、域不存在 —— 处置不同，不可合并。
 
 ---
 
@@ -381,7 +385,7 @@
 
 | 类 | 方法 |
 | --- | --- |
-| `StringerAgentFactory` | `forDomain(String domainId)` → `StringerAgent`（`null`/空白 → 兜底域 `default`；同域返回同一实例） |
+| `StringerAgentFactory` | `forDomain(String domainId)` → `StringerAgent`（`null`/空白 → 根域 `default`；同域返回同一实例） |
 | `StringerAgent` | `ask(sessionId, question[, tenantId, userId])` → `String`（遇审批抛 `ApprovalRequiredException`） |
 | | `stream(...)` → `Flux<String>`；`events(...)` → `Flux<AgentEvent>` |
 | | `resume(sessionId, approved)` → `Flux<AgentEvent>`；`stop(sessionId)` → `boolean`；`domainId()` → `String` |

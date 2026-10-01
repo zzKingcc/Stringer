@@ -22,7 +22,7 @@ class RetrievalScopeTest {
     }
 
     @Test
-    void 空域归一化为兜底域() {
+    void 空域归一化为根域() {
         try {
             RetrievalScope.bind(null);
             assertEquals(Domains.DEFAULT, RetrievalScope.current());

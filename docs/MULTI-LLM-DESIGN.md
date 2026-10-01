@@ -182,7 +182,7 @@ OpenAiChatModel / OpenAiStreamingChatModel 实例
 public interface StringerModelResolver {
     /**
      * 按域与角色解析可用的流式对话模型。
-     * @param domain 域标识（为空按兜底域）
+     * @param domain 域标识（完整路径，为空按根域）
      * @param role   用途：chat / planner / summarizer / rerank
      * @return 该域该角色应使用的模型
      */
@@ -325,7 +325,8 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | `stringer-runtime` | 新增 `runtime/model/ModelResolver` 接口（`streamingChat(domain)`）；`AgentOrchestrationService` 增加**可选** resolver 字段与构造重载，`agentNode` 按域取模型，新增 `resolveModel()`：resolver 为 `null`（未装配档案体系）时用构造期注入的模型；**resolver 存在则不再回落，解析失败如实抛出** |
 | `stringer-server` | 新增 `model/` 包：`ModelProfile`（record，3 维 schema：`endpoints` / `input` / `output` + `capabilities` + `dimensions`，`isChat()`＝`endpoints` 含 `chat`；含 `fingerprint()` / `supportsTools()` / `capabilityHint()`）、`ModelProfileSettings`（落盘结构）、`ModelProfileStore`（`config/models.json`）、`ModelProfileRegistry`（唯一真相，含"后设覆盖"与"级联清绑定"）、`ModelClientFactory`（按指纹缓存，每个别名只留当前指纹）、`DefaultModelResolver`（只认自建档案，未绑定 / 不可用直接抛 `NotConfiguredException`，无内置 default 旁路） |
 | `stringer-server` | 新增 `config/ModelProfileConfiguration`；`GraphConfiguration.agentService` 注入 `ModelResolver` 并传给内核 |
-| `stringer-server` | 新增 `AdminModelProfileController`：`GET/POST /admin/model-profiles`、`POST /admin/model-profiles/probe`、`POST /admin/model-profiles/{alias}/probe`、`POST /admin/model-profiles/{alias}/test`、`DELETE /admin/model-profiles/{alias}`（级联清绑定）、`PUT /admin/model-bindings/{domain}`（`aliases` 空＝解绑） |
+| `stringer-server` | 新增 `AdminModelProfileController`：`GET/POST /admin/model-profiles`、`POST /admin/model-profiles/probe`、`POST /admin/model-profiles/{alias}/probe`、`POST /admin/model-profiles/{alias}/test`、`DELETE /admin/model-profiles/{alias}`（级联清绑定）、`PUT /admin/model-bindings/{domain}`（`aliases` 空＝解绑；返回 `sourceDomain` 标明生效绑定来自链上哪个域） |
+| `stringer-server` | 域绑定改为**沿链回落**：自身没绑就向上找最近一个绑了模型的祖先，根域也未绑才是"无可调用"。回落的是**域链**而非任何内置默认值，与"无内置 default"不冲突。纯逻辑在 `ModelProfileSettings.resolveAlong`（不依赖容器，可单测） |
 | 管控台 | `console/models.html` 新增「模型档案」卡（列表 + 编辑 + 测试 + 删除）与「域 → 模型绑定」卡（域清单 × 当前绑定 × 下拉设置），规则文案写进页面 |
 
 ### 11.3 两个刻意的设计取舍

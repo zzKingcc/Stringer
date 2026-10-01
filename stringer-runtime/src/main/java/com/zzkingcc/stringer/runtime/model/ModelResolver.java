@@ -19,7 +19,7 @@ public interface ModelResolver {
      * <p>解析顺序由实现决定，但语义是固定的：<b>域没有绑定时返回全局默认模型</b>，
      * 而不是返回 {@code null} 让调用方去猜。</p>
      *
-     * @param domain 域标识（{@code null} / 空白按兜底域处理）
+     * @param domain 域标识（完整路径；{@code null} / 空白按根域处理）
      * @return 该域应使用的模型；实现无法解析时返回 {@code null}，内核会退回默认模型
      */
     StreamingChatModel streamingChat(String domain);

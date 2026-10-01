@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- |
 | `desc` | `String` | — | **是** | 给模型的用途说明。写法建议：写清「何时调用 / 何时不要调用」，比参数描述更重要 |
 | `value` | `String` | `""` | 否 | 工具名。留空取方法名；**全局唯一**，重名注册直接失败 |
-| `domains` | `String[]` | `{}` | 否 | 可用域（**授权边界**）。留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用（须显式）。可继承类级 `@ToolDomains` |
+| `domains` | `String[]` | `{}` | 否 | 可用域（**授权边界**）。每项都是**从根域出发的完整路径**（`default.sales.order`），无通配写法。判定按**累加**：命中该域或它的任一祖先即见，故挂在父域上其所有后代域都能用。留空＝挂根域 `default`＝全树可见；想收紧就显式写完整路径。可继承类级 `@ToolDomains` |
 | `effect` | `Effect` | `READ` | 否 | `READ` / `WRITE` / `DESTRUCTIVE`。写与破坏性操作建议配 `approval` |
 | `approval` | `Approval` | `NONE` | 否 | `NONE` / `ALWAYS`。当前只有这两种真正生效 |
 | `approvalReason` | `String` | `""` | 否 | 展示给审批人的原因。`approval ≠ NONE` 时建议填写 |
@@ -77,12 +77,10 @@
 
 | 元素 | 签名 | 说明 |
 | --- | --- | --- |
-| `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 兜底域 `default`；返回的实例**可缓存复用**（线程安全） |
+| `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 根域 `default`；返回的实例**可缓存复用**（线程安全） |
 
-> 落地情况（2026-09-28）：**本节形态已实现** —— `StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
+> 落地情况：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
 > （实现 `DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`StringerAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
-> 中间名 `DomainAgentFactory` / `DomainAgent` 已按本节设想**合并删除**；底层的 `AgentServiceClient` 不再作为 Bean 暴露。
-> `@DomainBinding` **从未落地**，也不再计划做（与 `forDomain` 语义重复）。
 
 ### 5.2 `StringerAgent` 方法
 

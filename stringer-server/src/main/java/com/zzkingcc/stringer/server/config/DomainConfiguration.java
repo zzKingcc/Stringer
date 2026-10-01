@@ -21,7 +21,7 @@ public class DomainConfiguration {
     private static final Logger log = LoggerFactory.getLogger(DomainConfiguration.class);
 
     /**
-     * 域注册表：内置兜底域 default 由构造期预置，人工创建的域从落盘恢复。
+     * 域注册表：根域 default 由构造期预置，人工创建的域从落盘恢复（沿链补齐）。
      */
     @Bean
     @ConditionalOnMissingBean

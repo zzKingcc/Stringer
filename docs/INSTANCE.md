@@ -110,36 +110,40 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 
 ### 2.5 域提示词 `prompts.json`（管控台「提示词设定」页）
 
-提示词＝**公共基线 + 域差异**，与工具的域过滤一一对应。
+提示词**沿域链拼接**：从根域到当前域依次取出每段片段。根域 `default` 的片段是基底，后代的追加在后。
+**没有 `base` 这一层** —— 根域的提示词就写在 `prompts["default"]`，与别的域同构。
 
 ```json
 {
-  "base": "你是一个中文智能助手。回答精炼、有条理……",
   "prompts": {
-    "customer": "你是客服视角，只处理订单与售后……",
-    "admin":    "你是管理视角，可看经营数据……"
+    "default":           "你是一个中文智能助手。回答精炼、有条理……",
+    "default.customer":  "你是客服视角，只处理订单与售后……",
+    "default.admin":     "你是管理视角，可看经营数据……"
   }
 }
 ```
 
 | 字段 | 作用 |
 |---|---|
-| `base` | 所有域共享（回答风格、格式、安全规则）。可留空 |
-| `prompts` | 域 → 差异片段。键名**必须与工具注解 `@Tool(domains = {...})` 里声明的域名一致** |
+| `prompts` | 域（**完整路径**）→ 该域的片段。键名须与 `@Tool(domains = {...})` 里声明的域一致 |
 
-**编写纪律（四条）**
+于是 `default.customer.vip` 的生效提示词 = `default` + `default.customer` + `default.customer.vip` 三段依次拼接；
+改根域一处，整条链生效。
+
+**编写纪律（三条）**
 
 1. **不写「我有哪些 / 没有什么能力」** —— 工具已按域过滤，写出来就成过期事实；
-2. **不列举具体工具名**（`base` 与域差异都算）—— 域同时绑定【工具集 + 提示词】，而两者分处两地维护（工具在 `@Tool`、提示词在这里）。点名一个在该域不可见的工具，等于告诉模型"你有这个能力"、而它调不到，且**不抛异常、不报错、HTTP 仍 200**；
-3. **描述能力时带上"本域可能没有它"的兜底句** —— 随包 `base` 的第 9 条就是范例（"本场景没有知识检索能力时：不要臆造检索结果"）；
-4. **域差异只写该域专属的引导** —— 点名本域可见的工具可以，点别域的不行。
+2. **不列举具体工具名** —— 域同时绑定【工具集 + 提示词】，而两者分处两地维护（工具在 `@Tool`、提示词在这里）。点名一个在该域不可见的工具，等于告诉模型"你有这个能力"、而它调不到，且**不抛异常、不报错、HTTP 仍 200**；
+3. **本域片段只写本域专属的引导** —— 公共部分放根域，别在子域重复。
 
 > 违反第 2 条时**启动期会打 WARN**（提示词 ↔ 工具可见性自检；只提醒、不阻断启动）。
+> 判据是**该域沿链合成后的全文**，所以祖先域片段里点名的工具同样算数。
 > 该自检只认"提示词里出现的工具名"，用业务语言描述能力（"查订单"）它覆盖不到 —— 刻意漏报，避免误报。
 
 ### 2.6 知识库的域（管控台「知识库」页）
 
-文档可以声明<b>可用域</b>，语义与工具注解同构：`*` → 全域可见（须显式写）；不选 → 只属兜底域 `default`。
+文档可以声明<b>可用域</b>，语义与工具注解同构：每项都是**从根域出发的完整路径**，
+挂在某域则其**全部后代域**都能检索到；不选 → 挂根域 `default`＝全域可见。**无通配写法**。
 
 **域对知识是两层约束**（与工具不同）：
 
@@ -147,7 +151,8 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 2. **内容层** —— 文档的 `domains`，决定"能检索时查到哪些文档"。
 
 过滤在检索通道内部完成（两路各带 `bool.filter`）：把它放到融合之后会把本域结果挤掉，召回塌陷且不报错。
-未声明 `domains` 的文档**只属于兜底域 `default`**；全域可见必须显式写 `"*"`。
+过滤取值是「当前域 + 全部祖先」，与工具可见性同一套累加语义。
+未声明 `domains` 的文档视为挂在根域。
 
 ### 2.7 yaml 兜底与可调参数
 
@@ -231,7 +236,7 @@ public class OrderService {
     private final StringerAgent agent;                 // 已绑定域，可缓存复用（线程安全）
 
     public OrderService(StringerAgentFactory factory) {
-        this.agent = factory.forDomain("customer");     // null / 空白 → 兜底域 default
+        this.agent = factory.forDomain("default.customer");  // null / 空白 → 根域 default
     }
 
     /** 只要最终答案（大多数场景） */
@@ -411,13 +416,13 @@ public class OrderTools implements ToolInstanceContributor {
     @Override
     public void contribute(ToolRegistrar registrar) {
         registrar
-            // ① 全域可用：显式声明通配 "*"（不声明 ＝ 只属于兜底域 default）
+            // ① 全域可用：挂在根域（不声明 ＝ 同样挂根域）
             .register(
                 ToolSpec.of("queryWeather", "查询某城市天气，用户问天气时调用",
                         ToolSpec.schema(
                             Map.of("city", Map.of("type","string","description","城市名，如 杭州")),
                             "city"))
-                    .withCategory("通用").withSideEffect("READ").withDomains("*"),
+                    .withCategory("通用").withSideEffect("READ").withDomains("default"),
                 this::queryWeather)
 
             // ② 域专属 + 有副作用 ⇒ 需人工二次确认
@@ -427,7 +432,7 @@ public class OrderTools implements ToolInstanceContributor {
                             Map.of("orderNo", Map.of("type","string","description","订单号"),
                                    "reason",  Map.of("type","string","description","关闭原因")),
                             "orderNo", "reason"))
-                    .withCategory("订单").withDomains("admin")
+                    .withCategory("订单").withDomains("default.order")
                     .withSideEffect("WRITE")
                     .withApproval("ALWAYS", "关单不可逆，需人工确认"),
                 this::closeOrder);
@@ -453,7 +458,7 @@ public class OrderTools implements ToolInstanceContributor {
 | `description` | `of(name, desc)` | 给 LLM 的用途说明（写清「何时调用/何时不要调用」比参数描述更重要） |
 | `category` | `withCategory` | 管理页分类，**不参与任何过滤** |
 | `version` | 默认 `1.0.0` | 语义化版本 |
-| `domains` | `withDomains(..)` | 可用域（授权边界）。**留空＝只属于兜底域 `default`**；`"*"`＝任何域可用 |
+| `domains` | `withDomains(..)` | 可用域（授权边界）。每项为**完整路径**；留空＝挂根域 `default`＝全树可见；无通配 |
 | `sideEffect` | `withSideEffect` | `READ` / `WRITE` / `DESTRUCTIVE` |
 | `idempotent` | 默认 `true` | 是否幂等（当前只登记展示，不参与重试判定） |
 | `toModel` | 默认 `true` | 结果是否回填 LLM（当前只登记展示） |
@@ -496,7 +501,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 
     @Tool(desc = "按订单号查询订单状态",
         value = "queryOrder",
-        domains = {"customer"})                  // 可用域；留空＝只属于兜底域 default
+        domains = {"default.customer"})           // 可用域（完整路径）；留空＝挂根域＝全树可见
     public String queryOrder(@ToolParam(name = "orderNo", value = "订单号", required = true) String orderNo) {
         return "...";
     }
@@ -512,7 +517,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 |---|---|
 | `@Tool#desc` | 给 LLM 的用途说明（**唯一必填**） |
 | `@Tool#value` | 工具名，留空取方法名，全局唯一 |
-| `@Tool#domains` | 可用域（授权边界），留空＝只属于兜底域 `default`；`{"*"}`＝任何域可用（须显式写出） |
+| `@Tool#domains` | 可用域（授权边界）。每项为**完整路径**，判定累加（命中该域或其任一祖先即见）；留空＝挂根域＝全树可见；无通配 |
 | `@Tool#effect` | `Effect.READ` / `WRITE` / `DESTRUCTIVE` |
 | `@Tool#approval` + `approvalReason` | 二次确认：`NONE`（默认）/ `ALWAYS`。`ALWAYS` 时**每次调用前中断等授权**；需「金额超阈值才审批」的条件式审批尚未落地 |
 | `@ToolParam(value, name, required)` | 参数语义：`value` 是参数说明（推荐写法），`name` 覆盖参数名，`required` 默认 `true` |
@@ -525,13 +530,16 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 ---
 
-## 6. 域（profile）机制一句话讲清
+## 6. 域（domain）机制一句话讲清
 
-域是「一次对话的场景」，同时绑定**工具集 + 提示词**。
+域是**一棵树**，标识是从根域 `default` 出发的**完整路径**（`default.sales.order`）。它同时绑定
+**工具集 + 提示词 + 知识范围 + 模型**，四个维度共用一套**沿链累加**语义：祖先的内容做后代的基底。
 
-- 工具可见性**唯一维度**就是域：`@Tool#domains` 或 `ToolSpec.withDomains` 声明了才会出现在该域的模型视野里。
-- 域有**三个来源**：内置兜底域 `default`（不可删）、管控台**人工创建**（可删）、工具声明**派生**。派生域**一经声明即常驻**——工具被断开后域仍在，只是该域下暂无工具；写下 `domains = {"customer"}` 即创建了 `customer` 域，不用先去管控台建域。
-- 每次请求的域**留空则回落兜底域 `default`**；非空但不存在才报 `10004`——绝不静默回退成全量工具。
+- 工具可见性**唯一维度**就是域；判定按累加——声明命中该域或它的任一祖先即见，故挂在父域上的工具其所有后代域都能用。
+- 域有三个**来源**（根域 / 人工创建 / 工具声明派生），**同级、不构成等级**；差异只在生命周期（人工落盘、派生重启随声明重建）。登记时**沿链补齐**，写下 `domains = {"default.customer"}` 即整条链一并建出，不留悬空节点。
+- 删除**递归**带走全部子孙，不向上提升；**只有根域不可删**。
+- 每次请求的域**留空则归一化为根域**；非空但不存在才报 `10004`——绝不静默回退成全量工具。
+- **没有通配写法**：全域可见的写法就是挂根域。
 - 越权判断（角色→域映射）在宿主侧：平台信任调用方声明的域，只校验「域是否存在」。
 
 ---
@@ -543,7 +551,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 
 1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527）。
 2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool` 声明）周期注册给服务端。
-3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `customer`、管理员 `admin`）演示域差异；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
+3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `default.customer`、管理员 `default.admin`）演示不同域；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
 5. 想顺手验证知识库：`stringer-example/src/main/resources/ragDatabase/` 下有 4 篇「鲜果时光」语料（公司简介与配送范围 / 退款与售后政策 / 会员与订阅规则 / 常见问题 FAQ），在管控台「知识库」页上传即可检索。**它们不参与示例启动**，只是联调用的现成语料。
 

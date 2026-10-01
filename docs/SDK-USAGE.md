@@ -73,22 +73,28 @@ public OrderVO query(OrderQuery q) { ... }
 
 ```java
 @Service
-@ToolDomains("admin")                 // 本类所有 @Tool 默认属于 admin 域
+@ToolDomains("default.order")           // 本类所有 @Tool 默认属于 default.order 域
 public class OrderAdminTools {
 
     @Tool(desc = "关闭订单。用户明确要求取消时调用", effect = Tool.Effect.WRITE)
-    public String closeOrder(String orderNo) { ... }   // 自动属于 admin 域
+    public String closeOrder(String orderNo) { ... }   // 自动属于 default.order 域
 
-    // 覆盖：只在 finance 域可用
-    @Tool(desc = "导出对账单", domains = {"finance"})
+    // 覆盖：只在 default.finance 域可用
+    @Tool(desc = "导出对账单", domains = {"default.finance"})
     public String exportStatement(String month) { ... }
 }
 ```
 
-**域的三种写法**：
-- 显式域名（如 `{"admin"}`）：只在这些域可用。
-- 留空：只属于兜底域 `default`。
-- 通配 `{"*"}`：任何域可用（必须显式写出，让"全域"是一个决定而非漏写）。
+**域的写法**：每一项都是**从根域出发的完整路径**，判定按**累加**——命中该域或它的任一祖先即见。
+
+```java
+@Tool(desc = "查询天气", domains = {"default.sales"})       // default.sales 及其所有后代域可用
+@Tool(desc = "查订单", domains = {"default.sales", "default.hr"})  // 两条分支都可用，别的分支不行
+@Tool(desc = "通用换算")                                    // 留空 = 挂根域 = 全树可见
+```
+
+想收紧就写到具体域（如 `default.sales.order`）；挂在父域上则所有后代域自动可用。
+公共能力挂根域一次即可，不必逐域声明。**没有通配写法**。
 
 ### 1.4 副作用与人工审批：`effect` / `approval` / `approvalReason`
 
@@ -158,10 +164,10 @@ SDK 只提供**一个入口**：`StringerAgentFactory.forDomain(...)` 拿到已�
 ```java
 @Service
 public class MyService {
-    private final StringerAgent agent;                // 已绑定 customer 域，可缓存复用（线程安全）
+    private final StringerAgent agent;                // 已绑定域，可缓存复用（线程安全）
 
     public MyService(StringerAgentFactory factory) {   // starter 自动装配，无需任何注解
-        this.agent = factory.forDomain("customer");    // null / 空白 → 兜底域 default
+        this.agent = factory.forDomain("default.customer");  // null / 空白 → 根域 default
     }
 
     /** 只要最终答案（约七成场景） */
@@ -191,7 +197,7 @@ public class MyService {
 | `domainId()` | `String` | 本实例绑定的域，永不为空 |
 
 - 三种方式都有带归属的重载：`(sessionId, question, tenantId, userId)`。
-- `forDomain(null)` / `forDomain("  ")` → 兜底域 `default`；**同一域永远拿到同一个门面**（归一化后按域缓存，首尾空白不会造出第二个）。
+- `forDomain(null)` / `forDomain("  ")` → 根域 `default`；**同一域永远拿到同一个门面**（归一化后按域缓存，首尾空白不会造出第二个）。
 - `sessionId` 由调用方生成并保持稳定 —— 同一会话复用同一个，它是记忆与检查点的唯一键。
 - 域在服务端不存在 → `StringerException`（`10004`）。**不需要**在启动期预先校验域：写错了第一次调用就会带着明确的码报出来。
 

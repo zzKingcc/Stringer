@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link StringerAgentFactory} 的默认实现：按域缓存门面，同一个域永远拿到同一个实例。
  *
  * <p>缓存键是<b>归一化后</b>的域名 —— {@code null} / 空白 / {@code " default "} 都落到同一个
- * 兜底域门面，不会因为写法不同而造出多个等价门面。门面本身无状态，缓存它只是为了省去重复 new。</p>
+ * 门面，不会因为写法不同而造出多个等价门面。门面本身无状态，缓存它只是为了省去重复 new。</p>
  *
  * @author zzkingcc
  */

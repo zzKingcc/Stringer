@@ -277,13 +277,4 @@ public class DomainRegistry {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
-    /** 树形结构的缩进深度（根为 0），供管控台展示 */
-    public static int depthOf(String domainId) {
-        return Domains.ancestorsOf(domainId).size();
-    }
-
-    /** 根域的直接子节点数，供启动日志陈述规模 */
-    public long size() {
-        return domains.size();
-    }
 }

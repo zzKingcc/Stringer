@@ -148,15 +148,16 @@ class DefaultStringerAgentTest {
     }
 
     @Test
-    void 同一域复用同一门面且空域归一化为兜底域() {
+    void 同一域复用同一门面且空域归一化为根域() {
         StringerAgentFactory factory = new DefaultStringerAgentFactory(fakeTransport);
 
-        assertSame(factory.forDomain("customer"), factory.forDomain("customer"));
-        assertSame(factory.forDomain("  customer  "), factory.forDomain("customer"), "首尾空白不该造出第二个门面");
+        assertSame(factory.forDomain("default.customer"), factory.forDomain("default.customer"));
+        assertSame(factory.forDomain("  default.customer  "), factory.forDomain("default.customer"),
+                "首尾空白不该造出第二个门面");
 
         StringerAgent fallback = factory.forDomain(null);
         assertEquals(Domains.DEFAULT, fallback.domainId());
-        assertSame(fallback, factory.forDomain("  "), "null 与空白都落到兜底域同一个门面");
+        assertSame(fallback, factory.forDomain("  "), "null 与空白都落到根域同一个门面");
         assertSame(fallback, factory.forDomain(Domains.DEFAULT));
     }
 

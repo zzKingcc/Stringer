@@ -89,11 +89,6 @@ public class ModelProfileRegistry {
         return Collections.unmodifiableMap(copy);
     }
 
-    /** 当前配置快照（供管控台展示） */
-    public ModelProfileSettings snapshot() {
-        return settings;
-    }
-
     // ==================== 写操作 ====================
 
     /**

@@ -21,10 +21,10 @@ import java.util.Map;
 public class EsIndexManager {
 
     /**
-     * 切片元数据里"可用域"的字段名（与 {@code @Tool(domains = {...})} 同构：含 {@code *} → 全域；留空 → 兜底域）。
+     * 切片元数据里"可用域"的字段名（与 {@code @Tool(domains = {...})} 同构：完整路径域）。
      *
      * <p>必须是 {@code keyword}：动态映射会把它变成 {@code text}（默认分词器），
-     * 而 {@code "*"} 是纯标点会被分词器丢掉，"全域可见"的文档就永远查不到。</p>
+     * 域名会被切开，{@code terms} 过滤就永远匹配不上。</p>
      */
     public static final String DOMAINS_FIELD = "domains";
 
@@ -197,13 +197,12 @@ public class EsIndexManager {
         }
     }
 
-    /** 写入后校验：刷新索引，输出查询结果 */
     /**
      * 存量索引补 {@code metadata.domains} 字段（知识库按域检索需要）。
      *
-     * <p>为什么必须显式声明为 {@code keyword}：靠动态映射的话，字符串会被映射成 {@code text}
-     * （默认分词器），而 {@code "*"} 是纯标点、被分词器直接丢掉 —— {@code terms} 就永远匹配不上
-     * "全域可见"的文档。加字段是 ES 允许的操作（改已有字段类型才不允许）。</p>
+     * <p>为什么必须显式声明为 {@code keyword}：靠动态映射的话字符串会被映射成 {@code text}
+     * （默认分词器），域名被切开后 {@code terms} 就永远匹配不上。
+     * 加字段是 ES 允许的操作（改已有字段类型才不允许）。</p>
      */
     private static void ensureDomainsMapping(ElasticsearchClient esClient, String indexName) {
         try {

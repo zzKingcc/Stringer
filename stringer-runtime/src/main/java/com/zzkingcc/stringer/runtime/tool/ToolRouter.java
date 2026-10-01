@@ -28,7 +28,7 @@ public class ToolRouter {
     /** 域注册表：内置与人工创建的域在这里；工具声明派生的域在 registry 里 */
     private final DomainRegistry domainRegistry;
 
-    /** 只接工具注册表时，域注册表用缺省实例（仅含兜底域）—— 供单元测试与最小装配使用 */
+    /** 只接工具注册表时，域注册表用缺省实例（仅含根域）—— 供单元测试与最小装配使用 */
     public ToolRouter(ToolRegistry registry) {
         this(registry, new DomainRegistry());
     }

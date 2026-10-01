@@ -441,16 +441,15 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /**
-     * 校验本轮调用方身份与域：缺身份拒绝；<b>域为空回落到兜底域</b>；域不存在报错。
+     * 校验本轮调用方身份与域：缺身份拒绝；<b>域为空归一化为根域</b>；域不存在报错。
      */
     private ProfileCheck checkProfile(CallerContext caller) {
         if (caller == null) {
             return ProfileCheck.fail(ErrorCode.CALLER_CONTEXT_REQUIRED,
                     "缺少调用方身份（CallerContext 必填：tenantId / userId / profile）");
         }
-        // 域为空 → 落到兜底域 default（服务端已预置），不再当作入参错误。
-        // 注意：兜底不等于放宽 —— default 之外的域仍须被声明过，否则照旧 10004，
-        // 与之配合的是"工具声明留空即只属于 default"的授权语义。
+        // 域为空 → 归一化为根域 default（根域不可删、恒存在），不再当作入参错误。
+        // 归一化不等于放宽 —— 根域之外的域仍须被登记过，否则照旧 10004。
         String profile = Domains.normalize(caller.normalizedProfile());
         if (!toolRouter.acceptsProfile(profile)) {
             return ProfileCheck.fail(ErrorCode.PROFILE_NOT_FOUND,

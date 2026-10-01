@@ -129,7 +129,7 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 同步上传一个文档（不声明域 → 只属兜底域 {@code default}）。
+     * 同步上传一个文档（不声明域 → 挂在根域 {@code default}，按累加语义全域可见）。
      *
      * @param content  文件字节
      * @param fileName 原始文件名（含扩展名）
@@ -406,8 +406,7 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 读取切片元数据里的可用域；与工具声明同构：<b>没有该字段（或为空）即只属于兜底域
-     * {@code default}</b>，全域可见必须显式声明通配 {@code "*"}。
+     * 读取切片元数据里的可用域；与工具声明同构：没有该字段（或为空）即挂在根域 {@code default}。
      */
     static List<String> domainsOf(Map<String, Object> md) {
         Object raw = md.get("domains");

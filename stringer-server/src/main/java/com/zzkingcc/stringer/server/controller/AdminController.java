@@ -679,7 +679,7 @@ public class AdminController {
     }
 
     /**
-     * 域来源：内置（兜底域）/ 人工创建 / 工具声明派生。
+     * 域来源：根域 / 人工创建 / 工具声明派生（三种同级，不构成等级）。
      *
      * <p>两处来源合并判断：{@code DomainRegistry} 管内置与人工，派生域归 {@code ToolRegistry}。</p>
      */
@@ -864,7 +864,7 @@ public class AdminController {
      * 上传一个知识库文档（multipart，字段名 {@code file}）
      *
      * @param replace {@code true} = 已存在同名文档时先删旧再写入；{@code false} = 同名直接拒绝（60005）
-     * @param domains 该文档的可用域（与 {@code @Tool(domains=)} 同构：含 {@code *} → 全域；留空 → 只属兜底域）
+     * @param domains 该文档的可用域（与 {@code @Tool(domains=)} 同构：完整路径；挂某域则其全部后代可检索；留空 → 挂根域）
      */
     @PostMapping(value = "/kb/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> kbUpload(@RequestParam("file") MultipartFile file,

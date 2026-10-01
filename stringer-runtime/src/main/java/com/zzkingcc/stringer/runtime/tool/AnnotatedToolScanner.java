@@ -124,11 +124,10 @@ public final class AnnotatedToolScanner {
     }
 
     /**
-     * 可用域：方法级 {@code @Tool#domains()} → 类级 {@code @ToolDomains}
-     * → 留空（＝只属于兜底域 default）。
+     * 可用域：方法级 {@code @Tool#domains()} → 类级 {@code @ToolDomains} → 留空。
      *
-     * <p>这里<b>不</b>在留空时回填兜底域：留空本身有语义，由
-     * {@link ToolDescriptor#visibleIn(String)} 统一解释，避免两处判断各说各话。</p>
+     * <p>这里<b>不</b>在留空时回填根域：留空本身有语义（挂根域、全树可见），由
+     * {@link ToolDescriptor#declaredDomains()} 统一解释，避免两处判断各说各话。</p>
      */
     private static List<String> resolveDomains(Class<?> declaringClass, Tool tool) {
         String[] raw = tool.domains().length > 0 ? tool.domains() : null;

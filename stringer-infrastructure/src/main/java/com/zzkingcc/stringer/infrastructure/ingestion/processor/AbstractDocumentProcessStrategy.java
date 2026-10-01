@@ -7,6 +7,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestLimits;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -62,6 +63,10 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
                 allSegments.stream().mapToInt(s -> s.text().length()).average().orElse(0d));
 
         IngestReport report = new IngestReport(docCount, split.sections(), split.droppedLines());
+
+        // 切片数上限：几百页的文档一次就能产出几千片，向量化是分批请求模型的，
+        // 一次上传就能把导入队列堵住 —— 在动手向量化之前先挡掉
+        guardChunkLimit(documents, allSegments);
 
         if (allSegments.isEmpty()) {
             log.warn("[分片写入-{}][{}] 分片结果为空，跳过后续流程", sourceTag, strategyName());
@@ -139,6 +144,23 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
      * 子类实现：将文档列表切分为文本片段，并带回切片诊断计数
      */
     protected abstract SplitResult splitDocuments(List<IngestDocument> documents);
+
+    /**
+     * 单文件切片数上限（防雪崩，不是限制功能）。
+     *
+     * <p>几百页的 PDF / 超长 docx 一次就能产出几千片，向量化要分批请求模型 ——
+     * 一次上传就能把导入队列堵死。超限直接拒绝，并告诉用户怎么做（拆成几个小文件）。</p>
+     */
+    protected void guardChunkLimit(List<IngestDocument> documents, List<TextSegment> segments) {
+        int limit = IngestLimits.maxChunksPerDocument();
+        if (limit <= 0 || segments.size() <= limit) {
+            return;
+        }
+        String name = documents == null || documents.isEmpty() ? "(unknown)" : documents.get(0).fileName();
+        throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
+                "文件 " + name + " 切出 " + segments.size() + " 片，超过单文件上限 " + limit
+                        + " 片；请把它拆成几个小文件分别上传");
+    }
 
     /**
      * 计算 content_hash：SHA-256(切片正文)。

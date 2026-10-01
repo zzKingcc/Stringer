@@ -33,6 +33,14 @@ public class RagProperties {
     private List<String> allowedExtensions = List.of("txt", "md", "markdown", "docx");
 
     /**
+     * 单文件（单次上传）允许的最大切片数。
+     *
+     * <p>几百页的文档一次就能产出几千片，向量化是分批请求模型的 ——
+     * 一次上传就能把导入队列堵死。超限时直接拒绝并提示拆分，不是"切一半留下"。</p>
+     */
+    private int maxChunksPerDocument = 2000;
+
+    /**
      * 切片参数（只这三项可调，其余阈值都是代码常量）。
      */
     private Chunking chunking = new Chunking();

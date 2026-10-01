@@ -1,12 +1,13 @@
 package com.zzkingcc.stringer.server.config;
 
+import com.zzkingcc.stringer.infrastructure.ingestion.IngestLimits;
 import com.zzkingcc.stringer.infrastructure.ingestion.block.BlockChunking;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtChunking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 把 {@code stringer.rag.chunking.*} 注入切片器的全局取值点。
+ * 把 {@code stringer.rag.chunking.*} 与导入限制注入切片器的全局取值点。
  *
  * <p>需要这一层是因为策略工厂是静态的、策略实例是无参构造的单例，拿不到 Spring 的配置对象。</p>
  *
@@ -23,7 +24,9 @@ public class ChunkingConfiguration {
         RagProperties.Chunking chunking = ragProperties.getChunking();
         TxtChunking.configure(chunking.getMaxChars(), chunking.getOverlapSentences(), chunking.getMinChars());
         BlockChunking.configure(chunking.getMaxChars(), chunking.getOverlapSentences(), chunking.getMinChars());
-        log.info("[知识库] 切片参数已就绪：max-chars={}，overlap-sentences={}，min-chars={}",
-                chunking.getMaxChars(), chunking.getOverlapSentences(), chunking.getMinChars());
+        IngestLimits.configure(ragProperties.getMaxChunksPerDocument());
+        log.info("[知识库] 切片参数已就绪：max-chars={}，overlap-sentences={}，min-chars={}，单文件切片上限={}",
+                chunking.getMaxChars(), chunking.getOverlapSentences(), chunking.getMinChars(),
+                ragProperties.getMaxChunksPerDocument());
     }
 }

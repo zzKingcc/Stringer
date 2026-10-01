@@ -124,6 +124,8 @@ stringer:
       - md
       - markdown
       - docx
+    # 单文件切片数上限：几百页的文档一次就能产出几千片，超限直接拒绝并提示拆分
+    max-chunks-per-document: 2000
     # 切片参数（只这三项可调，其余阈值都是代码常量）
     # max-chars 是长度上限而不是固定长度：撞到标题就提前断、整段不足就是实际字数
     chunking:

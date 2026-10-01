@@ -191,7 +191,7 @@
         var tbody = document.getElementById('domainBody');
         if (!domains.length) {
             tbody.innerHTML = '<tr><td colspan="6" class="perm-none">'
-                + '当前没有任何域。域来自三处：内置兜底域 default（正常装配时必定存在）、'
+                + '当前没有任何域。根域 default（正常装配时必定存在）、'
                 + '管控台人工创建、工具声明派生；若连 default 都没有，说明服务端未正常装配域注册表。</td></tr>';
             return;
         }

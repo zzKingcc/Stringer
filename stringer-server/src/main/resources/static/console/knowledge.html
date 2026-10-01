@@ -42,15 +42,15 @@
                 <label class="hint" style="margin:0;">
                     可用域（按住 Ctrl / Cmd 可多选）：
                     <select id="domainSelect" multiple size="4" style="min-width:12rem;">
-                        <option value="*">*（全域可见）</option>
                     </select>
                 </label>
             </div>
             <details class="disclose">
                 <summary>可用域的作用</summary>
                 <div class="disclose-body">
-                    决定<b>哪些对话能检索到这份文档</b>，与 <code>@Tool(domains = {...})</code> 同构：含 <code>*</code> → 全域；
-                    不选 → 只属兜底域 <code>default</code>。检索工具本身仍由部署方声明到哪些域，两层叠加。
+                    决定<b>哪些对话能检索到这份文档</b>，与 <code>@Tool(domains = {...})</code> 同构：
+                    挂在某个域上，该域及其<b>全部后代域</b>都能检索到；不选 → 挂在根域 <code>default</code>，即全域可见。
+                    想收紧就选到具体域。检索工具本身仍由部署方声明到哪些域，两层叠加。
                 </div>
             </details>
             <div id="uploadResult" class="result"></div>
@@ -82,32 +82,32 @@
 <script>
     var esc = Console.escapeHtml;
 
-    /** 域标签：* 是全域；历史文档（升级前入库）没有 domains 字段，服务端按全域返回 */
+    /** 域标签：无 domains 字段的历史文档服务端按挂根域返回；根域即全域可见 */
     function domainLabel(domains) {
         var list = domains || [];
         if (!list.length) return '<span class="pill">default</span>';
-        var all = list.indexOf('*') >= 0;
-        if (all) return '<span class="pill">全域 *</span>';
-        return list.map(function (d) { return '<span class="pill">' + esc(d) + '</span>'; }).join(' ');
+        return list.map(function (d) {
+            return '<span class="pill">' + esc(d) + (d === 'default' ? '（全域）' : '') + '</span>';
+        }).join(' ');
     }
 
     /* 域清单走管控台同款 /admin/domains（COOKIE 载具），
        不能用 /api/agent/domains（HEADER/API-key 载具）—— 管控台只带 Cookie，
        后者会被判 10002 弹回登录页。该端点返回 domains = [{name, source, ...}]，
-       兜底域＝source === 'BUILTIN'（即 default）。 */
+       根域＝source === 'BUILTIN'（即 default）。 */
     function loadDomainOptions() {
         var select = document.getElementById('domainSelect');
         Console.request('/admin/domains').then(function (data) {
             (data.domains || []).forEach(function (d) {
                 var name = (typeof d === 'string') ? d : d.name;
-                if (!name || name === '*') return;   // * 已在 HTML 里作为首项
+                if (!name) return;
                 var opt = document.createElement('option');
                 opt.value = name;
-                opt.textContent = name + (d && d.source === 'BUILTIN' ? '（兜底域）' : '');
+                opt.textContent = name + (d && d.source === 'BUILTIN' ? '（根域）' : '');
                 select.appendChild(opt);
             });
         }).catch(function () {
-            // 拉不到域清单不影响上传：不选即兜底域，页面已写明
+            // 拉不到域清单不影响上传：不选即挂根域，页面已写明
         });
     }
 

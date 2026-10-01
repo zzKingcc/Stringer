@@ -38,7 +38,7 @@
                 <span class="count-badge" id="domainCount">—</span>
             </div>
             <div class="actions">
-                <input type="text" id="newDomain" placeholder="域标识，如 customer-service"
+                <input type="text" id="newDomain" placeholder="完整路径域，如 default.customer-service"
                        style="width:240px; font-family:ui-monospace,Consolas,monospace;">
                 <button id="createDomainBtn">新建域</button>
                 <button class="ghost" id="refreshBtn">重新读取</button>
@@ -116,7 +116,7 @@
     function sourceTag(d) {
         var s = String((d && d.source) || '').toUpperCase();
         if (s === 'BUILTIN') {
-            return '<span class="tag approval" title="内置兜底域：声明留空与未指定域的调用都落到它，不可删除">内置</span>';
+            return '<span class="tag approval" title="根域：整棵域树的起点，不可删除">根域</span>';
         }
         if (s === 'MANUAL') {
             return '<span class="tag perm" title="人工创建，落盘保存，可删除">人工创建</span>';
@@ -152,6 +152,28 @@
         return list;
     }
 
+    /* 完整路径 → 从根到自身的链，与服务端 Domains.chainOf 同构 */
+    function chainOf(domain) {
+        var segs = String(domain || '').split('.');
+        var out = [];
+        var cur = '';
+        for (var i = 0; i < segs.length; i++) {
+            cur = cur ? cur + '.' + segs[i] : segs[i];
+            out.push(cur);
+        }
+        return out;
+    }
+
+    /* 沿链回落到最近一份绑定（与服务端 resolveAlong 同构）：自身没绑就用祖先的 */
+    function resolveBinding(domain) {
+        var chain = chainOf(domain);
+        for (var i = chain.length - 1; i >= 0; i--) {
+            var b = BINDINGS[chain[i]];
+            if (b && b.length) { return { aliases: b, source: chain[i] }; }
+        }
+        return { aliases: [], source: null };
+    }
+
     function render() {
         var box = document.getElementById('domainList');
         var domains = (DATA && DATA.domains) || [];
@@ -159,19 +181,21 @@
 
         if (!domains.length) {
             box.innerHTML = '<div class="card"><span class="perm-none">'
-                + '当前没有任何域。域有三个来源：内置兜底域 <span class="mono">default</span>、'
-                + '上方人工创建、工具声明派生。</span></div>';
+                + '当前没有任何域。根域 <span class="mono">default</span> 是整棵域树的起点，'
+                + '其余域由上方人工创建或工具声明派生，标识须为从根域出发的完整路径。</span></div>';
             return;
         }
 
         box.innerHTML = domains.map(function (d) {
-            var bound = BINDINGS[d.name] || [];
-            var labels = bound.map(function (a) {
+            var resolved = resolveBinding(d.name);
+            var labels = resolved.aliases.map(function (a) {
                 var p = PROFILES.filter(function (x) { return x.alias === a; })[0];
                 return p ? modelLabel(p) : a;
             });
             var boundTags = labels.length
                 ? labels.map(function (l) { return '<span class="tag public mono">' + esc(l) + '</span>'; }).join(' ')
+                    + (resolved.source === d.name ? ''
+                        : '<span class="card-note">继承自 ' + esc(resolved.source) + '</span>')
                 : '<span class="tag write">无可调用模型</span>';
 
             var tools = (d.tools || []).map(toolTag).join('');

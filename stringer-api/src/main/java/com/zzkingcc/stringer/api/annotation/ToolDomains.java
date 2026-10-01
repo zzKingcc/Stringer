@@ -14,11 +14,11 @@ import java.lang.annotation.Target;
  *
  * <pre>{@code
  * @Service
- * @ToolDomains("admin")
+ * @ToolDomains("default.order")
  * public class OrderAdminTools {
  *
  *     @Tool(desc = "关闭订单。用户明确要求取消时调用", effect = Tool.Effect.WRITE)
- *     public String closeOrder(String orderNo) { ... }   // 自动属于 admin 域
+ *     public String closeOrder(String orderNo) { ... }   // 自动属于 default.order 域
  * }
  * }</pre>
  *
@@ -30,7 +30,8 @@ import java.lang.annotation.Target;
 public @interface ToolDomains {
 
     /**
-     * 默认可用域；留空等价于不写（该类工具按"留空 → 只属于兜底域 default"处理）。
+     * 默认可用域，每项都是<b>从根域出发的完整路径</b>；留空等价于不写
+     * （该类工具挂在根域 {@code default}，按累加语义对全树可见）。
      */
     String[] value() default {};
 }

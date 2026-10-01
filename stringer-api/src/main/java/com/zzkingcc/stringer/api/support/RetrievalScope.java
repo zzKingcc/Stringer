@@ -26,8 +26,8 @@ public final class RetrievalScope {
     }
 
     /**
-     * 绑定本轮检索所用的域；{@code null} / 空白按 {@link Domains#DEFAULT} 处理
-     * （与工具的域声明语义一致：留空 → 只属兜底域）。
+     * 绑定本轮检索所用的域；{@code null} / 空白按根域 {@link Domains#DEFAULT} 处理
+     * （与工具的域声明语义一致：留空 → 挂根域）。检索会取「该域 + 全部祖先」上的内容。
      */
     public static void bind(String domain) {
         HOLDER.set(Domains.normalize(domain));

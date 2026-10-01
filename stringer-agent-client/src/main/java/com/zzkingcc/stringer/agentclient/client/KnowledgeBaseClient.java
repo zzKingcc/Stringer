@@ -41,7 +41,7 @@ public class KnowledgeBaseClient {
     public record DocumentItem(String docId, String fileName, int chunks) {}
 
     /**
-     * 上传一个文档（不声明域 → 只属兜底域 {@code default}）。
+     * 上传一个文档（不声明域 → 挂在根域 {@code default}，按累加语义全域可见）。
      *
      * @param content  文件字节
      * @param fileName 文件名（含扩展名，需在服务端白名单内）
@@ -55,7 +55,8 @@ public class KnowledgeBaseClient {
      * 上传一个文档，并声明它的可用域。
      *
      * <p>域决定<b>哪些对话能检索到这份文档</b>，与 {@code @Tool(domains = {...})} 同构：
-     * 含 {@code "*"} → 全域可见；留空 → 只属兜底域；否则原样。
+     * 每项都是<b>从根域出发的完整路径</b>，挂在该域即其<b>全部后代域</b>都能检索到；
+     * 留空 = 挂根域 = 全域可见。没有通配写法，路径非法会被服务端直接拒绝。</p>
      */
     public UploadResult upload(byte[] content, String fileName, boolean replace, List<String> domains) {
         if (content == null || content.length == 0) {

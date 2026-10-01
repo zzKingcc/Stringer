@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -243,6 +244,52 @@ public class KnowledgeBaseService {
         deleteByDocId(index, docId);
         log.info("[知识库] 已删除文档 docId={}（文件名随之释放）", docId);
         return true;
+    }
+
+    /**
+     * 按域删除：清掉 {@code metadata.domains} 命中<b>任一</b>给定域的全部文档，返回被清空的 docId。
+     *
+     * <p>逐个删除并<b>逐个校验</b>残留为 0，任一个没删干净就抛异常中止 ——
+     * 调用方据此拒绝后续动作。删除前先按域统计命中，没有命中时是空操作。</p>
+     */
+    public List<String> deleteByDomains(Collection<String> domains) {
+        Set<String> targets = new LinkedHashSet<>();
+        if (domains != null) {
+            for (String domain : domains) {
+                if (domain != null && !domain.isBlank()) {
+                    targets.add(domain.trim());
+                }
+            }
+        }
+        if (targets.isEmpty()) {
+            return List.of();
+        }
+        String index = ragProperties.getIndexName();
+        if (!indexExists(index)) {
+            return List.of();
+        }
+        List<String> hit = list().stream()
+                .filter(item -> item.domains().stream().anyMatch(targets::contains))
+                .map(DocumentItem::docId)
+                .toList();
+        if (hit.isEmpty()) {
+            return List.of();
+        }
+        List<String> removed = new ArrayList<>();
+        for (String docId : hit) {
+            deleteByDocId(index, docId);
+            if (countByDocId(index, docId) > 0) {
+                // 已删掉的部分无法复原，因此这里必须中止并让调用方知晓：
+                // 继续往下只会把"删了一半"当成成功
+                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
+                        "删除知识库文档未清干净，仍残留片段：docId=" + docId
+                                + "（已删除 " + removed.size() + " 个，请重试或手工清理）");
+            }
+            removed.add(docId);
+        }
+        log.info("[知识库] 按域删除完成：命中 {} 个文档，已清空 {} 个，域={}",
+                hit.size(), removed.size(), targets);
+        return List.copyOf(removed);
     }
 
     /** 索引状态：是否存在、切片总数、文档数（切片总数用 count 精确取，不受列表上限影响） */

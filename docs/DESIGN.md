@@ -89,7 +89,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 定义 | 域＝一次对话的场景，同时绑定【工具集 + 系统提示词 + 知识范围 + 模型】 |
 | 结构与路径 | 标识必须是完整路径；登记时**沿链补齐**——链上缺失的祖先一并建出，因此不留悬空节点。单段只允许 `[A-Za-z0-9_-]`，自身链上不得重复段 |
 | 创建与销毁 | 三个**来源**（`BUILTIN` 根域 / `MANUAL` 人工创建 / `DERIVED` 工具声明派生）**同级，不构成等级**；差异只在生命周期——`MANUAL` 落盘重启仍在，`DERIVED` 重启随声明重建 |
-| 删除 | **递归**带走全部子孙，不向上提升层级；**只有根域不可删**（它是整棵树起点）。删前先清该域及子孙的知识库文档并校验，未清干净则拒绝删域 |
+| 删除 | **递归**带走全部子孙，不向上提升层级；**只有根域不可删**（它是整棵树起点）。删前先删该域及子孙的知识库索引，未删干净则拒绝删域 |
 | 可见性判定 | **累加**：工具声明命中该域或它的任一祖先即见。挂在父域上的工具，其所有后代域都能用 |
 | 声明留空 | 挂在根域 `default`；根域在每个域的祖先链里，故留空＝**全树可见**。想收紧就显式写完整路径 |
 | 通配 | **没有通配写法**。旧版 `{"*"}` 已删除，"全域可见"的写法就是挂根域 |
@@ -229,44 +229,63 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 ## 8 知识库与检索
 
-### 8.1 文档模型
+### 8.1 一域一索引
+
+**一个域 = 一个 ES 索引**，与域树、工具可见性、提示词共用同一套沿链累加语义。
+
+| 项 | 规定 |
+| --- | --- |
+| 索引粒度 | 每个域一个独立索引；文档"属于哪个域"＝它被上传到哪个域的索引 |
+| 索引名 | 由域路径**确定性派生**：`stringer_kb_<安全前缀>_<8位哈希>`（`KbIndexes.nameOf`，纯函数、不依赖任何注册表）。不用域路径直连做索引名——点号在 ES 通配 / 日期数学 / 隐藏索引场景下有歧义，且大小写敏感的域（`a` 与 `A`）转小写后会撞名，故用哈希后缀保证唯一 |
+| 索引创建 | **按需创建**：首次向该域上传文档时建出，映射含 IK 中文分词配置与向量维度。不再有"启动期建全局索引"——域是运行期由用户创建的，索引跟着域走 |
+| 通配 | `stringer_kb_*` 覆盖全部知识库索引（枚举、ES 连接探测、重建用） |
+| 删除 | 删域时**先删该域及全部子孙的索引**，删不干净则拒绝删域（顺序不能反：域先没了，索引就成了没人认领的孤儿） |
+| 重建 | 删掉全部知识库索引并按当前维度重建；一个都没有时建出根域的索引。**索引会被清空，文档需重新上传** |
+
+### 8.2 文档模型
 
 | 项 | 规定 |
 | --- | --- |
 | 导入方式 | 部署方上传（管控台 / HTTP / starter），服务端不内置文档 |
 | 支持类型 | `stringer.rag.allowed-extensions`，默认 `md`、`txt`、`markdown`、`text` |
 | 大小上限 | `stringer.rag.max-file-size`，默认 10MB |
-| 同一性判定 | 同名**不区分大小写**；默认拒绝，带 `replace=true` 则先删旧再写入 |
-| 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名） |
+| 归属域 | 上传时指定单个域（完整路径，留空＝根域 `default`）；路径非法直接拒绝 |
+| 同一性判定 | **同一域内**同名不区分大小写；默认拒绝，带 `replace=true` 则先删旧再写入 |
+| 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名）。docId 里看不出所在域，故逐个索引查找 |
 | 唯一键 | `doc_id`（UUID，删除与聚合的依据）与 `file_name`（展示与同名校验） |
-| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title`、`domains`（可用域，keyword） |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title`、`domain`（所属域，keyword） |
 | 切片规则 | 按中文章节边界（`一、` `二、` `三、` 等）切分，超长段落退化为递归切分 |
 | 并发 | 导入全局串行，等待上限 `stringer.rag.ingest-lock-wait-seconds`（默认 60s） |
 | 失败处理 | 导入失败回滚本次已写入的切片；失败必须上抛，不得返回成功计数 |
 
-### 8.2 索引与检索
+### 8.3 检索：按域解析通道 + 双轨融合
+
+检索域 D 时，召回通道 = **`chainOf(D)` 上每个索引 × 两路模态**（自身 + 全部祖先，含根域）。
 
 | 项 | 规定 |
 | --- | --- |
-| 索引名 | `stringer.rag.index-name`，默认 `stringer_knowledge` |
-| 索引创建 | 不存在时自动创建，映射含 IK 中文分词配置 |
-| 启动行为 | 只建索引、不灌库（`bootstrap-enabled`）；灌库失败不阻断启动（`bootstrap-strict` 默认 false）；`delete-on-startup` 默认 false |
-| 检索方式 | 向量检索与关键词检索并行发起，分数融合重排后取 `top-n` |
-| 权重 | `vector-weight`＝0.6、`keyword-weight`＝0.4、`title-boost`＝0.15、`file-name-boost`＝0.10 |
-| 超时 | `stringer.retrieval.timeout-ms`＝5000（始终为有限值） |
+| 域边界 | 由"查哪些索引"保证，**不再做 `metadata.domains` 过滤** |
+| 通道 | `域链长度 × 2` 条：每张索引一条向量路（余弦）、一条关键词路（BM25）。索引不存在时通道安静返回空（检索器开 `ignoreUnavailable` / `allowNoIndices`），不预探测——省掉 N 次往返 |
+| 未绑定域 | 非对话路径（管控台预览、诊断）未绑定检索域 → 对 `stringer_kb_*` 做通配检索，保持"全库检索"行为 |
+| **双轨融合** | 来源（索引）数 ≤ 1 → `DefaultFusionStrategy`（**分数制**，与单索引时代逐字节一致）；≥ 2 → `RrfFusionStrategy`（**排名制**）。切换由 `AdaptiveFusionStrategy` 自动完成 |
+| 为什么多索引必须换 RRF | BM25 的 idf 用**本索引**的文档频率计算，同一个词在不同索引里量纲不同——多索引 BM25 分池化后做 min-max 会把"小索引里稀有词被抬高的分"当成 max，把其余结果压扁。RRF 只看名次，天然免疫 |
+| RRF 公式 | `score(d) = Σ_L w_L / (k + rank_L(d))`，`k` 默认 60（`stringer.retrieval.rrf-k`） |
+| 权重均摊 | 每张向量表 `w = vectorWeight / 向量表数`，每张关键词表 `w = keywordWeight / 关键词表数`——否则祖先域越多、向量表越多，关键词那路被越压越扁 |
+| 召回条数 | `vector-top-k`＝15（每张索引）、`keyword-top-k`＝5（每张索引） |
+| 向量阈值 | `vector-min-score`＝0.2（按原始余弦填；脚本内已 `+1.0` 回归偏差） |
+| 权重 / boost | `vector-weight`＝0.6、`keyword-weight`＝0.4、`title-boost`＝0.15、`file-name-boost`＝0.10、`top-n`＝10 |
+| 超时 | `stringer.retrieval.timeout-ms`＝5000（始终为有限值）；全通道失败会抛错，与"真没命中"区分开 |
 | 空结果 | 返回"未检索到相关内容"文本；服务不可用返回"知识库检索服务当前不可用…"——两态分离 |
-| **按域检索** | 文档可声明可用域（`metadata.domains`，含 `*` → 全域）；过滤<b>下推到每个检索通道内</b>（`bool.filter`），不放融合后 |
-| 重建 | 删除索引并按当前维度重建，**索引内容清空，需重新上传文档** |
 
 知识检索以 `KnowledgeSearchService` 形式提供，由部署方通过 `@Tool` 暴露为工具；服务端不自带示例工具。
 
-**域对知识是两层约束**（与工具不同，别记混了）：
+**域对知识仍是两层约束**（与工具不同，别记混了）：
 
 1. **工具层**：检索工具本身声明到哪些域 —— 决定了"这个域的对话能不能检索"。
-2. **内容层**：文档声明的 `domains` —— 决定了"能检索时，能查到哪些文档"。
+2. **内容层**：文档上传到哪个域 —— 决定了"能检索时，能查到哪些文档"（累加：挂在某域则其全部后代可检索）。
 
-> 过滤必须下推到通道内：两路各回 Top-N，混进其他域的文档会把本域结果挤掉，
-> 融合后再过滤就只剩一两条 —— 检索"成功了"但召回塌陷，而且不报错。
+> 域边界必须在**召回通道层面**确定（查哪些索引），而不是召回后再过滤：两路各回 Top-N，
+> 混进其他域的文档会把本域结果挤掉，融合后过滤就只剩一两条 —— 检索"成功了"但召回塌陷，且不报错。
 
 ---
 
@@ -330,7 +349,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- |
 | 配置来源 | `config/infra-settings.json`（高） > yaml / 环境变量（低） |
 | 字段 | ES：`host`、`port`（9200）、`scheme`（http）、`username`、`password`、`connectTimeout`（5000）、`socketTimeout`（10000）；Redis：`host`、`port`（6379）、`password`、`database`（0） |
-| 未配置判据 | `host` 为 null 即未配置；两位点均空时启动照常，跳过建索引并只打 INFO |
+| 未配置判据 | `host` 为 null 即未配置；两位点均空时启动照常（知识库索引本就是按需创建的，启动期无事可做），只打 INFO |
 | 热替换 | `InfraSettingsHolder.apply()` → `SwappableElasticsearchTransport.swap()` / `SwappableRedisConnectionFactory.swap()`，volatile 原子替换；旧连接延迟 30s 关闭 |
 | 守卫位置 | ES 只守 `performRequest` / `performRequestAsync`；Redis 只守 `getConnection` / `getClusterConnection` / `getSentinelConnection`；守卫只抛异常、不打日志 |
 | 能力探测 | ES 判读 9.x / 8.x / 7.17 / 更低或 OpenSearch / 读不到；一律不阻断保存。IK 分词器探测 `POST /_analyze` 试 `ik_max_word`：可用 / 确认未安装 / 未探测 |
@@ -453,13 +472,12 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.retrieval.parallel` | boolean | true |
 | `stringer.retrieval.timeout-ms` | long | 5000 |
 | `stringer.retrieval.core-pool-size` / `max-pool-size` / `queue-capacity` | int | 4 / 16 / 200 |
+| `stringer.retrieval.vector-top-k` / `keyword-top-k` | int | 15 / 5（每张索引） |
+| `stringer.retrieval.vector-min-score` | double | 0.2 |
 | `stringer.retrieval.vector-weight` / `keyword-weight` | double | 0.6 / 0.4 |
 | `stringer.retrieval.title-boost` / `file-name-boost` | double | 0.15 / 0.10 |
 | `stringer.retrieval.top-n` | int | 10 |
-| `stringer.rag.index-name` | String | `stringer_knowledge` |
-| `stringer.rag.delete-on-startup` | boolean | false |
-| `stringer.rag.bootstrap-enabled` | boolean | true |
-| `stringer.rag.bootstrap-strict` | boolean | false |
+| `stringer.retrieval.rrf-k` | int | 60 |
 | `stringer.rag.max-file-size` | DataSize | 10MB |
 | `stringer.rag.allowed-extensions` | List | `[md, txt, markdown, text]` |
 | `stringer.rag.ingest-lock-wait-seconds` | long | 60 |

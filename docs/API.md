@@ -255,18 +255,18 @@
 
 | 方法 | 路径 | 入参 | 响应要点 |
 | --- | --- | --- | --- |
-| GET | `/admin/kb/documents` | — | `code`、`count`、`documents[{docId, fileName, chunks, domains}]` |
-| POST | `/admin/kb/documents` | `multipart/form-data`，`file`（必填）、`replace`（默认 false）、`domains`（可重复，可选） | `code`、`success`、`docId`、`fileName`、`size`、`chunks`、`domains` |
+| GET | `/admin/kb/documents` | — | `code`、`count`、`documents[{docId, fileName, chunks, domain}]` |
+| POST | `/admin/kb/documents` | `multipart/form-data`，`file`（必填）、`replace`（默认 false）、`domain`（可选，单个） | `code`、`success`、`docId`、`fileName`、`size`、`chunks`、`domain` |
 | DELETE | `/admin/kb/documents/{docId}` | path `docId` | `code`、`success`、`docId`、`deleted` |
+| GET | `/admin/kb/status` | — | `code`、`indexCount`、`documents`、`chunks`、`indices[{index, domain, documents, chunks}]` |
+| POST | `/admin/kb/rebuild` | — | `code`、`success`、`indices`、`dimensions`、`message` |
 
-`domains` 声明该文档的<b>可用域</b>，与 `@Tool(domains = {...})` 同构：每项都是**从根域出发的完整路径**，
-判按**累加**——挂在某域则其**全部后代域**都能检索到；留空 / 不传 → 挂根域 `default`＝全域可见。
-**无通配写法**，路径非法直接拒绝（静默会把文档写到树里不存在的域上，永远检索不到）。
-一次传多个用重复参数：`?domains=default.sales&domains=default.hr`。
-| GET | `/admin/kb/status` | — | `code` 与索引状态字段（`index`、`indexExists`、`documents`、`chunks`、`hint`） |
-| POST | `/admin/kb/rebuild` | — | `code`、`success`、`index`、`dimensions`、`message` |
+`domain` 声明该文档**归属的域**，与 `@Tool(domains = {...})` 同构：必须是**从根域出发的完整路径**，
+判定按**累加**——挂在某域则其**全部后代域**都能检索到；留空 / 不传 → 挂根域 `default`＝全域可见。
+**无通配写法**，路径非法直接拒绝（静默会把文档写到一个树里不存在的域上，永远检索不到）。
+一个文档只属一个域：知识库是**一域一索引**，域即索引。
 
-约定：上传为同步（切片与向量化完成后才返回）；同名不区分大小写，默认拒绝，`replace=true` 先删后写；`rebuild` 会清空索引，之后需重新上传文档。
+约定：上传为同步（切片与向量化完成后才返回）；**同一域内**同名不区分大小写，默认拒绝，`replace=true` 先删后写；`rebuild` 会清空全部知识库索引，之后需重新上传文档。
 
 ### 4.6 存储配置
 
@@ -390,8 +390,8 @@
 | | `stream(...)` → `Flux<String>`；`events(...)` → `Flux<AgentEvent>` |
 | | `resume(sessionId, approved)` → `Flux<AgentEvent>`；`stop(sessionId)` → `boolean`；`domainId()` → `String` |
 | `ClientCredential` | `get()`、`invalidate()`、`login()`、`extractHttpStatus(Throwable)` |
-| `KnowledgeBaseClient` | `upload(byte[], String fileName, boolean replace)` → `UploadResult(docId, fileName, size, chunks)`（不声明域 = 只属 `default`） |
-| | `upload(byte[], String fileName, boolean replace, List<String> domains)` → 同上，并声明可用域（含 `"*"` → 全域） |
+| `KnowledgeBaseClient` | `upload(byte[], String fileName, boolean replace)` → `UploadResult(docId, fileName, size, chunks)`（不声明域 = 落到根域 `default` 的索引） |
+| | `upload(byte[], String fileName, boolean replace, String domain)` → 同上，并声明归属域（完整路径；留空 = 根域） |
 | | `list()` → `List<DocumentItem(docId, fileName, chunks)>` |
 | | `delete(String docId)` |
 

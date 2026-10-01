@@ -81,11 +81,11 @@ stringer:
 | `embeddingModelName` | 向量模型名 | 如 `text-embedding-v3`，**必须显式填**，否则向量能力视为未配置 |
 | `embeddingDimensions` | 向量维度 | 留空＝用服务商默认维度；填写＝请求带 `dimensions` 并在测试时校验返回长度 |
 
-> 改维度**必须重建 ES 索引**，否则旧 mapping 维度不匹配会拒绝写入。测试连接时平台用返回向量的实际长度做精确裁决，不读 `model.dimension()`。
+> 改维度**必须重建全部知识库索引**，否则旧 mapping 维度不匹配会拒绝写入。测试连接时平台用返回向量的实际长度做精确裁决，不读 `model.dimension()`。
 
 ### 2.4 存储配置 `infra-settings.json`（管控台「存储配置」页）
 
-ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳过启动期建索引/灌库；直到真被调用才返回 `90005` 提示去配置。
+ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库索引本就是按需创建的，启动期无事可做）；直到真被调用才返回 `90005` 提示去配置。
 
 **`es` 子节点：**
 
@@ -142,17 +142,22 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 
 ### 2.6 知识库的域（管控台「知识库」页）
 
-文档可以声明<b>可用域</b>，语义与工具注解同构：每项都是**从根域出发的完整路径**，
+上传时给文档选一个<b>归属域</b>，语义与工具注解同构：必须是**从根域出发的完整路径**，
 挂在某域则其**全部后代域**都能检索到；不选 → 挂根域 `default`＝全域可见。**无通配写法**。
 
-**域对知识是两层约束**（与工具不同）：
+**一域一索引**：每个域一个独立 ES 索引（索引名由域路径派生，如 `stringer_kb_default_sales_1a2b3c4d`），
+首次往该域上传文档时自动创建。所以"文档归属哪个域"＝"它落在哪个索引里"。
+
+**域对知识仍是两层约束**（与工具不同）：
 
 1. **工具层** —— 检索工具本身声明到哪些域（`@Tool(domains=...)`），决定"这个域的对话能不能检索"；
-2. **内容层** —— 文档的 `domains`，决定"能检索时查到哪些文档"。
+2. **内容层** —— 文档上传到哪个域，决定"能检索时查到哪些文档"。
 
-过滤在检索通道内部完成（两路各带 `bool.filter`）：把它放到融合之后会把本域结果挤掉，召回塌陷且不报错。
-过滤取值是「当前域 + 全部祖先」，与工具可见性同一套累加语义。
-未声明 `domains` 的文档视为挂在根域。
+检索域 D 时只查「D + 全部祖先」链上的索引（与工具可见性同一套累加语义）——
+域边界由"查哪些索引"保证，不再做元数据过滤。链上某个祖先域还没有索引时那条通道安静返回空。
+删域会先删掉该域及全部子孙的索引。
+
+一域一索引还有个副作用上的好处：域之间的知识物理隔离，删域＝删索引，干净利落。
 
 ### 2.7 yaml 兜底与可调参数
 
@@ -169,10 +174,9 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动，只是跳
 | `stringer.instance.timeout-seconds` | `35` | 实例心跳判死窗（≈心跳周期×7） |
 | `stringer.instance.invoke-timeout-ms` | `30000` | 单次远程工具调用超时 |
 | `stringer.instance.invoke-max-attempts` | `2` | 单次调用最多试几个副本（仅传输层失败时换副本） |
-| `stringer.retrieval.*` | — | 混合检索（向量+关键词权重、top-n 等） |
-| `stringer.rag.index-name` | `stringer_knowledge` | 私有索引命名空间（统一 `stringer_` 前缀） |
-| `stringer.rag.bootstrap-enabled` | `true` | 启动期是否建索引+灌库 |
-| `stringer.rag.bootstrap-strict` | `false` | 灌库失败是否阻断启动（默认不阻断，避免死锁） |
+| `stringer.retrieval.*` | — | 混合检索（每索引召回条数、权重、`rrf-k`、TopN 等） |
+| `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | `2` / `16` | 知识库导入线程池与队列 |
+| `stringer.rag.max-file-size` / `allowed-extensions` | `10MB` / `md,txt,markdown,text` | 单文件大小上限与扩展名白名单 |
 | `stringer.logging.path` / `stringer.logging.level` | `/var/log/stringer` / `INFO` | 文件日志目录与级别（默认只输出控制台） |
 | `redis.timeout` / `redis.pool.*` | — | Redis 连接池与命令超时（调优用，不在管控台） |
 
@@ -553,6 +557,6 @@ public class LocalTools {                                  // 任意 Spring Bean
 2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool` 声明）周期注册给服务端。
 3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `default.customer`、管理员 `default.admin`）演示不同域；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
-5. 想顺手验证知识库：`stringer-example/src/main/resources/ragDatabase/` 下有 4 篇「鲜果时光」语料（公司简介与配送范围 / 退款与售后政策 / 会员与订阅规则 / 常见问题 FAQ），在管控台「知识库」页上传即可检索。**它们不参与示例启动**，只是联调用的现成语料。
+5. 想顺手验证知识库：在管控台「知识库」页上传一份 md，**归属域**选到某个域（或留 `default` 让全域可见），再用该域的对话去检索即可。
 
 > 示例应用**不需要任何环境变量**：服务端侧的模型/ES/Redis 都在管控台配；这里只有服务端地址与账号可覆盖（`STRINGER_SERVER_HOST` / `STRINGER_SERVER_PORT` / `STRINGER_SERVER_USERNAME` / `STRINGER_SERVER_PASSWORD`）。工具回流地址也不用配——示例与服务端同机，由 SDK 自动推导。

@@ -359,4 +359,4 @@ curl -N -X POST "http://localhost:9527/api/agent/resume?sessionId=s-001&approved
 - **`ask` 是阻塞的**：它内部会消费完整条流，受 `stringer.client.read-timeout` 约束；长任务请用 `events`（冷流，可自行超时/背压）。
 - **`blockLast()` vs `subscribe()`**：阻塞式入口可用 `blockLast()`；WebFlux / 异步入口用 `subscribe()`，不要混用。
 - **工具重名**：同名工具全局只能有一个；多副本请走工具实例注册（同名多实例），见 [`INSTANCE.md`](INSTANCE.md)。
-- **知识库检索不到**：检索工具没声明到该域 → 模型根本不会调用它；文档没标域 → 只属 `default`，其他域查不到。这是两层约束，排查时都要看（见 `INSTANCE.md` §2.6）。
+- **知识库检索不到**：检索工具没声明到该域 → 模型根本不会调用它；文档上传到了别的域 → 该域查不到（一域一索引，检索只查「该域 + 祖先域」链上的索引）。这是两层约束，排查时都要看（见 `INSTANCE.md` §2.6）。

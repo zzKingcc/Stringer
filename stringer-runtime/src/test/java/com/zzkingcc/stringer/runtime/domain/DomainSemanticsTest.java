@@ -37,36 +37,47 @@ class DomainSemanticsTest {
         assertTrue(Domains.isDefault(null));
         assertFalse(Domains.isDefault("default.sales"));
         assertEquals("default", Domains.DEFAULT);
-        assertEquals("*", Domains.ANY);
     }
 
-    // ===== 工具可见性（第 2 步改为沿链累加时，下面三条随之重写） =====
+    // ===== 工具可见性：累加语义（命中自身或任一祖先即见） =====
 
     @Test
-    void emptyDeclarationBelongsToDefaultOnly() {
+    void emptyDeclarationMountsOnRootAndIsVisibleEverywhere() {
         ToolDescriptor tool = toolWithDomains();
-        assertTrue(tool.visibleIn(Domains.DEFAULT), "兜底域应可见");
-        assertTrue(tool.visibleIn(null), "未指定域归一化为兜底域后应可见");
-        assertTrue(tool.visibleIn("  "), "空白域同上");
-        assertFalse(tool.visibleIn("customer"), "留空不再等于全域可见");
-    }
-
-    @Test
-    void wildcardDeclarationIsVisibleInEveryDomain() {
-        ToolDescriptor tool = toolWithDomains(Domains.ANY);
-        assertTrue(tool.visibleIn("customer"));
-        assertTrue(tool.visibleIn("admin"));
         assertTrue(tool.visibleIn(Domains.DEFAULT));
-        assertTrue(tool.visibleIn(null));
+        assertTrue(tool.visibleIn(null), "未指定域归一化为根域");
+        assertTrue(tool.visibleIn("  "));
+        // 根域在每个域的祖先链里，因此挂根 = 对全树可见
+        assertTrue(tool.visibleIn("default.sales"));
+        assertTrue(tool.visibleIn("default.sales.order"), "留空即挂根，累加后子域可见");
+        assertEquals(List.of(Domains.DEFAULT), tool.declaredDomains());
     }
 
     @Test
-    void explicitDeclarationIsVisibleOnlyInThoseDomains() {
-        ToolDescriptor tool = toolWithDomains("admin", "finance");
-        assertTrue(tool.visibleIn("admin"));
-        assertTrue(tool.visibleIn("finance"));
-        assertFalse(tool.visibleIn("customer"));
-        assertFalse(tool.visibleIn(Domains.DEFAULT), "显式声明某域的工具不自动属于兜底域");
+    void declarationOnAParentIsInheritedByDescendants() {
+        ToolDescriptor tool = toolWithDomains("default.sales");
+        assertTrue(tool.visibleIn("default.sales"));
+        assertTrue(tool.visibleIn("default.sales.order"), "挂父域，子域默认可用");
+        assertTrue(tool.visibleIn("default.sales.order.refund"), "任意深度的后代都继承");
+        assertFalse(tool.visibleIn("default.hr"), "旁支不继承");
+        assertFalse(tool.visibleIn(Domains.DEFAULT), "挂在子域的工具不会反向对根域可见");
+    }
+
+    @Test
+    void multipleDeclarationsCoverSeveralBranches() {
+        ToolDescriptor tool = toolWithDomains("default.sales", "default.hr");
+        assertTrue(tool.visibleIn("default.sales"));
+        assertTrue(tool.visibleIn("default.hr"));
+        assertTrue(tool.visibleIn("default.hr.payroll"));
+        assertFalse(tool.visibleIn("default.finance"), "未声明的分支不可见");
+    }
+
+    @Test
+    void wildcardIsNoLongerADomain() {
+        ToolDescriptor tool = toolWithDomains("*");
+        // "*" 不是合法域路径，不在任何域的祖先链上，因此处处不可见 —— 不再有通配语义
+        assertFalse(tool.visibleIn(Domains.DEFAULT));
+        assertFalse(tool.visibleIn("default.sales"));
     }
 
     // ==================== 路径运算 ====================
@@ -106,7 +117,7 @@ class DomainSemanticsTest {
         assertNotNull(Domains.validatePath("default.sa les"), "段含空白");
         assertNotNull(Domains.validatePath("default..sales"), "空段");
         assertNotNull(Domains.validatePath("default."), "尾部分隔符");
-        assertNotNull(Domains.validatePath(Domains.ANY), "通配符不是合法域路径");
+        assertNotNull(Domains.validatePath("*"), "通配符不是合法域路径");
     }
 
     @Test
@@ -128,7 +139,7 @@ class DomainSemanticsTest {
         assertTrue(registry.contains(Domains.DEFAULT));
         assertFalse(registry.delete(Domains.DEFAULT).deleted(), "根域不可删除");
         assertFalse(registry.create(Domains.DEFAULT).created(), "根域不可重复创建");
-        assertFalse(registry.create(Domains.ANY).created(), "通配符不是合法域路径");
+        assertFalse(registry.create("*").created(), "通配符不是合法域路径");
         assertFalse(registry.create("  ").created(), "空白域名应被拒");
     }
 
@@ -211,9 +222,9 @@ class DomainSemanticsTest {
     @Test
     void illegalPersistedDomainsAreSkipped() {
         DomainRegistry registry = new DomainRegistry();
-        registry.loadManual(List.of(Domains.ANY, "legacy-short-name", "default.kept"));
+        registry.loadManual(List.of("*", "legacy-short-name", "default.kept"));
 
-        assertFalse(registry.contains(Domains.ANY), "落盘里的通配符不应被当成域");
+        assertFalse(registry.contains("*"), "落盘里的通配符不应被当成域");
         assertFalse(registry.contains("legacy-short-name"), "非完整路径的存量域应被跳过");
         assertTrue(registry.contains("default.kept"));
     }

@@ -17,11 +17,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 class DomainFilterQueryTest {
 
     @Test
-    void 可见取值是本域加通配() {
-        assertEquals(List.of("customer", "*"), DomainFilterQuery.visibleValues("customer"));
-        assertEquals(List.of(Domains.DEFAULT, "*"), DomainFilterQuery.visibleValues(null),
-                "未指定域归一化为兜底域，与工具可见性一致");
-        assertEquals(List.of("*"), DomainFilterQuery.visibleValues("*"));
+    void 可见取值是自身加全部祖先() {
+        assertEquals(List.of("default", "default.sales", "default.sales.order"),
+                DomainFilterQuery.visibleValues("default.sales.order"),
+                "累加语义：祖先域上的内容，后代域都检索得到");
+        assertEquals(List.of(Domains.DEFAULT), DomainFilterQuery.visibleValues(null),
+                "未指定域归一化为根域，与工具可见性一致");
     }
 
     @Test
@@ -33,7 +34,7 @@ class DomainFilterQueryTest {
     @Test
     void 绑定域后给出过滤条件() {
         try {
-            RetrievalScope.bind("customer");
+            RetrievalScope.bind("default.sales");
             assertNotNull(DomainFilterQuery.build());
         } finally {
             RetrievalScope.clear();

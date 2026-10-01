@@ -26,13 +26,6 @@ public final class Domains {
      */
     public static final String DEFAULT = "default";
 
-    /**
-     * 通配域：<b>仅用于工具的域声明</b>，表示"任何域都可用"。
-     *
-     * <p>必须显式写出。留空表示"只属于兜底域"，两者语义不同，不可混用。</p>
-     */
-    public static final String ANY = "*";
-
     /** 路径分隔符 */
     public static final char SEPARATOR = '.';
 

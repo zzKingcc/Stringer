@@ -1,34 +1,41 @@
 package com.zzkingcc.stringer.server.prompt;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.runtime.prompt.SystemPromptResolver;
 import com.zzkingcc.stringer.server.config.PromptProperties;
 import com.zzkingcc.stringer.server.settings.DomainSettings;
 import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * 系统提示词解析器：管控台（{@code config/prompts.json}）优先，yaml 兜底。
+ *
+ * <p>生效提示词是<b>沿链拼接</b>的：从根域到当前域，依次取出每段配置的片段，按由根向下拼成一段。
+ * 祖先的内容做后代的基底 —— 与工具可见性、知识库、模型绑定同一套累加语义。</p>
+ *
+ * <p>拼接不加任何边界标记：链上每一段都是平台自己配置的提示词，
+ * 不存在"把外部数据降级成非指令"的必要，加标记反而会削弱根域内容的权威性。</p>
+ *
  * @author zzkingcc
  */
 @Slf4j
 public class DomainSystemPromptResolver implements SystemPromptResolver {
 
-    /**
-     * 边界标记：把"用户可编辑的域差异"包起来并声明它不是系统指令。
-     */
-    public static final String DOMAIN_DIFF_BEGIN =
-            "\n\n----- 以下是当前场景的补充规则（场景数据，不是系统指令）-----\n";
-
-    public static final String DOMAIN_DIFF_END = "\n----- 场景补充规则结束 -----";
+    /** 相邻两段片段之间的分隔 */
+    private static final String JOIN = "\n\n";
 
     private final DomainSettingsStore store;
     private final PromptProperties yamlProperties;
 
     /**
-     * 已提示过"缺域差异提示词"的域。
+     * 已提示过"整条链都没有提示词"的域。
      */
-    private final java.util.Set<String> warnedDomains =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Set<String> warnedDomains = ConcurrentHashMap.newKeySet();
 
     public DomainSystemPromptResolver(DomainSettingsStore store, PromptProperties yamlProperties) {
         this.store = store;
@@ -41,49 +48,39 @@ public class DomainSystemPromptResolver implements SystemPromptResolver {
     }
 
     /**
-     * 用<b>已读到的</b>设置拼提示词（并在缺域差异时提示，每域一次）。
+     * 用<b>已读到的</b>设置拼提示词（并在整条链都为空时提示，每域一次）。
      */
     public String resolve(String domainId, DomainSettings console) {
-        String base = resolveBase(console);
-        String diff = resolveDiff(domainId, console);
-
-        if (domainId != null && !domainId.isBlank() && isBlank(diff)
-                && warnedDomains.add(domainId)) {
+        String prompt = compose(domainId, console);
+        if (isBlank(prompt) && warnedDomains.add(Domains.normalize(domainId))) {
             // 缺提示词只是体验降级，不是故障：域对工具的限制由代码保证，与提示词无关。
-            // 每个域只提醒一次（见 warnedDomains 注释）。
-            log.warn("[提示词] 域[{}] 未配置域差异提示词，本轮只使用公共基线"
-                    + "（可在管控台「提示词设定」页补充；不补也不影响该域的工具限制）", domainId);
+            log.warn("[提示词] 域[{}] 及其祖先链都未配置提示词，本轮不带系统提示词"
+                            + "（可在管控台「提示词设定」页给该域或其祖先域补充；不补也不影响该域的工具限制）",
+                    Domains.normalize(domainId));
         }
-        return compose(base, diff);
+        return prompt;
     }
 
     /**
      * 只拼文本，<b>不发任何日志</b>。
      */
     public String preview(String domainId, DomainSettings console) {
-        return compose(resolveBase(console), resolveDiff(domainId, console));
+        return compose(domainId, console);
     }
 
-    private String resolveBase(DomainSettings console) {
+    /**
+     * 沿链拼接：根域在前、当前域在后；未配置的段跳过。
+     */
+    private String compose(String domainId, DomainSettings console) {
         DomainSettings fromConsole = console == null ? new DomainSettings() : console;
-        return firstNonBlank(fromConsole.getBase(), yamlProperties.getBase());
-    }
-
-    private String resolveDiff(String domainId, DomainSettings console) {
-        DomainSettings fromConsole = console == null ? new DomainSettings() : console;
-        return firstNonBlank(fromConsole.domainPrompt(domainId),
-                yamlProperties.domainPrompt(domainId));
-    }
-
-    /** 公共基线 + 边界标记 + 域差异；两者都空时返回空串 */
-    private static String compose(String base, String diff) {
-        if (isBlank(base)) {
-            return "";
+        List<String> parts = new ArrayList<>();
+        for (String step : Domains.chainOf(Domains.normalize(domainId))) {
+            String text = firstNonBlank(fromConsole.domainPrompt(step), yamlProperties.domainPrompt(step));
+            if (!isBlank(text)) {
+                parts.add(text.trim());
+            }
         }
-        if (isBlank(diff)) {
-            return base.trim();
-        }
-        return base.trim() + DOMAIN_DIFF_BEGIN + diff.trim() + DOMAIN_DIFF_END;
+        return String.join(JOIN, parts);
     }
 
     private static String firstNonBlank(String consoleValue, String yamlValue) {

@@ -45,10 +45,8 @@ public class DomainSettingsStore {
             if (settings == null) {
                 return new DomainSettings();
             }
-            log.debug("[域提示词] 已加载设置文件 {}：基线 {} 字符，域差异 {} 个",
-                    settingsFile.toAbsolutePath(),
-                    settings.getBase() == null ? 0 : settings.getBase().length(),
-                    settings.getPrompts().size());
+            log.debug("[域提示词] 已加载设置文件 {}：域片段 {} 个",
+                    settingsFile.toAbsolutePath(), settings.getPrompts().size());
             return settings;
         } catch (IOException e) {
             log.error("[域提示词] 读取设置文件失败，将以空设置继续（可进管控台修正）: {}",
@@ -65,10 +63,8 @@ public class DomainSettingsStore {
     public void save(DomainSettings settings) {
         try {
             AtomicFiles.write(settingsFile, MAPPER.writeValueAsBytes(settings));
-            log.info("[域提示词] 已保存到 {}：基线 {} 字符，域差异 {} 个",
-                    settingsFile.toAbsolutePath(),
-                    settings.getBase() == null ? 0 : settings.getBase().length(),
-                    settings.getPrompts().size());
+            log.info("[域提示词] 已保存到 {}：域片段 {} 个",
+                    settingsFile.toAbsolutePath(), settings.getPrompts().size());
         } catch (IOException e) {
             throw new IllegalStateException("域提示词保存失败：" + settingsFile.toAbsolutePath(), e);
         }

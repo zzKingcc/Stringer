@@ -8,16 +8,17 @@ import java.util.Map;
 
 /**
  * AI 提示词配置模型（平台自有，统一前缀 {@code stringer.ai.prompt}）
+ *
+ * <p>与管控台 {@code prompts.json} 同构：没有公共基线，根域 {@code default} 的片段就是基底，
+ * 生效提示词按域链从根拼接。键是完整路径域。</p>
+ *
  * @author zzkingcc
  */
 @Data
 @ConfigurationProperties(prefix = "stringer.ai.prompt")
 public class PromptProperties {
 
-    /** 公共基线：所有域共享 */
-    private String base;
-
-    /** 域差异：域 → 该域的补充提示词。留空表示只有公共基线 */
+    /** 域（完整路径） → 该域的提示词片段 */
     private Map<String, String> prompts = new LinkedHashMap<>();
 
     /** 指定域的差异片段；未配置返回 {@code null} */

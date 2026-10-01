@@ -3,6 +3,7 @@ package com.zzkingcc.stringer.api.tool;
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.Tool;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -17,8 +18,8 @@ import java.util.List;
  * @param idempotent  是否幂等（决定能否自动重试）
  * @param toModel     结果是否回填 LLM
  * @param params      参数列表（结构 + 语义，用于校验与生成 schema）
- * @param domains     本工具的可用域（<b>授权边界</b>）：留空 = 只属于兜底域 default；
- *                    含 {@code "*"} = 任何域可用（须显式声明）
+ * @param domains     本工具的可用域（<b>授权边界</b>）：每项都是<b>从根域出发的完整路径</b>；
+ *                    留空 = 挂在根域上（按累加语义对全树可见）
  * @param approval    二次确认策略
  * @param source      来源标识，如 {@code com.foo.Bean#method}，用于排障与审计
  */
@@ -38,22 +39,39 @@ public record ToolDescriptor(
     /**
      * 本工具是否对指定域可见 —— <b>授权判定</b>，不是过滤偏好。
      *
-     * <p>规则（顺序即优先级）：</p>
-     * <ol>
-     *   <li>声明中含通配 {@link Domains#ANY} → 任何域可见（必须显式写出）；</li>
-     *   <li>声明留空 → <b>只属于兜底域</b> {@link Domains#DEFAULT}（不再视为全域可见）；</li>
-     *   <li>其余 → 声明列表须命中该域（域为空时归一化为兜底域）。</li>
-     * </ol>
+     * <p>判定按<b>累加</b>语义：声明命中该域，或命中它的任一祖先，即视为可见。
+     * 于是"挂父域、子域默认可用"成立 —— 公共能力挂到根域一次即可，无需逐域声明。</p>
+     *
+     * <p>声明留空 = 挂在根域上。根域在<b>任何</b>域的祖先链里，因此留空即全树可见；
+     * 想收紧就显式写出完整路径。</p>
      */
     public boolean visibleIn(String domainId) {
-        if (domains != null && domains.contains(Domains.ANY)) {
-            return true;
+        List<String> chain = Domains.chainOf(Domains.normalize(domainId));
+        if (chain.isEmpty()) {
+            return false;
         }
-        String domain = Domains.normalize(domainId);
+        for (String declared : declaredDomains()) {
+            if (chain.contains(Domains.normalize(declared))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 声明的可用域；留空视为只挂根域 {@link Domains#DEFAULT}。
+     */
+    public List<String> declaredDomains() {
         if (domains == null || domains.isEmpty()) {
-            return Domains.DEFAULT.equals(domain);
+            return List.of(Domains.DEFAULT);
         }
-        return domains.contains(domain);
+        List<String> out = new ArrayList<>(domains.size());
+        for (String declared : domains) {
+            if (declared != null && !declared.isBlank()) {
+                out.add(Domains.normalize(declared));
+            }
+        }
+        return out.isEmpty() ? List.of(Domains.DEFAULT) : List.copyOf(out);
     }
 
     /**

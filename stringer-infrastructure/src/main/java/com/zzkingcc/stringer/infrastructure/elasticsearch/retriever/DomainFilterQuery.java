@@ -29,14 +29,13 @@ public final class DomainFilterQuery {
     }
 
     /**
-     * 当前域能看到的取值：本域 + 通配 {@code *}。
+     * 当前域能检索到的取值：<b>自身 ∪ 全部祖先</b>（由根向下）。
+     *
+     * <p>与工具可见性同一套累加语义：挂在祖先域上的内容，后代域都能看到。
+     * 于是"公共知识挂根域"就等价于全域可见，不再需要通配。</p>
      */
     public static List<String> visibleValues(String domain) {
-        String normalized = Domains.normalize(domain);
-        if (Domains.ANY.equals(normalized)) {
-            return List.of(Domains.ANY);
-        }
-        return List.of(normalized, Domains.ANY);
+        return Domains.chainOf(Domains.normalize(domain));
     }
 
     /**
@@ -55,8 +54,8 @@ public final class DomainFilterQuery {
         String field = EsIndexManager.DOMAINS_QUERY_FIELD;
         return Query.of(q -> q.bool(b -> b
                 .should(s -> s.terms(t -> t.field(field).terms(tv -> tv.value(values))))
-                // 未声明 domains 的文档只属于兜底域 default，因此过滤条件恒含 default。
-                // 否则升级后这些文档会从所有域里凭空消失 —— 那是一次无声的数据丢失，比放宽更难发现。
+                // 未声明 domains 的文档等价于挂在根域（祖先链恒含 default），因此恒可见。
+                // 否则这些文档会从所有域里凭空消失 —— 那是一次无声的数据丢失，比放宽更难发现。
                 .should(s -> s.bool(nb -> nb.mustNot(mn -> mn.exists(e -> e.field(field)))))
                 .minimumShouldMatch("1")));
     }

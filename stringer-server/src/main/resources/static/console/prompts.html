@@ -49,26 +49,13 @@
         <div class="page-head">
             <h2>提示词设定</h2>
             <p>
-                系统提示词 = <b>公共基线 + 域差异</b>。域差异可以留空（留空就只用基线）。
-                域有三种来源：内置兜底域 <span class="mono">default</span>、管控台<b>人工创建</b>、工具声明派生；
+                系统提示词<b>沿域链从根域拼接</b>：根域 <span class="mono">default</span> 的片段是基底，
+                后代域的片段追加在后，改祖先一处则整条链生效。
                 本页只编辑提示词，新建与删除域在<a href="domains.html">域空间</a>。
             </p>
         </div>
 
         <div id="orphanBox" class="orphan-box" style="display:none;"></div>
-
-        <div class="card">
-            <div class="card-head">
-                <h2>公共基线</h2>
-                <span class="spacer"></span>
-                <span class="card-note">所有域共享，改一处全生效</span>
-            </div>
-            <textarea id="baseText" placeholder="例如：你是某公司的智能助手。回答风格、长度、来源标注、安全规则……"></textarea>
-            <div class="meta">
-                <span>字数 <b id="baseLen">0</b></span>
-                <span>文件 <code id="settingsFile">—</code></span>
-            </div>
-        </div>
 
         <div class="card">
             <div class="card-head">
@@ -96,8 +83,8 @@
             <details class="disclose">
                 <summary>可见工具与提示词的关系</summary>
                 <div class="disclose-body">
-                    可见工具 = 该域真实能用的工具集（显式声明通配 <span class="mono">*</span> 的工具对所有域可见；
-                    <b>声明留空的工具只属于兜底域 <span class="mono">default</span></b>，不会出现在其他域里）。
+                    可见工具 = 该域真实能用的工具集（声明留空或挂在根域的工具对全树可见；
+                    挂在父域的工具，其所有后代域都能用）。
                     <b>提示词不决定工具可见性</b>：就算某个域一个字都没配，它对工具的限制照样生效，缺提示词只是体验降级。
                 </div>
             </details>
@@ -109,10 +96,10 @@
                     <span class="dom" id="edDomain">—</span>
                     <span class="card-note" id="edTools"></span>
                 </div>
-                <textarea id="domainText" placeholder="该域的补充规则，例如口吻、该场景下何时调用哪类能力。留空 = 只用公共基线。"></textarea>
+                <textarea id="domainText" placeholder="该域自己的片段，例如口吻、该场景下何时调用哪类能力。留空 = 只用祖先链上的内容。"></textarea>
                 <div class="meta">
                     <span>字数 <b id="domainLen">0</b></span>
-                    <span class="card-note">下方为该域实际生效的 SystemMessage 全文</span>
+                    <span class="card-note" id="edChain"></span>
                 </div>
                 <pre class="preview" id="preview"></pre>
             </div>
@@ -133,13 +120,12 @@
     var COLORS = { primary: '#2563eb', muted: '#6b7280', red: '#dc2626', amber: '#d97706' };
 
     /* 编辑中的值（保存时整对象提交） vs 服务端基线（用于脏标记与"清空"） */
-    var model = { base: '', prompts: {} };
-    var baseline = { base: '', prompts: {} };
+    var model = { prompts: {} };
+    var baseline = { prompts: {} };
     var domains = [];
-    var boundary = { begin: '', end: '' };
     var currentDomain = null;
 
-    function snapshot(o) { return JSON.stringify({ base: o.base || '', prompts: o.prompts || {} }); }
+    function snapshot(o) { return JSON.stringify({ prompts: o.prompts || {} }); }
 
     function isDirty() { return snapshot(model) !== snapshot(baseline); }
 
@@ -147,34 +133,44 @@
         document.getElementById('dirtyFlag').style.display = isDirty() ? 'inline' : 'none';
     }
 
+    /* 完整路径 → 从根到自身的链，与服务端 Domains.chainOf 同构 */
+    function chainOf(domain) {
+        var segs = String(domain || '').split('.');
+        var out = [];
+        var cur = '';
+        for (var i = 0; i < segs.length; i++) {
+            cur = cur ? cur + '.' + segs[i] : segs[i];
+            out.push(cur);
+        }
+        return out;
+    }
+
     function counts() {
-        document.getElementById('baseLen').textContent = (model.base || '').trim().length;
         document.getElementById('domainLen').textContent =
             currentDomain ? (model.prompts[currentDomain] || '').trim().length : 0;
     }
 
+    /* 沿链拼接：根域在前、当前域在后，未配置的段跳过 */
     function compose(domain) {
-        var base = (model.base || '').trim();
-        var diff = (model.prompts[domain] || '').trim();
-        if (!base) { return ''; }
-        if (!diff) { return base; }
-        return base + boundary.begin + diff + boundary.end;
+        var parts = [];
+        chainOf(domain).forEach(function (step) {
+            var text = (model.prompts[step] || '').trim();
+            if (text) { parts.push(text); }
+        });
+        return parts.join('\n\n');
     }
 
     function renderPreview() {
         if (!currentDomain) { return; }
         var text = compose(currentDomain);
-        var safe = esc(text);
-        var beginMark = esc(boundary.begin.trim());
-        var endMark = esc(boundary.end.trim());
-        if (beginMark) {
-            safe = safe.replace(beginMark, '<span class="mark">' + beginMark + '</span>');
-        }
-        if (endMark) {
-            safe = safe.replace(endMark, '<span class="mark">' + endMark + '</span>');
-        }
+        var from = chainOf(currentDomain).filter(function (step) {
+            return (model.prompts[step] || '').trim();
+        });
+        document.getElementById('edChain').textContent = from.length
+            ? '拼接自：' + from.join(' → ')
+            : '';
         document.getElementById('preview').innerHTML =
-            safe || '（公共基线与该域提示词都为空 —— 本轮不会下发任何系统提示词）';
+            esc(text) || '（该域及其祖先链都未配置 —— 本轮不会下发任何系统提示词）';
     }
 
     function openEditor(domain) {
@@ -225,7 +221,6 @@
     }
 
     function renderAll() {
-        document.getElementById('baseText').value = model.base || '';
         counts();
         renderDomains();
         renderPreview();
@@ -234,16 +229,9 @@
 
     function load() {
         Console.request('/admin/prompts').then(function (r) {
-            baseline = {
-                base: r.base || '',
-                prompts: Object.assign({}, r.prompts || {})
-            };
-            model = {
-                base: baseline.base,
-                prompts: Object.assign({}, baseline.prompts)
-            };
+            baseline = { prompts: Object.assign({}, r.prompts || {}) };
+            model = { prompts: Object.assign({}, baseline.prompts) };
             domains = r.domains || [];
-            boundary = r.previewBoundary || { begin: '', end: '' };
             document.getElementById('settingsFile').textContent = r.settingsFile || '—';
 
             var orphans = r.orphanPrompts || [];
@@ -268,13 +256,6 @@
         });
     }
 
-    document.getElementById('baseText').addEventListener('input', function (e) {
-        model.base = e.target.value;
-        counts();
-        renderPreview();
-        setDirty();
-    });
-
     document.getElementById('domainText').addEventListener('input', function (e) {
         if (!currentDomain) { return; }
         model.prompts[currentDomain] = e.target.value;
@@ -286,7 +267,7 @@
 
     document.getElementById('clearBtn').addEventListener('click', function () {
         /* 清空 = 把编辑区归零，之后点「保存并生效」才会真正回落 yaml；不是"撤销" */
-        model = { base: '', prompts: {} };
+        model = { prompts: {} };
         document.getElementById('domainText').value = '';
         renderAll();
     });
@@ -301,7 +282,7 @@
         el.textContent = '正在保存…';
         el.className = 'result show ok';
 
-        var payload = { base: model.base, prompts: model.prompts };
+        var payload = { prompts: model.prompts };
         Console.jsonRequest('/admin/prompts', 'POST', payload).then(function (r) {
             if (!r.success) {
                 el.textContent = r.message || '保存失败';

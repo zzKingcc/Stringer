@@ -43,8 +43,10 @@ public class ToolConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public ToolRegistry toolRegistry(ObjectProvider<StringerToolProvider> providers,
-                                     ListableBeanFactory beanFactory) {
-        ToolRegistry registry = new ToolRegistry();
+                                     ListableBeanFactory beanFactory,
+                                     DomainRegistry domainRegistry) {
+        // 注入域注册表：工具声明的域会在注册时沿链派生进域树
+        ToolRegistry registry = new ToolRegistry(domainRegistry);
         // 按实例身份去重：实现了 StringerToolProvider 的 Bean 会同时命中两轮扫描，
         // 而 ToolRegistry 对重名是直接抛异常的
         Set<Object> scanned = Collections.newSetFromMap(new IdentityHashMap<>());

@@ -21,6 +21,7 @@ import java.util.TreeSet;
  * <p>要挡的是什么：域同时绑定【工具集 + 系统提示词】，而两者分处两个地方维护
  * （工具声明在 {@code @Tool}，提示词在管控台 {@code prompts.json} / yaml），
  * 于是很容易写出"提示词里点名了某个工具、但它在当前域不可见"。
+ * 提示词沿链拼接，所以祖先域的片段同样会落到后代域身上。</p>
  * 后果是模型被告知有能力却调不到，要么反复失败、要么拿近义工具硬凑。
  * 这类问题<b>不抛异常、不进错误日志、HTTP 依旧 200</b>，只能靠人工比对发现 ——
  * 正是自检该覆盖的那一类。</p>
@@ -70,13 +71,13 @@ public class PromptToolConsistencyAudit {
             }
 
             DomainSettings settings = settingsStore.load();
-            String base = resolver.preview(null, settings);
             Map<String, String> promptByDomain = new LinkedHashMap<>();
             for (String domain : domains) {
+                // 沿链拼接后的全文：祖先域的片段也会出现在后代域的提示词里
                 promptByDomain.put(domain, resolver.preview(domain, settings));
             }
 
-            List<String> mismatches = findMismatches(tools, domains, promptByDomain, base);
+            List<String> mismatches = findMismatches(tools, domains, promptByDomain);
             if (mismatches.isEmpty()) {
                 log.info("[启动自检] 提示词与工具可见性一致（域 {} 个、工具 {} 个）",
                         domains.size(), tools.size());
@@ -104,44 +105,23 @@ public class PromptToolConsistencyAudit {
     /**
      * 找出"提示词点名了、但该域不可见"的工具。
      *
-     * <p>分两类，因为修法不同：</p>
-     * <ol>
-     *   <li><b>公共基线</b>点名：基线所有域共享，所以要把它在哪些域不可见<b>逐个列全</b>；</li>
-     *   <li><b>域差异片段</b>点名：只影响该域，属自相矛盾（一边给这个域加提示、一边不给它工具），更要紧。</li>
-     * </ol>
+     * <p>判据是<b>该域生效的全文提示词</b>（沿链拼接后的结果），不再区分"基线"与"域差异" ——
+     * 提示词已经没有基线这一层了，根域的片段就是基底。点名可能出自链上任意一段，
+     * 因此修法都是二选一：把工具声明到这些域，或从<b>链上某段的</b>提示词里删掉该工具名。</p>
      */
     static List<String> findMismatches(List<ToolDescriptor> tools,
                                        Set<String> domains,
-                                       Map<String, String> promptByDomain,
-                                       String base) {
+                                       Map<String, String> promptByDomain) {
         List<String> out = new ArrayList<>();
 
-        for (ToolDescriptor tool : tools) {
-            if (!mentions(base, tool.name())) {
-                continue;
-            }
-            List<String> invisible = new ArrayList<>();
-            for (String domain : domains) {
-                if (!tool.visibleIn(domain)) {
-                    invisible.add(domain);
-                }
-            }
-            if (!invisible.isEmpty()) {
-                out.add("公共基线点名了工具 " + tool.name() + "，但它在域 " + invisible + " 不可见");
-            }
-        }
-
-        for (String domain : domains) {
+        for (String domain : new TreeSet<>(domains)) {
             String prompt = promptByDomain.get(domain);
             for (ToolDescriptor tool : tools) {
-                // 基线已经处理过的不重复报；域提示词 = 基线（+ 域差异），
-                // 所以"基线没有、域提示词有"才说明它出自该域的差异片段
-                if (tool.visibleIn(domain)
-                        || mentions(base, tool.name())
-                        || !mentions(prompt, tool.name())) {
+                if (tool.visibleIn(domain) || !mentions(prompt, tool.name())) {
                     continue;
                 }
-                out.add("域 " + domain + " 的提示词点名了工具 " + tool.name() + "，但它在该域不可见");
+                out.add("域 " + domain + " 的提示词点名了工具 " + tool.name() + "，但它在该域不可见"
+                        + "（提示词沿链拼接，点名可能来自它的某个祖先域）");
             }
         }
         return out;

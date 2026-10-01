@@ -1,12 +1,14 @@
 package com.zzkingcc.stringer.runtime.tool;
 
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.service.tool.ToolExecutor;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -28,22 +30,34 @@ class ToolProfileRetentionTest {
     /** 域一经声明就不再抹掉：副本全部摘除后，它仍在已知域里、入口仍受理 */
     @Test
     void knownProfiles_surviveReplicaRemoval() {
-        registry.register(tool("local_tool", "stringer", List.of("ops")));
+        registry.register(tool("local_tool", "stringer", List.of("default.ops")));
         registry.replaceInstanceTools("i1", "http://10.0.0.5:8081/invoke",
-                List.of(tool("remote_tool", "remote://i1", List.of("finance"))));
+                List.of(tool("remote_tool", "remote://i1", List.of("default.finance"))));
 
-        assertTrue(registry.acceptsProfile("finance"));
+        assertTrue(registry.acceptsProfile("default.finance"));
 
         registry.removeInstance("i1");
         assertTrue(registry.find("remote_tool").isEmpty(), "副本应已摘除");
-        assertTrue(registry.knownProfiles().contains("finance"), "域不应随工具断开而消失");
-        assertTrue(registry.acceptsProfile("finance"), "域还可用，不能判 10004");
+        assertTrue(registry.knownProfiles().contains("default.finance"), "域不应随工具断开而消失");
+        assertTrue(registry.acceptsProfile("default.finance"), "域还可用，不能判 10004");
     }
 
     /** 见过域之后才开始拦：陌生域仍要被拒，这条 fail-fast 不能松 */
     @Test
     void unknownProfileStillRejectedOnceAnyDeclared() {
-        registry.register(tool("local_tool", "stringer", List.of("ops")));
-        assertFalse(registry.acceptsProfile("ghost"));
+        registry.register(tool("local_tool", "stringer", List.of("default.ops")));
+        assertFalse(registry.acceptsProfile("default.ghost"));
+    }
+
+    /** 工具声明的域必须沿链派生进域树：只声明末节点会留下悬空节点 */
+    @Test
+    void declarationLinksTheWholeChainIntoDomainTree() {
+        DomainRegistry domains = new DomainRegistry();
+        ToolRegistry registry = new ToolRegistry(domains);
+        registry.register(tool("deep_tool", "stringer", List.of("default.sales.order")));
+
+        assertTrue(domains.contains("default.sales"), "缺失的祖先必须一并建出");
+        assertTrue(domains.contains("default.sales.order"));
+        assertEquals(DomainRegistry.Source.DERIVED, domains.sourceOf("default.sales"));
     }
 }

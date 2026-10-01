@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.runtime.tool;
 
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.service.tool.ToolExecutor;
 import org.slf4j.Logger;
@@ -39,6 +40,21 @@ public class ToolRegistry {
      * 因此"域是否可用"看的是它被声明过没有，而不是此刻还有没有工具在声明它。
      */
     private final Set<String> declaredProfiles = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 域注册表：工具声明的域在这里沿链派生（完整路径，缺失祖先一并补齐）。
+     *
+     * <p>只给工具注册表时，用缺省实例（仅含根域）—— 供单元测试与最小装配使用。</p>
+     */
+    private final DomainRegistry domainRegistry;
+
+    public ToolRegistry() {
+        this(new DomainRegistry());
+    }
+
+    public ToolRegistry(DomainRegistry domainRegistry) {
+        this.domainRegistry = domainRegistry == null ? new DomainRegistry() : domainRegistry;
+    }
 
     // ==================== 来源一：本地 Bean 扫描（启动期） ====================
 
@@ -350,17 +366,19 @@ public class ToolRegistry {
         for (Registered r : tools.values()) {
             addDomains(all, r.descriptor().domains());
         }
-        // 通配不是域，不能混进域集合（否则会出现一个叫 "*" 的域）
-        all.remove(Domains.ANY);
-        // 兜底域恒可用：服务端启动即预置 default，工具声明留空与调用未指定域都落到它。
-        // 它必须在 knownProfiles 里，否则"回落 default"会被入口判成域不存在（10004）。
+        // 根域恒可用：工具声明留空与调用未指定域都落到它。
+        // 它必须在 knownProfiles 里，否则"归一化到根域"会被入口判成域不存在（10004）。
         all.add(Domains.DEFAULT);
         return Set.copyOf(all);
     }
 
-    /** 记下一次域声明：域一经被声明就在进程内保留，提供它的工具断开后它依然可用 */
+    /**
+     * 记下一次域声明：域一经被声明就在进程内保留，提供它的工具断开后它依然可用；
+     * 同时把它沿链派生进域树（完整路径，缺失的祖先一并补齐，不留悬空节点）。
+     */
     private void remember(List<String> profiles) {
         addDomains(declaredProfiles, profiles);
+        domainRegistry.ensureChains(profiles);
     }
 
     private static void addDomains(Set<String> target, List<String> profiles) {

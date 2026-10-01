@@ -101,9 +101,11 @@ public class KnowledgeBaseService {
 
     /**
      * 规范化文档的可用域 —— 与 {@code @Tool(domains = {...})} <b>同构</b>：
-     * 含 {@code "*"} → 全域可见；留空 → 只属兜底域；否则原样（去空白 + 去重）。
+     * 每项都是从根域出发的完整路径，留空 = 挂在根域（按累加语义对全树可见）。
      *
-     * <p>同构是刻意的：接入方学一次规则，工具与知识库两个维度通用。</p>
+     * <p>同构是刻意的：接入方学一次规则，工具与知识库两个维度通用。
+     * 路径非法<b>直接抛异常</b>而不是静默丢弃 —— 静默会把文档写到一个树里不存在的域上，
+     * 结果是永远检索不到且不报错。</p>
      */
     public static List<String> normalizeDomains(List<String> domains) {
         Set<String> seen = new LinkedHashSet<>();
@@ -112,16 +114,17 @@ public class KnowledgeBaseService {
                 if (domain == null || domain.isBlank()) {
                     continue;
                 }
-                seen.add(domain.trim());
+                String path = domain.trim();
+                String reason = Domains.validatePath(path);
+                if (reason != null) {
+                    throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER,
+                            "知识库文档的域不合法（" + reason + "）；须为从 " + Domains.DEFAULT
+                                    + " 出发的完整路径，如 default.sales");
+                }
+                seen.add(path);
             }
         }
-        if (seen.contains(Domains.ANY)) {
-            return List.of(Domains.ANY);
-        }
-        if (seen.isEmpty()) {
-            return List.of(Domains.DEFAULT);
-        }
-        return List.copyOf(seen);
+        return seen.isEmpty() ? List.of(Domains.DEFAULT) : List.copyOf(seen);
     }
 
     /**

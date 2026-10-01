@@ -579,10 +579,10 @@ public class AdminController {
         DomainSystemPromptResolver resolver =
                 new DomainSystemPromptResolver(domainSettingsStore, promptProperties);
 
-        /* 全域可见＝显式声明了通配 "*" 的工具（它们在每个域里都会出现）。
-           注意与「未声明域」区分：未声明＝只属于兜底域 default，不再等于全域可见。 */
+        /* 全域可见＝声明里带根域 default 的工具：根域在每个域的祖先链里，
+           按累加语义它们对每个域都可见。含"声明留空"——留空即挂根。 */
         List<ToolDescriptor> globalTools = all.stream()
-                .filter(d -> d.domains() != null && d.domains().contains(Domains.ANY))
+                .filter(d -> d.declaredDomains().contains(Domains.DEFAULT))
                 .toList();
 
         int approvalTotal = 0;
@@ -1147,7 +1147,10 @@ public class AdminController {
     // （ToolRegistry）；本页只读不改域本身，增删域在「域空间」。
 
     /**
-     * 读取提示词设定（公共基线 + 各域差异）。
+     * 读取提示词设定。
+     *
+     * <p>没有公共基线：根域 {@code default} 的片段就是基底，生效提示词沿域链从根拼接。
+     * 每个域额外带上它的祖先链，管控台要能看出"这段是从哪继承来的"。</p>
      */
     @GetMapping("/prompts")
     public Map<String, Object> prompts() {
@@ -1155,7 +1158,6 @@ public class AdminController {
         Map<String, Object> body = new LinkedHashMap<>();
 
         // 编辑框里填"生效值"：控制台没写的用 yaml 兜底，避免用户以为空就是没配
-        body.put("base", firstNonBlank(console.getBase(), promptProperties.getBase()));
         body.put("prompts", effectivePromptMap(console));
 
         Set<String> known = new TreeSet<>(toolRouter.getKnownProfiles());
@@ -1165,6 +1167,8 @@ public class AdminController {
         for (String domain : known) {
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("name", domain);
+            d.put("chain", Domains.chainOf(domain));
+            d.put("ancestors", Domains.ancestorsOf(domain));
             // 工具清单带 source（哪个 Bean#方法提供的）——"域从哪来"的答案就在这儿
             List<Map<String, Object>> tools = new ArrayList<>();
             toolRouter.getToolSpecifications(domain).stream()
@@ -1184,22 +1188,16 @@ public class AdminController {
                     .map(t -> providerOf(String.valueOf(t.get("source"))))
                     .distinct()
                     .count());
-            String diff = firstNonBlank(console.domainPrompt(domain),
+            String own = firstNonBlank(console.domainPrompt(domain),
                     promptProperties.domainPrompt(domain));
-            d.put("prompt", diff == null ? "" : diff);
-            d.put("hasPrompt", diff != null && !diff.isBlank());
-            d.put("promptLength", diff == null ? 0 : diff.trim().length());
+            d.put("prompt", own == null ? "" : own);
+            d.put("hasPrompt", own != null && !own.isBlank());
+            d.put("promptLength", own == null ? 0 : own.trim().length());
+            // 预览是沿链拼接后的全文，不是本域片段
             d.put("preview", resolver.preview(domain, console));
             domains.add(d);
         }
         body.put("domains", domains);
-
-        /* 拼接边界标记下发一份：管控台要实时预览"实际会生效的全文"，
-           若前端自己抄一遍标记，两边一旦不一致就会出现"预览与实际不符"的隐蔽问题。 */
-        Map<String, Object> boundary = new LinkedHashMap<>();
-        boundary.put("begin", DomainSystemPromptResolver.DOMAIN_DIFF_BEGIN);
-        boundary.put("end", DomainSystemPromptResolver.DOMAIN_DIFF_END);
-        body.put("previewBoundary", boundary);
 
         List<String> orphans = new ArrayList<>(console.getPrompts().keySet());
         orphans.removeAll(known);
@@ -1216,9 +1214,7 @@ public class AdminController {
     @PostMapping("/prompts")
     public Map<String, Object> savePrompts(@RequestBody(required = false) DomainSettings incoming) {
         DomainSettings toSave = normalize(incoming);
-        log.info("[管控] 收到域提示词保存请求: 基线 {} 字符，域差异 {} 个",
-                toSave.getBase() == null ? 0 : toSave.getBase().length(),
-                toSave.getPrompts().size());
+        log.info("[管控] 收到域提示词保存请求: {} 个域片段", toSave.getPrompts().size());
         Map<String, Object> result = new LinkedHashMap<>();
         try {
             domainSettingsStore.save(toSave);
@@ -1241,13 +1237,17 @@ public class AdminController {
         if (incoming == null) {
             return result;
         }
-        if (incoming.getBase() != null && !incoming.getBase().isBlank()) {
-            result.setBase(incoming.getBase());
-        }
         if (incoming.getPrompts() != null) {
             incoming.getPrompts().forEach((k, v) -> {
-                if (k != null && !k.isBlank() && v != null && !v.isBlank()) {
-                    result.getPrompts().put(k.trim(), v);
+                if (k == null || k.isBlank() || v == null || v.isBlank()) {
+                    return;
+                }
+                String domain = k.trim();
+                // 键必须是完整路径域：写成短名的片段永远不会命中任何域，
+                // 静默丢弃会让用户以为配过了 —— 直接跳过并在返回里列为孤儿键
+                String reason = Domains.validatePath(domain);
+                if (reason == null) {
+                    result.getPrompts().put(domain, v);
                 }
             });
         }

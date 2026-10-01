@@ -49,6 +49,12 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
+        <!-- docx 解析：段落样式（Heading N）只有 POI 直读拿得到 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+        </dependency>
+
         <!-- Lombok 只在编译期生成代码，provided 不进交付物 -->
         <dependency>
             <groupId>org.projectlombok</groupId>

@@ -270,13 +270,19 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 域边界 | 由"查哪些索引"保证，**不再做 `metadata.domains` 过滤** |
 | 通道 | `域链长度 × 2` 条：每张索引一条向量路（余弦）、一条关键词路（BM25）。索引不存在时通道安静返回空（检索器开 `ignoreUnavailable` / `allowNoIndices`），不预探测——省掉 N 次往返 |
 | 未绑定域 | 非对话路径（管控台预览、诊断）未绑定检索域 → 对 `stringer_kb_*` 做通配检索，保持"全库检索"行为 |
-| **双轨融合** | 来源（索引）数 ≤ 1 → `DefaultFusionStrategy`（**分数制**，与单索引时代逐字节一致）；≥ 2 → `RrfFusionStrategy`（**排名制**）。切换由 `AdaptiveFusionStrategy` 自动完成 |
+| **双轨融合** | 实际**有命中**的来源（索引）数 ≤ 1 → `DefaultFusionStrategy`（**分数制**）；≥ 2 → `RrfFusionStrategy`（**排名制**）。切换由 `AdaptiveFusionStrategy` 自动完成。判据是"有命中的来源数"而不是"通道里出现过几个来源"——通道按域链无条件解析，祖先域没上传过文档时根本没有索引，按通道数判会让任何非根域一律走 RRF |
 | 为什么多索引必须换 RRF | BM25 的 idf 用**本索引**的文档频率计算，同一个词在不同索引里量纲不同——多索引 BM25 分池化后做 min-max 会把"小索引里稀有词被抬高的分"当成 max，把其余结果压扁。RRF 只看名次，天然免疫 |
-| RRF 公式 | `score(d) = Σ_L w_L / (k + rank_L(d))`，`k` 默认 60（`stringer.retrieval.rrf-k`） |
-| 权重均摊 | 每张向量表 `w = vectorWeight / 向量表数`，每张关键词表 `w = keywordWeight / 关键词表数`——否则祖先域越多、向量表越多，关键词那路被越压越扁 |
-| 召回条数 | `vector-top-k`＝15（每张索引）、`keyword-top-k`＝5（每张索引） |
-| 向量阈值 | `vector-min-score`＝0.2（按原始余弦填；脚本内已 `+1.0` 回归偏差） |
-| 权重 / boost | `vector-weight`＝0.6、`keyword-weight`＝0.4、`title-boost`＝0.15、`file-name-boost`＝0.10、`top-n`＝10 |
+| RRF 公式 | `score(d) = Σ_L w_L / (k + rank_L(d))`，`k` 默认 10（`stringer.retrieval.rrf-k`）。表长普遍 20~50，k 取 60 会把名次差抹平（rank1 与 rank15 只差 23%） |
+| 权重均摊 | 每张向量表 `w = vectorWeight / 向量表数`，每张关键词表 `w = keywordWeight / 关键词表数`——否则祖先域越多、向量表越多，关键词那路被越压越扁。**空表不占份额** |
+| 层级衰减 | 表权重再乘 `ancestor-decay ^ depth`（depth = 距查询域的距离，0 = 自身），同模态内重新归一化（总量守恒）。默认 0.7：本域自有知识优先于从祖先继承的；`1.0` = 等权 |
+| 召回条数 | `vector-top-k`＝30（每张索引）、`keyword-top-k`＝20（每张索引），均须 ≥ `top-n` |
+| 向量阈值 | `vector-min-score`＝0.35（按原始余弦填；脚本内已 `+1.0` 回归偏差） |
+| 权重 / 增益 | `vector-weight`＝0.6、`keyword-weight`＝0.4、`top-n`＝15 |
+| 标题 / 文件名增益 | `title-boost`＝0.15、`file-name-boost`＝0.10，是**乘法**（`分 × (1 + 该值)`）不是加分：RRF 分约 0.01 量级，加法 0.15 会是它的十几倍、直接统治排序 |
+| 关键词查询字段 | multi_match（BestFields）字段权重：`text^1.0`、`text.standard^0.8`（standard 分词，救英文/数字/标识符，已实测能命中 `SKU-10086`）、`metadata.section_path^1.5`、`metadata.section_title^2.0` |
+| `minimum-should-match` | `50%`。**在真实 ES 上量出来的值，别凭直觉调大**：ik_smart 把「会员退款的时效说明」切成 5 个词（助词「的」也占额度），60% 要求命中 3 个词 → 正常问题**零命中**；30% 及以下等于没限制。有效区间 40%~50% |
+| 排序稳定性 | 融合分相同按 `chunk_seq` 升序再按内容哈希 —— 同一问题两次检索必须给同一份答案 |
+| 注入收口 | `inject-top-n`＝8（每次最多注入几片）；`max-context-chars`＝3000（正文总字符预算，逐条累加，超预算即停，**首条无论如何都收**） |
 | 超时 | `stringer.retrieval.timeout-ms`＝5000（始终为有限值）；全通道失败会抛错，与"真没命中"区分开 |
 | 空结果 | 返回"未检索到相关内容"文本；服务不可用返回"知识库检索服务当前不可用…"——两态分离 |
 
@@ -475,16 +481,22 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.retrieval.parallel` | boolean | true |
 | `stringer.retrieval.timeout-ms` | long | 5000 |
 | `stringer.retrieval.core-pool-size` / `max-pool-size` / `queue-capacity` | int | 4 / 16 / 200 |
-| `stringer.retrieval.vector-top-k` / `keyword-top-k` | int | 15 / 5（每张索引） |
-| `stringer.retrieval.vector-min-score` | double | 0.2 |
+| `stringer.retrieval.vector-top-k` / `keyword-top-k` | int | 30 / 20（每张索引） |
+| `stringer.retrieval.vector-min-score` | double | 0.35 |
+| `stringer.retrieval.minimum-should-match` | String | `50%`（留空 = 不限制） |
 | `stringer.retrieval.vector-weight` / `keyword-weight` | double | 0.6 / 0.4 |
-| `stringer.retrieval.title-boost` / `file-name-boost` | double | 0.15 / 0.10 |
-| `stringer.retrieval.top-n` | int | 10 |
-| `stringer.retrieval.rrf-k` | int | 60 |
+| `stringer.retrieval.title-boost` / `file-name-boost` | double | 0.15 / 0.10（乘法增益） |
+| `stringer.retrieval.top-n` | int | 15 |
+| `stringer.retrieval.rrf-k` | int | 10 |
+| `stringer.retrieval.ancestor-decay` | double | 0.7（1.0 = 不衰减） |
+| `stringer.retrieval.inject-top-n` | int | 8 |
+| `stringer.retrieval.max-context-chars` | int | 3000 |
 | `stringer.rag.max-file-size` | DataSize | 10MB |
-| `stringer.rag.allowed-extensions` | List | `[md, txt, markdown, text]` |
+| `stringer.rag.allowed-extensions` | List | `[txt]` |
+| `stringer.rag.chunking.max-chars` / `overlap-sentences` / `min-chars` | int | 400 / 1 / 60 |
 | `stringer.rag.ingest-lock-wait-seconds` | long | 60 |
 | `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | int | 2 / 16 |
+| `stringer.export.path` | String | `/var/lib/stringer/chunks`（`STRINGER_EXPORT_PATH` 覆盖） |
 | `spring.web.resources.cache.cachecontrol.no-cache` | boolean | true |
 | `stringer.server.host` / `port` | String / int | localhost / 9527 |
 | `stringer.server.username` / `password` | String | stringer / stringer |

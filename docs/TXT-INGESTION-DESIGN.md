@@ -137,6 +137,10 @@ txt 字节
 
 ES mapping 要跟着补：`metadata` 加 `dynamic: false`，上面这些字段**全部显式声明**。顺带修一个现有问题：`metadata.doc_id` 现在没声明，被动态映射成了 `text`，而删除/统计用的是 `term(metadata.doc_id)` 查询 —— 很可能根本查不到。
 
+另外 `text` 挂一个 `text.standard` 子字段（standard 分词器）：ik 会把英文词、数字、订单号切碎，标准分词器留一条退路。BM25 查询侧按 `text^1.0` / `text.standard^0.8` / `metadata.section_path^1.5` / `metadata.section_title^2.0` 加权。
+
+> ⚠️ mapping 是**建索引时定型**的，存量索引不会自动长出新增的字段/子字段。老索引必须重建后重新上传 —— 否则新查询里那几个字段命中恒为空（`multi_match` 对未映射字段静默跳过，不报错）。
+
 ## 配置
 
 只留三项可调，其余全部写死在代码里（改就重新构建）。

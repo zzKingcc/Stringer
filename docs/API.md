@@ -268,7 +268,7 @@
 
 约定：上传为同步（切片与向量化完成后才返回）；**同一域内**同名不区分大小写，默认拒绝，`replace=true` 先删后写；`rebuild` 会清空全部知识库索引，之后需重新上传文档。
 
-上传只接受 `stringer.rag.allowed-extensions` 白名单内的类型，当前只有 `txt`。文件按入口探测的编码（BOM → 严格 UTF-8 → GB18030）**统一转成 UTF-8** 后再入库；两种编码都判不出会直接拒绝该文件。
+上传只接受 `stringer.rag.allowed-extensions` 白名单内的类型，当前是 `txt` / `md` / `markdown` / `docx` / `doc` / `pdf` / `xls` / `xlsx`。**文本类**（`txt` / `md` / `markdown`）按入口探测的编码（BOM → 严格 UTF-8 → GB18030）**统一转成 UTF-8** 后再入库，两种编码都判不出会直接拒绝该文件；**二进制类**（`docx` / `doc` / `pdf` / `xls` / `xlsx`）不做编码探测，原始字节直接交给对应的解析器 —— 猜错编码会把乱码静默灌进知识库，比直接报错更糟。
 
 `sections`（识别到的标题数）、`droppedLines`（清洗删掉的行数）、`encoding`（实际识别的源编码）是切片质量诊断值 —— 批量上传时靠这几个数就能发现"这批文件切坏了"。`exportPath` 是切片预览 txt 的落盘路径（上传后自动导出到 `stringer.export.path`，默认 `%ProgramData%\Stringer\chunks`），管控台只展示这个路径。
 

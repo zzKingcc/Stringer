@@ -176,7 +176,7 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 | `stringer.instance.invoke-max-attempts` | `2` | 单次调用最多试几个副本（仅传输层失败时换副本） |
 | `stringer.retrieval.*` | — | 混合检索（每索引召回条数、权重、`rrf-k`、TopN 等） |
 | `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | `2` / `16` | 知识库导入线程池与队列 |
-| `stringer.rag.max-file-size` / `allowed-extensions` | `10MB` / `md,txt,markdown,text` | 单文件大小上限与扩展名白名单 |
+| `stringer.rag.max-file-size` / `allowed-extensions` | `10MB` / `txt,md,markdown,docx,doc,pdf,xls,xlsx` | 单文件大小上限与扩展名白名单 |
 | `stringer.logging.path` / `stringer.logging.level` | `/var/log/stringer` / `INFO` | 文件日志目录与级别（默认只输出控制台） |
 | `redis.timeout` / `redis.pool.*` | — | Redis 连接池与命令超时（调优用，不在管控台） |
 

@@ -36,8 +36,8 @@ public class ToolConfiguration {
      * 工具注册表：扫描所有工具
      *
      * <p>两侧写法统一：方法上有 {@code @Tool} 就算工具，<b>不要求类实现
-     * {@link StringerToolProvider}</b>——该接口退化为可选标记（实现了照样被扫到，
-     * 只是不再必须），与工具实例 SDK（{@code stringer-tool-instance}）的扫描规则一致。
+     * {@link StringerToolProvider}</b>——该接口只是可选标记（实现了照样被扫到，
+     * 不实现也一样），与工具实例 SDK（{@code stringer-tool-instance}）的扫描规则一致。
      * 同一段工具代码在服务端进程与业务进程之间搬迁，不用改一个字。</p>
      */
     @Bean
@@ -86,7 +86,7 @@ public class ToolConfiguration {
         log.info("[工具装配] 扫描到 {} 个工具提供者、{} 个带注解的 Bean，注册 {} 个工具；需授权工具 {} 个",
                 providerCount, beanCount, registry.size(), registry.toolsRequiringApproval());
         if (registry.isEmpty()) {
-            // "一个工具都还没提供"是合法初始态（服务端不再自带示例工具），按约定只做状态陈述，不用 WARN：
+            // "一个工具都还没提供"是合法初始态（服务端本身不带示例工具），按约定只做状态陈述，不用 WARN：
             // 它既不是故障也不影响启动，WARN 只会让每次冷启动都像是出了问题。
             log.info("[工具装配] 未注册任何工具 —— 在任意 Spring Bean 的方法上标注 @Tool 即可注册；"
                             + "此时可用的域只有根域 {}（工具声明留空、调用未指定域都落到它）；"

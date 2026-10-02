@@ -22,7 +22,7 @@ public class MemoryProperties {
     private int maxTokens = 30000;
 
     /** 会话记忆保留期；{@code null} = <b>永久不过期</b>（一期默认）。
-     *  记忆是长期存储（靠 Redis RDB+AOF 保住），不再是缓存 —— 到上限后由入口拒绝新一轮，
+     *  记忆是长期存储（靠 Redis RDB+AOF 保住），按缓存对待并不合适 —— 到上限后由入口拒绝新一轮，
      *  而不是丢弃最旧的消息（静默丢历史会让用户"以为还记得"）。 */
     private Duration ttl = null;
 

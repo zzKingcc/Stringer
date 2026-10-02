@@ -253,7 +253,8 @@ public class AgentOrchestrationService implements AgentService {
             return ctx;
         }
         // 兜底：仅用于图在编排器之外被直接驱动的情形（如测试）。
-        // 这里刻意告警而不是静默 —— 静默降级到"按 key 回查"正是本次要堵掉的串号来源。
+        // 这里刻意告警而不是静默：按 key 回查在两个请求重叠时会拿到别的轮次的上下文，
+        // 那是跨租户串号，必须让这种驱动方式在日志里显形。
         StreamContext fallback = streamSinks.get(stateKeyOf(config));
         log.warn("[Agent编排] 会话[{}] 图配置未携带本轮上下文，回退到按 key 查询注册表"
                 + "（若存在同一会话的重叠请求，可能取到别的轮次的上下文）", sessionIdOfKey(stateKeyOf(config)));
@@ -333,14 +334,14 @@ public class AgentOrchestrationService implements AgentService {
      * 解析本轮使用的对话模型。
      *
      * <p>没有解析器（未装配模型档案的部署、单元测试）时退回构造期注入的模型，行为与"全局一个模型"一致。
-     * 一旦装配了解析器，解析不到 / 解析异常都<b>不再回落任何内置默认模型</b>：未绑定 = 无可调用，
+     * 一旦装配了解析器，解析不到 / 解析异常都<b>不回落任何内置默认模型</b>：未绑定 = 无可调用，
      * 如实体上报 {@link NotConfiguredException}，让调用方拿到明确原因。</p>
      */
     private StreamingChatModel resolveModel(String profile) {
         if (modelResolver == null) {
             return streamingChatModel;
         }
-        // 解析器存在时，未配置 / 解析失败都如实向上抛，不再静默回落默认模型
+        // 解析器存在时，未配置 / 解析失败都如实向上抛，不静默回落默认模型
         return modelResolver.streamingChat(profile);
     }
 
@@ -499,7 +500,7 @@ public class AgentOrchestrationService implements AgentService {
             return ProfileCheck.fail(ErrorCode.CALLER_CONTEXT_REQUIRED,
                     "缺少调用方身份（CallerContext 必填：tenantId / userId / profile）");
         }
-        // 域为空 → 归一化为根域 default（根域不可删、恒存在且恒为可调用单元），不再当作入参错误。
+        // 域为空 → 归一化为根域 default（根域不可删、恒存在且恒为可调用单元），不当作入参错误。
         String profile = Domains.normalize(caller.normalizedProfile());
         if (!toolRouter.getKnownProfiles().contains(profile)) {
             return ProfileCheck.fail(ErrorCode.PROFILE_NOT_FOUND,
@@ -689,7 +690,7 @@ public class AgentOrchestrationService implements AgentService {
                 log.debug("[Agent编排] 会话[{}] 节点完成: {}", sessionId, output.node());
 
                 if ("agent".equals(output.node()) && isInterruptedBeforeReview(config)) {
-                    // 域一致性不再需要单独记录：断点就存在键 (域, sessionId) 下，
+                    // 域一致性由状态键本身保证：断点就存在键 (域, sessionId) 下，
                     // 用别的域 resume 找不到断点，天然拦在门外。
                     context.emit(AgentEvent.interrupt(sessionId,
                             buildInterruptPayload(lastState, context.profile())));

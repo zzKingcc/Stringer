@@ -304,7 +304,7 @@ public class DomainRegistry {
     /**
      * 该域是否为<b>可调用单元</b>（入口唯一判据：既已登记、又被标为可调用）。
      *
-     * <p>未登记的域一律 {@code false} —— 判据只认注册表，不看"是否曾经被工具声明过"。</p>
+     * <p>未登记的域一律 {@code false} —— 判据只认注册表，不看"是否被工具声明过"。</p>
      */
     public boolean isCallable(String domainId) {
         Domain domain = domains.get(Domains.normalize(domainId));

@@ -130,8 +130,8 @@ public final class AnnotatedToolScanner {
      * <p>这里<b>不</b>在留空时回填根域：留空本身有语义（挂根域、全树可见），由
      * {@link ToolDescriptor#declaredDomains()} 统一解释，避免两处判断各说各话。</p>
      *
-     * <p>声明了就必须是<b>合法完整路径</b>：非法直接中断启动。以前只告警跳过，
-     * 结果是这个字符串照样进"已声明域"集合、让入口放行，等于凭空造出一个可用的域。</p>
+     * <p>声明了就必须是<b>合法完整路径</b>：非法直接中断启动。放过它的话，
+     * 这个字符串会照样进"已声明域"集合、让入口放行，等于凭空造出一个可用的域。</p>
      */
     private static List<String> resolveDomains(Class<?> declaringClass, Tool tool) {
         String[] raw = tool.domains().length > 0 ? tool.domains() : null;

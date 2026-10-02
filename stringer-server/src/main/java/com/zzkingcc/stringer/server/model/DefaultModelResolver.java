@@ -62,7 +62,7 @@ public class DefaultModelResolver implements ModelResolver {
             return factory.streamingChat(profile);
         }
 
-        /* 列表里的档案全都不存在 / 不可用 / 非对话类型 → 同样不再回落任何默认模型 */
+        /* 列表里的档案全都不存在 / 不可用 / 非对话类型 → 同样不回落任何默认模型 */
         log.warn("[模型档案] 域 {} 的可调用列表 {} 均不可用（档案列表：{}）",
                 domain, aliases, registry.profiles().stream().map(ModelProfile::alias).toList());
         throw new NotConfiguredException("域 " + domain + " 的可调用列表 " + aliases

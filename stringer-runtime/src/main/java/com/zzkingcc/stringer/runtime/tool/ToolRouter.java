@@ -115,7 +115,7 @@ public class ToolRouter {
      * 域是否<b>已被登记或声明过</b>（域全集判据）。
      *
      * <p>入口<b>不用它</b>：入口用 {@link #isCallableDomain(String)}。这里保留是因为
-     * "曾经被工具声明过"对展示、排障、以及"域不该随工具断开而消失"的历史语义仍然有意义。</p>
+     * "被工具声明过"对展示、排障、以及"域不该随工具断开而消失"这条语义仍然有意义。</p>
      */
     public boolean acceptsProfile(String profile) {
         return domainRegistry.contains(profile) || registry.acceptsProfile(profile);

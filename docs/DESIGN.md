@@ -31,7 +31,7 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 
 | 模块 | 职责 | 主要包 |
 | --- | --- | --- |
-| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService`（`StringerAgent` / `StringerAgentFactory` / `ApprovalRequiredException`）、`Domains`、`ModelResolver` | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
+| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService`（`StringerAgent` / `StringerAgentFactory` / `ApprovalRequiredException`）、`Domains` | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
 | `stringer-common` | 异常基类与通用工具 | `common.exception` `common.util` |
 | `stringer-domain` | 领域能力：知识检索、混合检索与融合排序、会话记忆约束、域注册表 | `domain.capability.knowledge` `domain.rag` `domain.memory` `domain` |
 | `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |

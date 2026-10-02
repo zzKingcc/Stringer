@@ -376,7 +376,7 @@ stringer:
 
 ### 4.3 声明工具：注解式（推荐）
 
-在任意 Spring Bean 的方法上写 `@Tool`，SDK 在装配期扫描并注册。方法签名即参数 schema，注解即治理策略，方法体即执行逻辑——三者不再分离：
+在任意 Spring Bean 的方法上写 `@Tool`，SDK 在装配期扫描并注册。方法签名即参数 schema，注解即治理策略，方法体即执行逻辑：
 
 ```java
 @Component
@@ -526,7 +526,7 @@ public class LocalTools {                                  // 任意 Spring Bean
 }
 ```
 
-> `StringerToolProvider` 已退化为**可选标记**：实现了照样被扫到，不实现也不影响注册——与工具实例 SDK 的规则一致。
+> `StringerToolProvider` 是**可选标记**：实现了照样被扫到，不实现也不影响注册——与工具实例 SDK 的规则一致。
 > 唯一例外是工具方法所在的类被 AOP 代理且注解没留在代理方法上时，实现该接口可确保被扫到（SDK 侧遇到这种情况会打 WARN 提示）。
 
 注解字段与 `ToolSpec` 语义一致，便于「工具从哪来」对模型与管控台透明：
@@ -541,8 +541,6 @@ public class LocalTools {                                  // 任意 Spring Bean
 | `@ToolParam(value, name, required)` | 参数语义：`value` 是参数说明（推荐写法），`name` 覆盖参数名，`required` 默认 `true` |
 | `@ToolDomains` | 类级默认域；方法级 `domains` 就近覆盖 |
 | `@ToolAdvanced(example, allowValues, sensitive)` | 写法一律 `参数名=值`，**不做位置对齐**：`example` 进参数说明（模型据此更会构造参数）；`allowValues` 成为模型可见 schema 的 `enum` 白名单（比自然语言约束可靠）；`sensitive` 让该参数的**值**在工具调用事件与审批 payload 里显示为 `***`（执行仍用原值） |
-
-> 旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**，写了不会被扫描到；字段对照见 [`SDK-USAGE.md` §1.6](SDK-USAGE.md)。
 
 > 参数结构靠反射推导（类型→JSON Schema），语义靠 `@ToolParam` 补。建议每个工具收一个 record DTO 入参，参数注解集中落在 DTO 上，签名与 schema 都更规整。
 
@@ -574,20 +572,25 @@ public class LocalTools {                                  // 任意 Spring Bean
   旧会话的数据保留在 Redis 里（默认不过期），只是不再接受写入。
 - **上限只约束"能不能开新一轮"**，不约束"能不能收尾"：最终回答永远允许写入，
   否则会留下有问无答的孤立提问。所以一轮结束后总量可能略微超过上限。
-- **挂起未批 + 用户直接开新对话 = 用户拒绝了那次审批**：不再用 `30002` 把新对话挡回去，
-  而是补一条占位回答后**取消那个待审批动作**（断点一并删除，避免事后被 resume 执行）。
+- **挂起未批 + 用户直接开新对话 = 用户拒绝了那次审批**：服务端**不返回 `30002`**，而是补一条占位回答后
+  **取消那个待审批动作**（断点一并删除，避免事后被 resume 执行）。
 
 ---
 
 ## 7. 端到端最小跑通
 
-> ⚠️ 本节原以 `stringer-example` 为载体。**该示例模块已移除**（测试版破坏性改造，例子后期重写），
-> 以下步骤中「起示例应用」部分暂不可用，待例子重写后补齐；其余步骤（起服务端、建域、配知识库）仍然有效。
+> 仓库内没有示例应用，下面是最短的一条可用路径：服务端 + 接入方应用（同时扮演客户端与工具实例）。
 
-1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527）。
-2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@Tool` 声明）周期注册给服务端。
-3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `default.customer`、管理员 `default.admin`）演示不同域；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
-4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
-5. 想顺手验证知识库：在管控台「知识库」页上传一份 md，**归属域**选到某个域（或留 `default` 让全域可见），再用该域的对话去检索即可。
+1. 起服务端：`java -jar stringer-v1.0-beta.1.jar`（默认 9527，裸机 / 容器部署见 `DEPLOYMENT.md`）。
+2. 打开管控台 `http://localhost:9527/admin.html`，用种子账号 `stringer` / `stringer` 登录（§2.2），
+   在「模型设置」与「存储配置」两页填好模型、ES、Redis（§2.3 / §2.4），保存即生效。
+3. 在「域空间」建一个域，如 `default.customer`（§6）。它必须是**可调用单元**才能当入口。
+4. 写接入方应用：引 `stringer-chat-client`（§3.1），配好 `stringer.server` / `username` / `password`（§3.2），
+   注入 `StringerAgentFactory` 取该域的门面（§3.3），`ask(sessionId, question)` 即可发起一轮对话。
+5. 验证工具：同一个应用再引 `stringer-tool-provider`、打开 `stringer.tools=true`（§4.1 / §4.2），
+   用 `@Tool` 声明几个方法（§4.3）。启动后到管控台「在线实例」页确认实例在线、工具已进注册表。
+6. 验证知识库：管控台「知识库」页上传一份 md，**归属域**选到某个域（或留 `default` 让全域可见），
+   再用该域的对话去检索（§2.6）。
 
-> 示例应用**不需要任何环境变量**：服务端侧的模型/ES/Redis 都在管控台配；这里只有服务端地址与账号可覆盖（`STRINGER_SERVER_HOST` / `STRINGER_SERVER_PORT` / `STRINGER_SERVER_USERNAME` / `STRINGER_SERVER_PASSWORD`）。工具回流地址也不用配——示例与服务端同机，由 SDK 自动推导。
+> 工具回流地址 `endpoint` 留空即按本进程端口推导，只在服务端与工具实例**同机**时成立；
+> 跨机部署必须显式填写（§4.2）。

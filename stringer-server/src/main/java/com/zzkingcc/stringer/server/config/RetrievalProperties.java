@@ -74,7 +74,7 @@ public class RetrievalProperties {
      */
     private double ancestorDecay = 0.7;
 
-    /** 每次检索最多注入几片给模型(原先是硬编码 5) */
+    /** 每次检索最多注入几片给模型 */
     private int injectTopN = 8;
 
     /**

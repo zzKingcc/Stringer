@@ -80,7 +80,7 @@ public class KeywordMatchContentRetriever implements ContentRetriever {
                 .build();
 
         try {
-            // 一域一索引：域边界由「查哪个索引」保证，不再做 metadata.domains 过滤。
+            // 一域一索引：域边界由「查哪个索引」保证，查询里不含 metadata.domains 过滤。
             // allowNoIndices / ignoreUnavailable：域链上某个祖先域可能还没有索引，此时应安静地返回空，
             // 而不是抛 index_not_found 把整轮检索打断。
             SearchResponse<Map> resp = esClient.search(s -> s

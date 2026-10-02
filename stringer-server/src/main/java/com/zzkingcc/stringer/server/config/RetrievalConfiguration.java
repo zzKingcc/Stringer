@@ -34,8 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * </ul>
  * <p>{@link AdaptiveFusionStrategy} 就是这条双轨的自动切换入口。</p>
  *
- * <p>知识库索引不再在启动期创建：域是运行期由用户创建的，索引跟着域走，在首次上传时按需建出
- * （见 {@code KnowledgeBaseService#ensureIndex}）。</p>
+ * <p>知识库索引在首次上传时按需建出（见 {@code KnowledgeBaseService#ensureIndex}）：
+ * 域是运行期由用户创建的，索引跟着域走，没有统一的"启动期建索引"这一步。</p>
  *
  * @author zzkingcc
  */

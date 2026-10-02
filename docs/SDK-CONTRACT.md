@@ -2,7 +2,7 @@
 
 > 用途：`@Tool` 注解体系与 `StringerAgent` 门面的完整契约。**§1~§6 即当前实现的全部形态**。
 > 来源：`DESIGN-1.0.md` §4（工具体系）与 §5（消费侧 SDK）。
-> 记法：**必填**列里标「是」的只有一个字段 —— 这轮收敛的目标就是"只有一个必填"。
+> 记法：**必填**列里标「是」的只有一个字段 —— 工具声明只有一个必填项。
 
 ---
 
@@ -17,15 +17,15 @@
 | `approval` | `Approval` | `NONE` | 否 | `NONE` / `ALWAYS`。当前只有这两种真正生效 |
 | `approvalReason` | `String` | `""` | 否 | 展示给审批人的原因。`approval ≠ NONE` 时建议填写 |
 
-**从注解移出（改由默认值或平台配置）**
+**不在注解上的字段**
 
-| 原字段 | 处置 | 原因 |
+| 字段 | 当前位置 | 说明 |
 | --- | --- | --- |
-| `category` | 保留字段，默认 `"default"` | 只用于管理页分组，不影响运行 |
-| `version` | 保留字段，默认 `"1.0.0"` | 仅登记展示，不参与路由 |
-| `idempotent` | 保留字段，默认 `true` | 极少数场景才改 |
-| `toModel` | 保留字段，默认 `true` | 同上 |
-| `condition` / `approverRoles` / `timeoutSeconds` / `onTimeout` / `payloadFields` | **移出注解** | 当前**不生效**（源码注释写明"仅登记"）；等真正实现再加回 `@ToolAdvanced` 或平台配置 |
+| `category` | `ToolSpec` / 上报 manifest，默认 `"default"` | 只用于管理页分组，不影响运行 |
+| `version` | `ToolSpec` / 上报 manifest，默认 `"1.0.0"` | 仅登记展示，不参与路由 |
+| `idempotent` | `ToolSpec`，默认 `true` | 仅登记展示 |
+| `toModel` | `ToolSpec`，默认 `true` | 仅登记展示 |
+| `condition` / `approverRoles` / `timeoutSeconds` | 工具描述符的审批块（`ToolDescriptor.Approval`） | **当前不生效**，只登记；条件式审批（按金额阈值等条件决定是否审批）没有实现 |
 
 ---
 
@@ -37,17 +37,12 @@
 | `name` | `String` | `""` | 否 | 参数名。留空取形参名；标在字段上时取字段名 |
 | `required` | `boolean` | `true` | 否 | 是否必填。`Optional<T>` 自动视为非必填 |
 
-**移出到 `@ToolAdvanced`**
-
-| 原字段 | 处置 |
-| --- | --- |
-| `example` | → `@ToolAdvanced.example`（**按参数名对应，不按位置**） |
-| `allowValues` | → `@ToolAdvanced.allowValues` |
-| `sensitive` | → `@ToolAdvanced.sensitive` |
+**示例值 / 枚举白名单 / 脱敏参数名不写在 `@ToolParam` 上**，统一放方法级 `@ToolAdvanced`
+（`example` / `allowValues` / `sensitive`，见 §4），一律按参数名对应。
 
 > **两个载体、一个优先级**：形参注解 **>** 字段注解（就近覆盖）。
 > 1~2 个简单参数用形参；3+ 参数、被多个工具复用、或有嵌套结构 → 用 `record` DTO 的字段注解（只写一次）。
-> ✅ 两个载体**都已实现且完全统一**：服务端本地 Bean 与工具实例侧<b>共用同一份 `ParamSchemaResolver` 产出参数树</b>，工具实例侧再经 `toWireSchema` 把同一棵树渲染成上报 JSON；DTO 递归展开成 `object`，数组元素（`List<DTO>`）也递归展开成 `items`，两侧对同一段工具代码给出完全一致的 schema。
+> 两个载体产出**完全一致**的 schema：服务端本地 Bean 与工具实例侧<b>共用同一份 `ParamSchemaResolver` 产出参数树</b>，工具实例侧再经 `toWireSchema` 把同一棵树渲染成上报 JSON；DTO 递归展开成 `object`，数组元素（`List<DTO>`）也递归展开成 `items`，两侧对同一段工具代码给出完全一致的 schema。
 
 ---
 
@@ -59,7 +54,7 @@
 
 ---
 
-## 4 `@ToolAdvanced` —— 高级可选（承接移出字段）
+## 4 `@ToolAdvanced` —— 高级可选（方法级）
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -79,8 +74,8 @@
 | --- | --- | --- |
 | `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 根域 `default`；返回的实例**可缓存复用**（线程安全） |
 
-> 落地情况：坐标 `stringer-chat-client`；`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
-> （实现 `DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`ChatAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
+> 实现：坐标 `stringer-chat-client`；`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
+> （`DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`ChatAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
 
 ### 5.2 `StringerAgent` 方法
 
@@ -128,7 +123,7 @@
 
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `stringer.server` | `String`（URL） | `http://localhost:9527` | 服务端地址，一个 URL 取代 `host` + `port`；对话 / 知识库 / 工具实例共用 |
+| `stringer.server` | `String`（URL） | `http://localhost:9527` | 服务端地址，单个 URL（协议、主机、端口写在一起）；对话 / 知识库 / 工具实例共用 |
 | `stringer.username` / `password` | `String` | `stringer` | 接入账号 |
 | `stringer.tools` | `boolean` | `false` | 是否把本进程的 `@Tool` 方法注册给服务端 |
 | `stringer.client.*` | — | — | 调用行为（`health-check-timeout` / `connect-timeout` / `read-timeout`），两个 SDK 共用 |

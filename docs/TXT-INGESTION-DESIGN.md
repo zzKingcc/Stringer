@@ -1,6 +1,6 @@
 # TXT 入库：清洗与切片设计
 
-> 只处理 `.txt`。格式扩展点保留 —— `DocumentProcessStrategyFactory` 与各策略实现都不动，将来加 md / pdf 按同一接口新增实现即可。
+> 本文只描述 `.txt` 这一条管线。格式扩展点是 `DocumentProcessStrategyFactory` 与各策略实现本身：md / docx / doc / pdf / excel 已按同一接口新增实现，规则见 [`MULTI-FORMAT-INGESTION-DESIGN.md`](MULTI-FORMAT-INGESTION-DESIGN.md)。
 >
 > **状态：已落地**（`ingestion/txt/`：`TxtSplitter` / `TxtNormalizer` / `TxtCleaner` / `OutlineReader` / `Chunker`），回归样例见 `TxtSplitterTest`。
 
@@ -175,43 +175,34 @@ ES mapping 要跟着补：`metadata` 加 `dynamic: false`，上面这些字段**
 
 **要解决的问题**：小块检索准（向量在小范围更聚焦），但喂给模型时上下文不全；大块上下文全，但检索不准。父子块的做法是「小块检索、大块喂模型」—— 子块命中后把它的父块（整个小节）一起交出去。
 
-**本轮不做真父子块**，理由：
+**当前不做真父子块**，代价是：要么多存一份父块（索引体积翻倍），要么命中后再回捞（多一次查询）。txt 结构清楚，`section_path` 已经写进 `text` 里，模型看得到"这段话在第几章第几节"。
 
-1. 要么多存一份父块（索引体积翻倍），要么命中后再回捞（多一次查询）；
-2. txt 结构清楚，`section_path` 已经写进 `text` 里，模型看得到"这段话在第几章第几节"；
-3. 收益要等召回参数调好之后才测得出来，现在做等于拍脑袋。
+**替代方案：邻接扩展。** 切片自带 `section_path` / `chunk_seq` / `chunk_total`，命中切片后按「`section_path` 相同 且 `chunk_seq ± 1`」回捞邻居，拼进上下文再喂模型。**只改检索后处理，不动索引、不重灌数据。**
 
-**但口子已经留好，不用改结构**：切片自带 `section_path` / `chunk_seq` / `chunk_total`。将来要加，最轻的实现是**邻接扩展** —— 命中切片后按「`section_path` 相同 且 `chunk_seq ± 1`」回捞邻居，拼进上下文再喂模型。**只改检索后处理，不动索引、不重灌数据。**
-
-真父子块（新增 `parent_id`、写入时按小节聚合父块）等邻接扩展不够用时再说。
+真父子块（新增 `parent_id`、写入时按小节聚合父块）等邻接扩展不够用时再做。
 
 ## 不做
 
 - **不做语义切分**（按 embedding 相似度找边界）：每次导入多一轮 embedding 调用、结果不可复现、出问题难排查；结构和句子规则已经够用。
 - **不判表格和代码块**：txt 里只能靠猜，收益低。
-- **不做父子块**：见上一节「父子块」——本轮不做真父子块，用 `chunk_seq ± 1` 邻接扩展替代。
+- **不做父子块**：见上一节「父子块」——用 `chunk_seq ± 1` 邻接扩展替代。
 - **不落盘原始文件**：只落盘切片预览 txt（见「怎么验证」），原始上传文件不留 —— 溯源靠 docId + 切片序号 + 日志。
-- **不用 OpenNLP 英文句模型**：现有兜底链的句子层是英文模型、词层按空格切，对中文基本失效，最后退化成按字符硬切 —— 这正是要换掉它的原因。
+- **不用 OpenNLP 英文句模型**：现有兜底链的句子层是英文模型、词层按空格切，对中文基本失效，最后退化成按字符硬切。
 
-## 落地到哪
+## 实现位置
 
-| 动作 | 位置 |
+| 位置 | 内容 |
 |---|---|
-| 新增 | `stringer-infrastructure/.../ingestion/txt/`：`TxtSplitter` + `TxtNormalizer` / `TxtCleaner` / `OutlineReader` / `Chunker` |
-| 新增 | `stringer-server/.../knowledge/ChunkExporter.java`：按 `docId` 从索引读回切片 → 写 txt；随上传自动执行，删除文档时清文件 |
-| 修改 | `TextDocumentProcessStrategy`（扩展名收窄为 `txt`）、`RagProperties`（切片三项）、`KnowledgeBaseService`（返回 `chunks`/`sections`/`dropped`/`encoding`、上传后触发导出、删除时清文件）、`AdminController`（文档列表出参加 `exportPath`）、`EsIndexManager`（mapping：`metadata` 全显式声明 + `doc_id` 改 keyword） |
-| 修改 | `StorageLocations` / `RuntimeEnvironment` / `application.yaml`：加第三个根目录「导出」（`stringer.export.path` / `STRINGER_EXPORT_PATH`，默认 `%ProgramData%\Stringer\chunks`） |
-| 替换 | `ingestion/splitter/ChineseArticleDocumentSplitter`（被取代，删除） |
-| 保留 | `DocumentProcessStrategyFactory` 与 `Pdf` / `Unknown` 策略 —— 后续格式的扩展点 |
-| 前端 | `knowledge.html` 文档列表加「切片文件」列，只显示路径（可复制） |
-| 文档同步 | `DESIGN.md` §8.2、`README.md` 存储目录表、`Dockerfile` 卷、`ddoc/PITFALLS.md` |
+| `stringer-infrastructure/.../ingestion/txt/` | `TxtSplitter` + `TxtNormalizer` / `TxtCleaner` / `OutlineReader` / `Chunker` |
+| `stringer-server/.../knowledge/ChunkExporter.java` | 按 `docId` 从索引读回切片 → 写 txt；随上传自动执行，删除文档时清文件 |
+| `TextDocumentProcessStrategy` | 扩展名收窄为 `txt` |
+| `RagProperties` | 切片三项 |
+| `KnowledgeBaseService` | 返回 `chunks` / `sections` / `dropped` / `encoding`；上传后触发导出，删除时清文件 |
+| `AdminController` | 文档列表出参加 `exportPath` |
+| `EsIndexManager` | mapping：`metadata` 全显式声明 + `doc_id` 改 `keyword` |
+| `StorageLocations` / `RuntimeEnvironment` / `application.yaml` | 第三个根目录「导出」（`stringer.export.path` / `STRINGER_EXPORT_PATH`，默认 `%ProgramData%\Stringer\chunks`） |
+| `ingestion/splitter/ChineseArticleDocumentSplitter` | 已被 `TxtSplitter` 取代，删除 |
+| `DocumentProcessStrategyFactory` 与 `Pdf` / `Unknown` 策略 | 保留 —— 后续格式的扩展点 |
+| `knowledge.html` | 文档列表加「切片文件」列，只显示路径（可复制） |
 
-## 已拍板
-
-| # | 决策 | 结论 |
-|---|---|---|
-| 1 | 字符集 | **全链路统一 UTF-8**。入口探测一次（BOM → 严格 UTF-8 → GB18030）并转码，判不出就拒绝该文件；清洗 / 切片 / 写索引 / 导出全部只处理 UTF-8 |
-| 2 | `max-chars` | **400**（单切片长度上限） |
-| 3 | 切片预览 | **导出 txt 到固定目录**（`%ProgramData%\Stringer\chunks`），管控台只显示文件路径，不做在线查看 |
-
-三项已定。落地清单见上一节；回归样例固定在 `TxtSplitterTest`。
+回归样例固定在 `TxtSplitterTest`。

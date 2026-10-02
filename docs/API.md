@@ -106,7 +106,7 @@
 
 约束：`profile` 必须与中断时一致 —— 断点存在键 `(域, sessionId)` 下，用别的域 resume **找不到断点**（`30001`）。响应同为 `text/event-stream`。
 
-> **不回审批、直接发起新的 `chat` = 用户拒绝了那次审批**：新对话不会被拒（不会再返回 `30002`），
+> **不回审批、直接发起新的 `chat` = 用户拒绝了那次审批**：新对话不会被拒（不返回 `30002`），
 > 服务端会为该轮补一条占位回答（"（用户未确认，该次需要审批的操作已取消）"）让这一轮成为完整轮次，
 > 并**删除断点** —— 那个待授权动作就此永久作废，之后也无法再被 `resume` 执行。
 
@@ -223,14 +223,14 @@
 | POST | `/admin/model-profiles/probe` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：实测一个模型的端点族 / 模态 / 能力 / 维度 |
 | POST | `/admin/model-profiles/{alias}/probe` | path `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
 | POST | `/admin/model-profiles/{alias}/test` | path `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
-| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`。不再"被域引用就拒绝" |
+| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target` |
 | PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`、`target`、`aliases`（解绑后该域当前列表）、`domainBindings`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定 |
 
 约定：
 - 档案的 `endpoints` 可多选（空＝`["chat"]`）；是否对话模型看 `endpoints` 是否含 `chat`（`isChat()`），向量看 `embedding`。**落盘结构无 `type` 字段**。
 - `bind` 的 `aliases` 为空 / 全空白＝解绑，该域进入"无可调用"状态；列表首个为当前使用的对话模型，其余留给多 agent / 降级。
-- `GET /admin/model-profiles` 不再返回 `builtinAlias` / `defaultAlias` / `builtinChat`（这些概念已取消）。
-- `chatConfigured`（`/admin/settings`）现已为 `llm-settings` 的 chat 已配置 **或** 任一可用对话档案存在（`registry.hasChatModel()`）。
+- `GET /admin/model-profiles` 的响应中不含 `builtinAlias` / `defaultAlias` / `builtinChat`。
+- `chatConfigured`（`/admin/settings`）＝ `llm-settings` 的 chat 已配置 **或** 任一可用对话档案存在（`registry.hasChatModel()`）。
 
 ### 4.3 工具、域与提示词
 
@@ -338,7 +338,7 @@
 | 20003 | `CONCURRENT_LIMIT` | 并发会话数已达上限 | 是 | 503 |
 | 30000 | `ORCHESTRATION_FAILED` | 任务执行失败，请重试 | 是 | 500 |
 | 30001 | `SESSION_NOT_FOUND` | 会话不存在或已过期 | 否 | 404 |
-| 30002 | `SESSION_STATE_INVALID` | 会话状态异常，无法继续（**现仅用于 `resume` 时断点不在待审批点**；"挂起未批就开新对话"已改为视为拒绝） | 否 | 409 |
+| 30002 | `SESSION_STATE_INVALID` | 会话状态异常，无法继续（**仅用于 `resume` 时断点不在待审批点**；挂起未批就开新对话视为用户拒绝，不走此码） | 否 | 409 |
 | 30003 | `SESSION_BUSY` | 会话正在执行中，拒绝并发请求 | 否 | 409 |
 | 30004 | `SESSION_MEMORY_FULL` | 会话记忆已达上限，该会话不再接受新消息；**换 `sessionId`** 开启新会话（平台不代为切换） | 否 | 409 |
 | 40000 | `INVALID_PARAMETER` | 请求参数非法 | 否 | 400 |
@@ -444,7 +444,7 @@
 
 工具实例侧只认一套注解：
 
-- **`@Tool` 全家桶**：`desc` 为唯一必填，配套 `@ToolParam`（说明/名字/必填三字段）/ `@ToolDomains`（类级默认域）/ `@ToolAdvanced`（示例、枚举白名单、敏感参数，一律 `参数名=值`），审批收敛为 `@Tool(approval=..., approvalReason=...)`。旧的 `@StringerTool` + `@ToolPolicy` 组合**已删除**，`@ToolParam` 的四个废弃别名字段也已删除，写了不会被扫描到（后者直接编译不过）。字段与示例见 [`SDK-USAGE.md`](SDK-USAGE.md) 与 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
+- **`@Tool` 全家桶**：`desc` 为唯一必填，配套 `@ToolParam`（说明/名字/必填三字段）/ `@ToolDomains`（类级默认域）/ `@ToolAdvanced`（示例、枚举白名单、敏感参数，一律 `参数名=值`），审批写在 `@Tool(approval=..., approvalReason=...)` 上。这是工具声明的唯一写法，没有等价的其他组合。字段与示例见 [`SDK-USAGE.md`](SDK-USAGE.md) 与 [`SDK-CONTRACT.md`](SDK-CONTRACT.md)。
 
 两种生效场景：
 

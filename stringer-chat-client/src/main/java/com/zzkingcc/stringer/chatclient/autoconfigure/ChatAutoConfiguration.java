@@ -29,7 +29,7 @@ public class ChatAutoConfiguration {
      * <p>{@code forDomain("customer")} 拿到绑定域的门面，之后 {@code ask} / {@code stream} /
      * {@code events} / {@code resume} / {@code stop} 都不必再提域 —— 域是接线动作，不是每次调用都要记得传的参数。</p>
      *
-     * <p>底层远程通道（{@code AgentServiceClient}）由这里内部持有、<b>不再单独暴露 Bean</b>：
+     * <p>底层远程通道（{@code AgentServiceClient}）由这里内部持有，<b>不单独暴露 Bean</b>：
      * 对外只留这一个入口。要看工具调用 / 审批中断 / 错误码用 {@code agent.events(...)}。</p>
      */
     @Bean

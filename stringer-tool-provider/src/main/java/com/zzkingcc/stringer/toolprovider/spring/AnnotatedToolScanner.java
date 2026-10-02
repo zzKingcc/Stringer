@@ -46,7 +46,7 @@ import java.util.Set;
  * public String refundOrder(&#64;ToolParam("订单号") String orderNo,
  *                           &#64;ToolParam("退款金额，单位：元") BigDecimal amount) { ... }
  * </pre>
- * <p>方法签名即参数 schema，注解即治理策略，方法体即执行逻辑 —— 三者不再分离。</p>
+ * <p>方法签名即参数 schema，注解即治理策略，方法体即执行逻辑 —— 三者合一。</p>
  *
  * <h2>什么时候扫</h2>
  * <p>在 {@code ToolInstanceClient} 装配时执行（见 {@link ToolInstanceAutoConfiguration}），

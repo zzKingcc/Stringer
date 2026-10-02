@@ -59,7 +59,7 @@ After=network-online.target
 
 [Service]
 User=stringer
-# 工作目录不再影响落盘位置（默认已是绝对路径），但显式写上便于排障
+# 工作目录不影响落盘位置（默认已是绝对路径），显式写上便于排障
 WorkingDirectory=/opt/stringer
 ExecStart=/usr/bin/java -XX:MaxRAMPercentage=75 -Duser.timezone=Asia/Shanghai \
           -jar /opt/stringer/stringer-server.jar

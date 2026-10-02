@@ -1,7 +1,7 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.processor;
 
 /**
- * 一次导入的处理报告（替代原先只回传"处理了几个文档"的 int）。
+ * 一次导入的处理报告。
  *
  * <p>多这样一层是为了让<b>切片质量</b>能被上传方看见：识别到几个标题、删掉几行噪声。
  * 服务端是无人值守的批量上传，只能靠这些计数发现"这批文件切坏了"。</p>

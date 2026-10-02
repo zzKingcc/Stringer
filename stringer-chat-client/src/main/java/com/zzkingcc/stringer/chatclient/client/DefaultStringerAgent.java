@@ -113,8 +113,8 @@ public class DefaultStringerAgent implements StringerAgent {
 
     @Override
     public Flux<String> stream(String sessionId, String question, String tenantId, String userId) {
-        // 截断检测：记录是否见过终止事件，流"正常结束"时若没见过就补一个错误，
-        // 否则半截答案会以"流正常结束"的形式交给业务方。
+        // 截断检测：记录是否见过终止事件，流"正常结束"时若没见过就补一个错误 ——
+        // 没有终止事件就没有"答完了"的凭据，半截答案绝不能按完整答案交给业务方。
         var terminated = new java.util.concurrent.atomic.AtomicBoolean(false);
         var counter = new java.util.concurrent.atomic.AtomicInteger();
         return events(sessionId, question, tenantId, userId)

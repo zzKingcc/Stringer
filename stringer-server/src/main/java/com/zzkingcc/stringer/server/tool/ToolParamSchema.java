@@ -36,9 +36,9 @@ final class ToolParamSchema {
     /**
      * 由根级 JSON Schema 派生描述符参数列表 —— <b>递归保留嵌套结构</b>，与本地 Bean 工具口径一致。
      *
-     * <p>早先这里只读顶层、把嵌套结构拍成 object/array，于是"同一段工具代码"在本地部署与
-     * 远端实例两种形态下会得到不同的描述符（远端看不到 DTO 子字段，进而看不到声明在子字段上的
-     * 示例 / 白名单 / 敏感）。既然上报报文里本来就带着 {@code properties}，就没有理由丢掉。</p>
+     * <p>必须递归保留嵌套结构：把嵌套拍成 object/array 会让"同一段工具代码"在本地部署与
+     * 远端实例两种形态下得到不同的描述符（远端看不到 DTO 子字段，进而看不到声明在子字段上的
+     * 示例 / 白名单 / 敏感）。上报报文里本来就带着 {@code properties}，没有理由丢掉。</p>
      */
     static List<ToolDescriptor.Param> toParams(JsonNode parameters) {
         if (parameters == null || !parameters.isObject()) {

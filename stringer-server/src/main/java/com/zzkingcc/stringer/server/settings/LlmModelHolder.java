@@ -236,7 +236,7 @@ public class LlmModelHolder {
      * 把携带通用 {@link ChatRequestParameters} 的请求提升为 {@link OpenAiChatRequestParameters}。
      *
      * <p>提升必须以模型的默认参数为基线：OpenAI 模型在 doChat 里只认 request.parameters()，
-     * 不再兜自己的默认值，凭空新建一份参数会把 modelName 丢掉。</p>
+     * 不兜自己的默认值；凭空新建一份参数会把 modelName 丢掉。</p>
      */
     // package-private：保留给同包单元测试直接校验"通用参数 → OpenAI 参数"的提升逻辑
     ChatRequest promote(ChatRequest request) {

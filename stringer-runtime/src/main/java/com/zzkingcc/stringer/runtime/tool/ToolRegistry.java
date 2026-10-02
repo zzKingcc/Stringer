@@ -406,8 +406,8 @@ public class ToolRegistry {
     /**
      * 删域时清理：把这些域从"本进程出现过的域"里摘掉，<b>并从仍活着的工具声明里剥离</b>。
      *
-     * <p>为什么必须剥离而不能只清 {@code declaredProfiles}：{@link #knownProfiles()} 会
-     * {@link #addDomains 从活着的工具条目} 把域重新捞回来。只清 declaredProfiles 的话，
+     * <p>剥离与清 {@code declaredProfiles} 缺一不可：{@link #knownProfiles()} 会
+     * {@link #addDomains 从活着的工具条目} 把域重新捞回来，只清 declaredProfiles 的话，
      * 被删的域仍留在「域空间」列表里（来源显示"工具派生"），再点删除还会报"域不存在"——
      * 看着像没删干净，实际是"已删但仍被工具声明复活"。</p>
      *

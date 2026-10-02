@@ -38,9 +38,8 @@ public class DomainStore {
     /**
      * 一次性迁移标记的进程内缓存。
      *
-     * <p>原先 {@code saveDeclarations} 每次都重读文件来"保留"它，文件一损坏就把标记复位成 false，
-     * 导致重启后迁移重跑、运维手工切过的可调用性被静默推翻。读一次缓存在内存里即可，
-     * 写盘时同步更新，不再依赖"还能不能读回文件"。</p>
+     * <p>标记在启动时随 {@link #load()} 读一次并缓存，写盘时同步更新，不依赖后续能否读回文件：
+     * 标记一旦被复位成 false，重启后迁移就会重跑，运维手工切过的可调用性被静默推翻。</p>
      */
     private volatile boolean callableMigrated;
 
@@ -113,8 +112,8 @@ public class DomainStore {
     /**
      * 覆盖写域声明，并<b>保留已有的一次性迁移标记</b>（管理端改域时用）。
      *
-     * <p>标记改为<b>读一次并缓存</b>：原先这里每次都重新 {@code load()}，文件一损坏就把标记复位成
-     * false，于是重启后迁移重跑，运维手工切过的可调用性被静默推翻。</p>
+     * <p>标记取自缓存的进程内值（见 {@link #callableMigrated}）：重读文件会因损坏而读不到标记，
+     * 把它复位成 false，于是重启后迁移重跑，运维手工切过的可调用性被静默推翻。</p>
      */
     public void saveDeclarations(Map<String, Boolean> callables) {
         save(callables, this.callableMigrated);

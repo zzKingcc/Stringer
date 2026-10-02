@@ -139,10 +139,9 @@ public class ServerGlobalExceptionHandler {
      *
      * <p>这个异常在<b>请求进入 Controller 之前</b>由容器抛出，
      * 所以 {@code KnowledgeBaseService} 里那段基于 {@code RagProperties} 的大小校验
-     * 根本没机会执行。没有专门的 handler 时它会落到 {@code RuntimeException} 兜底 →
-     * {@code UNEXPECTED_ERROR}（HTTP 500、<b>retryable=true</b>），
-     * 用户看到"服务暂时不可用，请稍后重试" —— 重试永远不会成功，而且
-     * "文件太大"这个唯一有用的信息被彻底丢掉。</p>
+     * 根本没机会执行。它必须有自己的 handler：落到通用兜底会是 {@code UNEXPECTED_ERROR}
+     * （HTTP 500、<b>retryable=true</b>），用户看到"服务暂时不可用，请稍后重试" ——
+     * 重试永远不会成功，而且"文件太大"这个唯一有用的信息被彻底丢掉。</p>
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<Map<String, Object>> handleMaxUploadSize(MaxUploadSizeExceededException e) {

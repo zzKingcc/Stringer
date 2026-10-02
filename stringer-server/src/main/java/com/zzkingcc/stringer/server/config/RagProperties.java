@@ -19,9 +19,17 @@ import java.util.List;
 public class RagProperties {
 
     /**
-     * 单个上传文件的大小上限（默认 10MB）。
+     * 单个上传文件的大小上限（默认 5MB）。
+     *
+     * <p><b>必须与 {@code spring.servlet.multipart.max-file-size} 保持一致</b>：
+     * 容器会在请求进入 Controller <b>之前</b>按 multipart 上限做拦截，两者不一致时
+     * 这个校验形同虚设 —— 1MB~5MB 的文件会被容器挡在门外，用户拿到的是
+     * 一个与"文件太大"毫无关系的 500，而不是这里精心写的 60006 提示。</p>
+     *
+     * <p>yaml 里刻意没有显式配置本项：与 multipart 上限共用一个真相来源，
+     * 避免只改一处的漂移。</p>
      */
-    private DataSize maxFileSize = DataSize.ofMegabytes(10);
+    private DataSize maxFileSize = DataSize.ofMegabytes(5);
 
     /**
      * 允许上传的扩展名白名单（小写）。

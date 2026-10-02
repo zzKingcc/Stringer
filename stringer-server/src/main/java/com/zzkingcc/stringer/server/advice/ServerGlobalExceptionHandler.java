@@ -9,13 +9,17 @@ import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.server.auth.AuthException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.bind.MissingPathVariableException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.io.IOException;
@@ -34,6 +38,13 @@ import java.util.concurrent.TimeoutException;
 public class ServerGlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ServerGlobalExceptionHandler.class);
+
+    /**
+     * 仅用于在"文件超限"的文案里回显真实上限，避免在代码里再写一个会漂移的数字。
+     * 取不到不影响功能，置空即可。
+     */
+    @Autowired(required = false)
+    private MultipartProperties multipartProperties;
 
     /**
      * "这次失败来自 ES / Redis"的栈特征。
@@ -121,6 +132,29 @@ public class ServerGlobalExceptionHandler {
         String expect = e.getRequiredType() != null ? e.getRequiredType().getSimpleName() : "未知";
         log.error("[全局异常][PARAM] 参数类型不匹配: name={}, expect={}", e.getName(), expect, e);
         return build(ErrorCode.TYPE_MISMATCH, "参数 " + e.getName() + " 期望类型：" + expect);
+    }
+
+    /**
+     * 上传文件超过 {@code spring.servlet.multipart.max-file-size}。
+     *
+     * <p>这个异常在<b>请求进入 Controller 之前</b>由容器抛出，
+     * 所以 {@code KnowledgeBaseService} 里那段基于 {@code RagProperties} 的大小校验
+     * 根本没机会执行。没有专门的 handler 时它会落到 {@code RuntimeException} 兜底 →
+     * {@code UNEXPECTED_ERROR}（HTTP 500、<b>retryable=true</b>），
+     * 用户看到"服务暂时不可用，请稍后重试" —— 重试永远不会成功，而且
+     * "文件太大"这个唯一有用的信息被彻底丢掉。</p>
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        log.warn("[全局异常][PARAM] 上传文件超过容器上限: {}", e.getMessage());
+        return build(ErrorCode.KNOWLEDGE_UPLOAD_REJECTED,
+                "文件超过大小上限（上限 " + maxUploadLimit() + "）；请拆分后再上传");
+    }
+
+    /** 从容器配置里读回真实上限，避免文案里再写一个会漂移的数字 */
+    private String maxUploadLimit() {
+        DataSize limit = multipartProperties == null ? null : multipartProperties.getMaxFileSize();
+        return limit == null ? "见服务端配置" : limit.toString();
     }
 
     @ExceptionHandler(IllegalStateException.class)

@@ -5,6 +5,15 @@ server:
 spring:
   application:
     name: stringer-server
+  servlet:
+    multipart:
+      # 单个上传文件的大小上限。**必须与 RagProperties.maxFileSize（同样 5MB）一致**：
+      # 容器在请求进入 Controller 之前就按这个上限拦截，不一致时业务层的校验形同虚设，
+      # 用户拿到的是一个与"文件太大"无关的 500 而不是 KNOWLEDGE_UPLOAD_REJECTED。
+      max-file-size: 5MB
+      # 整个 multipart 请求体的上限，含 boundary 与各 part 头，因此要略大于单文件上限：
+      # 若与 max-file-size 取同一个值，一个正好 5MB 的文件会因封装开销被判超限而拒收。
+      max-request-size: 6MB
   # 停机的等待上限
   lifecycle:
     timeout-per-shutdown-phase: 30s

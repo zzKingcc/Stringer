@@ -263,7 +263,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- |
 | 导入方式 | 部署方上传（管控台 / HTTP / starter），服务端不内置文档 |
 | 支持类型 | `stringer.rag.allowed-extensions`：`txt` / `md` / `markdown` / `docx` / `doc` / `pdf` / `xls` / `xlsx`。txt 靠正则**猜**结构；其余**读**结构 —— md 自研解析、docx 与 doc 直连 POI（XWPF / HWPF，段落样式加**大纲级别**取标题层级）、pdf 直连 PDFBox（抽行取坐标与页码）、xls/xlsx 直连 POI（`WorkbookFactory`，一个入口按文件头认 `.xls` / `.xlsx`）。不引 Tika：实测它对 docx 丢标题层级、对 pdf 丢字号，而这两样正是切片要用的。docx / doc 的分节只认标题（没有标题就整篇一节）；pdf 本轮不做字号推断标题，按「页」分节（`section_path = 文件名 > 第N页`）；excel 按**工作表**分节（`文件名 > 工作表名`）。完整规则见 [`MULTI-FORMAT-INGESTION-DESIGN.md`](MULTI-FORMAT-INGESTION-DESIGN.md) |
-| 大小上限 | `stringer.rag.max-file-size`，默认 10MB |
+| 大小上限 | `stringer.rag.max-file-size`，默认 5MB。**须与 `spring.servlet.multipart.max-file-size` 保持一致**：容器在请求进入 Controller 之前就按 multipart 上限拦截，业务层这段校验在其之后，不一致时要么用户拿到与"文件太大"无关的 500，要么容器那段配置形同虚设 |
 | 单文件切片上限 | `stringer.rag.max-chunks-per-document`，默认 2000 片 —— 超限直接拒绝并提示拆分。几百页的文档一次能产出几千片，一次上传就能堵死导入队列 |
 | 字符集 | **只对文本类生效**：入口探测一次（BOM → 严格 UTF-8 → GB18030）并转码；判不出编码则**拒绝该文件**，不猜。**docx / doc / pdf / xls / xlsx 是二进制，不解码** —— 原始字节直接交给 POI / PDFBox |
 | 归属域 | 上传时指定单个域（完整路径，留空＝根域 `default`）；路径非法直接拒绝 |
@@ -507,7 +507,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.retrieval.ancestor-decay` | double | 0.7（1.0 = 不衰减） |
 | `stringer.retrieval.inject-top-n` | int | 8 |
 | `stringer.retrieval.max-context-chars` | int | 3000 |
-| `stringer.rag.max-file-size` | DataSize | 10MB |
+| `stringer.rag.max-file-size` | DataSize | 5MB（= `spring.servlet.multipart.max-file-size`） |
 | `stringer.rag.allowed-extensions` | List | `[txt, md, markdown, docx, doc, pdf, xls, xlsx]` |
 | `stringer.rag.max-chunks-per-document` | int | 2000 |
 | `stringer.rag.chunking.max-chars` / `overlap-sentences` / `min-chars` | int | 400 / 1 / 60 |

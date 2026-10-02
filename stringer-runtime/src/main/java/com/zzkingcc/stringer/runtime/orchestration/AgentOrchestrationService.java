@@ -10,6 +10,7 @@ import com.zzkingcc.stringer.api.event.AgentEvent;
 import com.zzkingcc.stringer.api.model.ToolCall;
 import com.zzkingcc.stringer.api.model.ToolCallPayload;
 import com.zzkingcc.stringer.api.support.RetrievalScope;
+import com.zzkingcc.stringer.api.support.SessionKeys;
 import com.zzkingcc.stringer.api.support.TraceId;
 import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.domain.memory.DualConstraintChatMemory;
@@ -96,7 +97,7 @@ public class AgentOrchestrationService implements AgentService {
     private final BaseCheckpointSaver checkpointSaver;
     /** 工具路由器,Agent 调用能力的唯一入口 */
     private final ToolRouter toolRouter;
-    /** 会话 → 流式上下文（以 sessionId 定位，与线程解耦） */
+    /** 会话状态键（域 + sessionId）→ 流式上下文；键里带域，同名会话在不同域下不会互相顶掉 */
     private final StreamSinkRegistry streamSinks;
     /** 执行图编排的专用线程池(阻塞式流式调用,不占用公共 ForkJoinPool) */
     private final Executor executor;
@@ -105,11 +106,6 @@ public class AgentOrchestrationService implements AgentService {
      * 按域解析对话模型；为 {@code null} 时全部使用构造期注入的那个模型（行为与"全局一个模型"一致）。
      */
     private final ModelResolver modelResolver;
-
-    /**
-     * 会话 → 中断时所用的域。
-     */
-    private final Map<String, String> interruptedProfiles = new ConcurrentHashMap<>();
 
     /**
      * 单模型构造：不传 {@link ModelResolver}，所有域共用构造期注入的那个模型。
@@ -217,17 +213,27 @@ public class AgentOrchestrationService implements AgentService {
         };
     }
 
-    /** 从 RunnableConfig 取 sessionId */
-    private String sessionIdOf(RunnableConfig config) {
+    /** 会话状态键（threadId）：域 + sessionId，一切按会话索引的状态都用它 */
+    private String stateKeyOf(RunnableConfig config) {
         return config.threadId().orElseThrow(() -> new IllegalStateException("RunnableConfig 缺少 threadId"));
+    }
+
+    /** 从 RunnableConfig 取调用方声明的 sessionId（状态键里分隔符之后的部分，用于事件与日志） */
+    private String sessionIdOf(RunnableConfig config) {
+        return SessionKeys.sessionIdOf(stateKeyOf(config));
+    }
+
+    private String sessionIdOfKey(String key) {
+        return SessionKeys.sessionIdOf(key);
     }
 
     /**
      * agent 节点:调用流式模型,推送 TOKEN 事件,返回 AiMessage 到状态
      */
     private Map<String, Object> agentNode(MessagesState<ChatMessage> state, RunnableConfig config) {
-        String sessionId = sessionIdOf(config);
-        StreamContext context = streamSinks.get(sessionId);
+        String key = stateKeyOf(config);
+        String sessionId = sessionIdOfKey(key);
+        StreamContext context = streamSinks.get(key);
         AtomicInteger llmOutputTokens = new AtomicInteger(0);
 
         // 按本轮所处的域过滤工具集：只有声明了该域（或未声明任何域）的工具才会出现在模型视野里。
@@ -253,7 +259,7 @@ public class AgentOrchestrationService implements AgentService {
             model.chat(request, new StreamingChatResponseHandler() {                @Override
                 public void onPartialResponse(String partialResponse) {
                     // 停止检查:用户请求停止后,完成 future 抛 CancellationException,终止流
-                    if (cancellationRegistry.isCancelled(sessionId)) {
+                    if (cancellationRegistry.isCancelled(key)) {
                         future.completeExceptionally(new CancellationException("用户主动停止"));
                         return;
                     }
@@ -268,7 +274,7 @@ public class AgentOrchestrationService implements AgentService {
                 public void onCompleteResponse(ChatResponse completeResponse) {
                     // 这个回调同样要查停止标志：模型不分片、一次性返回时若只在 onPartialResponse
                     // 里检查，取消就完全不生效——用户点了停止，这一轮照旧跑完并写入记忆。
-                    if (cancellationRegistry.isCancelled(sessionId)) {
+                    if (cancellationRegistry.isCancelled(key)) {
                         future.completeExceptionally(new CancellationException("用户主动停止"));
                         return;
                     }
@@ -308,8 +314,9 @@ public class AgentOrchestrationService implements AgentService {
      * tools 节点:执行 LLM 请求的工具调用,返回 ToolExecutionResultMessage 列表到状态
      */
     private Map<String, Object> toolsNode(MessagesState<ChatMessage> state, RunnableConfig config) {
-        String sessionId = sessionIdOf(config);
-        StreamContext context = streamSinks.get(sessionId);
+        String key = stateKeyOf(config);
+        String sessionId = sessionIdOfKey(key);
+        StreamContext context = streamSinks.get(key);
 
         var lastMessage = state.lastMessage()
                 .orElseThrow(() -> new IllegalStateException("消息列表为空"));
@@ -324,7 +331,7 @@ public class AgentOrchestrationService implements AgentService {
         String profile = context == null ? null : context.profile();
         for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
             // 停止检查:每个工具执行前检查标志,避免停止后继续执行后续工具
-            if (cancellationRegistry.isCancelled(sessionId)) {
+            if (cancellationRegistry.isCancelled(key)) {
                 throw new CancellationException("用户主动停止");
             }
 
@@ -396,8 +403,9 @@ public class AgentOrchestrationService implements AgentService {
             var lastMessage = state.lastMessage()
                     .orElseThrow(() -> new IllegalStateException("消息列表为空"));
 
-            String sessionId = sessionIdOf(config);
-            StreamContext context = streamSinks.get(sessionId);
+            String key = stateKeyOf(config);
+            String sessionId = sessionIdOfKey(key);
+            StreamContext context = streamSinks.get(key);
             // 与 agentNode 使用同一份域、同一份过滤条件，保证"模型可见工具集"与"路由判断"一致
             Set<String> approvalTools = toolRouter.getToolsRequiringApproval(
                     context == null ? null : context.profile());
@@ -436,6 +444,12 @@ public class AgentOrchestrationService implements AgentService {
             // traceId 一定非空，否则调用方拿到的是一串 null，上报也无从查起
             return Flux.just(AgentEvent.error(request.getSessionId(), check.detail(), check.code(),
                     TraceId.currentOrNew()));
+        }
+        String sessionIdReason = SessionKeys.validateSessionId(request.getSessionId());
+        if (sessionIdReason != null) {
+            log.warn("[Agent编排] 会话标识不合法: {}", sessionIdReason);
+            return Flux.just(AgentEvent.error(request.getSessionId(), sessionIdReason,
+                    ErrorCode.INVALID_PARAMETER, TraceId.currentOrNew()));
         }
         return orchestrate(request.getSessionId(), request.getMessage(), caller);
     }
@@ -483,10 +497,18 @@ public class AgentOrchestrationService implements AgentService {
 
     /**
      * 对外契约入口:请求停止任务
+     *
+     * <p>必须带上与发起对话时<b>同一个域</b>：会话状态按 (域, sessionId) 隔离，
+     * 只给 sessionId 停不到另一个域里的同名会话。客户端断连触发的隐式停止同理。</p>
      */
     @Override
-    public boolean stop(String sessionId) {
-        return cancellationRegistry.requestStop(sessionId);
+    public boolean stop(String sessionId, CallerContext caller) {
+        return cancellationRegistry.requestStop(stateKeyOf(caller, sessionId));
+    }
+
+    /** (域, sessionId) → 会话状态键；调用方身份缺失时按根域算 */
+    private static String stateKeyOf(CallerContext caller, String sessionId) {
+        return SessionKeys.of(caller == null ? null : caller.normalizedProfile(), sessionId);
     }
 
     /**
@@ -502,49 +524,50 @@ public class AgentOrchestrationService implements AgentService {
      *   <li>正常完成:将最终 AiMessage 存入会话记忆</li>
      * </ol>
      *
-     * @param sessionId 会话 ID,同时作为 checkpoint 的 threadId
+     * @param sessionId 会话 ID（<b>域内唯一</b>：不同域可以用同一个 sessionId）
      * @param message   用户问题
      * @param caller    调用方身份（域 / 租户 / 用户）；域决定本轮可见工具集
      * @return 事件流,挂起时下发 {@code INTERRUPT} 事件,正常结束下发 {@code DONE}
      */
     public Flux<AgentEvent> orchestrate(String sessionId, String message, CallerContext caller) {
+        String key = stateKeyOf(caller, sessionId);
         return Flux.create(sink -> {
-            StreamContext context = streamSinks.register(sessionId, sink, caller);
+            StreamContext context = streamSinks.register(key, sink, caller);
             // 流被取消(客户端断连)或终止时,通知执行线程退出并清理上下文。
             // 只有"自己仍是当前上下文"才算客户端断连：同一会话换了一轮（中断后紧接 resume、
             // 客户端重试）时，上一轮的收尾也会跑到这里，若照旧置停止标志，会把刚启动的新一轮一起取消。
             sink.onDispose(() -> {
-                if (streamSinks.isCurrent(sessionId, context)) {
-                    cancellationRegistry.requestStop(sessionId);
+                if (streamSinks.isCurrent(key, context)) {
+                    cancellationRegistry.requestStop(key);
                 }
-                streamSinks.unregister(sessionId, context);
+                streamSinks.unregister(key, context);
             });
 
             try {
-                executor.execute(() -> runOrchestrate(sessionId, message, context));
+                executor.execute(() -> runOrchestrate(sessionId, key, message, context));
             } catch (RejectedExecutionException e) {
                 log.error("[Agent编排] 会话[{}] 提交失败,编排线程池已满", sessionId);
-                streamSinks.unregister(sessionId, context);
+                streamSinks.unregister(key, context);
                 sink.next(AgentEvent.error(sessionId, ErrorCode.SYSTEM_BUSY, context.traceId()));
                 sink.complete();
             }
         });
     }
 
-    private void runOrchestrate(String sessionId, String message, StreamContext context) {
+    private void runOrchestrate(String sessionId, String key, String message, StreamContext context) {
         // 同会话串行：本会话已有一轮在执行则直接拒绝（最细粒度的并发控制）。
         // 必须放在 clear() 之前——clear 会清掉停止标志，若先 clear，并发请求会把
         // 正在执行那一轮的 stop 标志抹掉，用户点停止将不生效。
-        if (!cancellationRegistry.tryMarkRunning(sessionId)) {
+        if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排] 会话[{}] 正在执行中，拒绝并发请求（如需重开请先 stop 并等其结束）", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
             context.complete();
-            streamSinks.unregister(sessionId, context);
+            streamSinks.unregister(key, context);
             return;
         }
 
         // 入口清理:避免上一轮遗留的停止标志导致本轮一启动就被终止
-        cancellationRegistry.clear(sessionId);
+        cancellationRegistry.clear(key);
 
         // 本轮排障标识：贯穿日志与 ERROR 事件，便于用 traceId 串起一次完整调用
         TraceId.begin(context == null ? null : context.traceId());
@@ -555,7 +578,7 @@ public class AgentOrchestrationService implements AgentService {
             // 而用户看到的是"会话不存在"。这里明确拒绝新一轮，让调用方先去处理审批。
             boolean pending;
             try {
-                pending = pendingApproval(sessionId);
+                pending = pendingApproval(key);
             } catch (IllegalStateException e) {
                 // 读不出来 ≠ 没有待审批。此刻绝不能继续走到入口清理——那恰好会把待审批的断点删掉，
                 // 正是本轮要防的那件事。直接报"检查点读写失败"并返回，由调用方退避后重试。
@@ -572,11 +595,11 @@ public class AgentOrchestrationService implements AgentService {
                 context.complete();
                 return;
             }
-            releaseCheckpointQuietly(sessionId, "入口清理");
+            releaseCheckpointQuietly(key, "入口清理");
 
             TokenUsageRecorder.begin();
 
-            ChatMemory memory = chatMemoryProvider.get(sessionId);
+            ChatMemory memory = chatMemoryProvider.get(key);
             // 先拍快照再写提问：停止时要把记忆恢复到这一刻。只删"最后一条"是不够的——
             // 若这次写入触发了窗口淘汰，被挤掉的旧消息不会回来，历史从此对不上。
             memoryBefore = List.copyOf(memory.messages());
@@ -593,7 +616,7 @@ public class AgentOrchestrationService implements AgentService {
             messages.addAll(memory.messages());
 
             RunnableConfig config = RunnableConfig.builder()
-                    .threadId(sessionId)
+                    .threadId(key)
                     .build();
 
             log.info("[Agent编排] 会话[{}] traceId={} 开始图编排,消息数={}",
@@ -609,9 +632,8 @@ public class AgentOrchestrationService implements AgentService {
                 log.debug("[Agent编排] 会话[{}] 节点完成: {}", sessionId, output.node());
 
                 if ("agent".equals(output.node()) && isInterruptedBeforeReview(config)) {
-                    // 记录中断发生时的域：resume 必须沿用同一域，否则旧域提示词会配上新域工具集。
-                    // 必须在 break 前落表，否则首轮 resume 的域一致性校验会因未命中而放行。
-                    interruptedProfiles.put(sessionId, context.profile());
+                    // 域一致性不再需要单独记录：断点就存在键 (域, sessionId) 下，
+                    // 用别的域 resume 找不到断点，天然拦在门外。
                     context.emit(AgentEvent.interrupt(sessionId,
                             buildInterruptPayload(lastState, context.profile())));
                     interrupted = true;
@@ -631,24 +653,24 @@ public class AgentOrchestrationService implements AgentService {
             context.complete();
         } catch (Exception e) {
             if (isCancellationException(e)) {
-                handleStop(sessionId, context, "orchestrate", memoryBefore);
-            } else if (!handleNotConfigured(sessionId, context, e)) {
+                handleStop(sessionId, key, context, "orchestrate", memoryBefore);
+            } else if (!handleNotConfigured(sessionId, key, context, e)) {
                 log.error("[Agent编排] 会话[{}] traceId={} 执行失败", sessionId, TraceId.current(), e);
                 // 异常中断时图没走到 END，releaseThread 不会触发，checkpoint 会残留。
                 // 残留状态里可能有"悬空的 AiMessage（带工具调用却没有结果）"，
                 // 下一轮带着它继续跑会反复失败——必须在这里主动清掉，避免一次异常拖垮后续所有提问。
-                releaseCheckpointQuietly(sessionId, "执行异常");
+                releaseCheckpointQuietly(key, "执行异常");
                 context.emit(AgentEvent.error(sessionId, ErrorCode.ORCHESTRATION_FAILED,
                         TraceId.currentOrNew()));
                 context.complete();
             }
         } finally {
             TokenUsageRecorder.finishAndLog();
-            cancellationRegistry.clear(sessionId);
+            cancellationRegistry.clear(key);
             // 释放"执行中"标记：必须与 tryMarkRunning 成对，否则该会话会被永久锁死
-            cancellationRegistry.unmarkRunning(sessionId);
+            cancellationRegistry.unmarkRunning(key);
             // 只注销自己这一轮的上下文：期间若已换了新的一轮（客户端重试），不能把新的一起删掉
-            streamSinks.unregister(sessionId, context);
+            streamSinks.unregister(key, context);
             // 线程池会复用线程，必须清理 ThreadLocal，否则下一个任务会继承到本次 traceId
             TraceId.end();
         }
@@ -670,46 +692,47 @@ public class AgentOrchestrationService implements AgentService {
             return Flux.just(AgentEvent.error(sessionId, check.detail(), check.code(),
                     TraceId.currentOrNew()));
         }
+        String key = stateKeyOf(caller, sessionId);
         return Flux.create(sink -> {
-            StreamContext context = streamSinks.register(sessionId, sink, caller);
+            StreamContext context = streamSinks.register(key, sink, caller);
             // 同 orchestrate：只有"自己仍是当前上下文"才算客户端断连，
             // 否则上一轮的收尾会把这轮的停止标志置上
             sink.onDispose(() -> {
-                if (streamSinks.isCurrent(sessionId, context)) {
-                    cancellationRegistry.requestStop(sessionId);
+                if (streamSinks.isCurrent(key, context)) {
+                    cancellationRegistry.requestStop(key);
                 }
-                streamSinks.unregister(sessionId, context);
+                streamSinks.unregister(key, context);
             });
 
             try {
-                executor.execute(() -> runResume(sessionId, approved, context));
+                executor.execute(() -> runResume(sessionId, key, approved, context));
             } catch (RejectedExecutionException e) {
                 log.error("[Agent编排] 会话[{}] resume 提交失败,编排线程池已满", sessionId);
-                streamSinks.unregister(sessionId, context);
+                streamSinks.unregister(key, context);
                 sink.next(AgentEvent.error(sessionId, ErrorCode.SYSTEM_BUSY, context.traceId()));
                 sink.complete();
             }
         });
     }
 
-    private void runResume(String sessionId, boolean approved, StreamContext context) {
+    private void runResume(String sessionId, String key, boolean approved, StreamContext context) {
         // 同会话串行同样适用于 resume：本会话已有一轮在执行时拒绝，理由与 chat 一致。
         // 同样放在 clear() 之前，避免把正在执行那轮的 stop 标志抹掉。
-        if (!cancellationRegistry.tryMarkRunning(sessionId)) {
+        if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排-resume] 会话[{}] 正在执行中，拒绝并发 resume", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
             context.complete();
-            streamSinks.unregister(sessionId, context);
+            streamSinks.unregister(key, context);
             return;
         }
-        cancellationRegistry.clear(sessionId);
+        cancellationRegistry.clear(key);
         TraceId.begin(context == null ? null : context.traceId());
 
                try {
             TokenUsageRecorder.begin();
 
             RunnableConfig config = RunnableConfig.builder()
-                    .threadId(sessionId)
+                    .threadId(key)
                     .build();
 
             var snapshot = compiledGraph.stateOf(config);
@@ -737,17 +760,8 @@ public class AgentOrchestrationService implements AgentService {
                 return;
             }
 
-            String interruptedProfile = interruptedProfiles.get(sessionId);
-            if (interruptedProfile != null && !interruptedProfile.equals(context.profile())) {
-                // 提示词随断点一起冻结（SystemMessage 已进图状态），而工具可见性按本次请求的域实时过滤。
-                // 允许换域就等于让模型看到"旧域的提示词 + 新域的工具集"，因此这里拒绝。
-                log.warn("[Agent编排] 会话[{}] resume 携带的域({})与中断时的域({})不一致，拒绝",
-                        sessionId, context.profile(), interruptedProfile);
-                context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_STATE_INVALID,
-                        TraceId.currentOrNew()));
-                context.complete();
-                return;
-            }
+            // 域一致性由状态键本身保证：断点存在键 (域, sessionId) 下，用另一个域 resume
+            // 根本找不到断点（SESSION_NOT_FOUND），不会出现"旧域提示词 + 新域工具集"的组合。
 
             if (!approved) {
                 // 拒绝:只为这批待执行的工具调用追加"被拒绝"的结果,由模型据此重新生成不带工具调用的回复。
@@ -779,8 +793,6 @@ public class AgentOrchestrationService implements AgentService {
                 log.debug("[Agent编排-resume] 会话[{}] 节点完成: {}", sessionId, output.node());
 
                 if ("agent".equals(output.node()) && isInterruptedBeforeReview(config)) {
-                    // 同一轮内可能多次中断，每次都记一遍域：下一段 resume 必须与这一次一致
-                    interruptedProfiles.put(sessionId, context.profile());
                     context.emit(AgentEvent.interrupt(sessionId,
                             buildInterruptPayload(lastState, context.profile())));
                     interrupted = true;
@@ -790,9 +802,7 @@ public class AgentOrchestrationService implements AgentService {
             }
 
             if (!interrupted) {
-                rememberFinalAnswer(chatMemoryProvider.get(sessionId), lastState);
-                // 走到 END 后 releaseThread 会释放断点，中断域的记录也随之作废
-                interruptedProfiles.remove(sessionId);
+                rememberFinalAnswer(chatMemoryProvider.get(key), lastState);
                 log.info("[Agent编排-resume] 会话[{}] resume 完成", sessionId);
                 context.emit(AgentEvent.done(sessionId));
             }
@@ -800,23 +810,23 @@ public class AgentOrchestrationService implements AgentService {
         } catch (Exception e) {
             if (isCancellationException(e)) {
                 // resume 不写记忆，没有需要回滚的提问
-                handleStop(sessionId, context, "resume", null);
-            } else if (!handleNotConfigured(sessionId, context, e)) {
+                handleStop(sessionId, key, context, "resume", null);
+            } else if (!handleNotConfigured(sessionId, key, context, e)) {
                 log.error("[Agent编排-resume] 会话[{}] traceId={} 执行失败",
                         sessionId, TraceId.current(), e);
                 // 同 orchestrate：异常中断不会触发 releaseThread，需主动清残留 checkpoint
-                releaseCheckpointQuietly(sessionId, "resume 异常");
+                releaseCheckpointQuietly(key, "resume 异常");
                 context.emit(AgentEvent.error(sessionId, ErrorCode.ORCHESTRATION_FAILED,
                         TraceId.currentOrNew()));
                 context.complete();
             }
         } finally {
             TokenUsageRecorder.finishAndLog();
-            cancellationRegistry.clear(sessionId);
+            cancellationRegistry.clear(key);
             // 释放"执行中"标记：必须与 tryMarkRunning 成对，否则该会话会被永久锁死
-            cancellationRegistry.unmarkRunning(sessionId);
+            cancellationRegistry.unmarkRunning(key);
             // 只注销自己这一轮的上下文（同一会话可能已有新一轮注册进来）
-            streamSinks.unregister(sessionId, context);
+            streamSinks.unregister(key, context);
             TraceId.end();
         }
     }
@@ -842,8 +852,8 @@ public class AgentOrchestrationService implements AgentService {
     /**
      * 会话是否停在审批点（存在待授权的中断点）。
      */
-    private boolean pendingApproval(String sessionId) {
-        RunnableConfig config = RunnableConfig.builder().threadId(sessionId).build();
+    private boolean pendingApproval(String key) {
+        RunnableConfig config = RunnableConfig.builder().threadId(key).build();
         try {
             return compiledGraph.stateOf(config)
                     .map(snapshot -> BRANCH_REVIEW.equals(snapshot.next()))
@@ -932,7 +942,7 @@ public class AgentOrchestrationService implements AgentService {
      *
      * @return true 表示已按"未配置"处理并结束流，调用方不要再走通用兜底
      */
-    private boolean handleNotConfigured(String sessionId, StreamContext context, Throwable e) {
+    private boolean handleNotConfigured(String sessionId, String key, StreamContext context, Throwable e) {
         NotConfiguredException notConfigured = findNotConfigured(e);
         if (notConfigured == null) {
             return false;
@@ -940,7 +950,7 @@ public class AgentOrchestrationService implements AgentService {
         log.warn("[Agent编排] 会话[{}] traceId={} 依赖未配置，按 {} 回报：{}",
                 sessionId, TraceId.current(),
                 notConfigured.getCodeName(), notConfigured.getMessage());
-        releaseCheckpointQuietly(sessionId, "依赖未配置");
+        releaseCheckpointQuietly(key, "依赖未配置");
         // 用 4 参重载，把"去管控台哪一页填"的具体指引带进事件体（枚举默认文案只有一句概括）
         context.emit(AgentEvent.error(sessionId, notConfigured.getMessage(),
                 notConfigured.getErrorCode(), TraceId.currentOrNew()));
@@ -972,18 +982,18 @@ public class AgentOrchestrationService implements AgentService {
      *
      * @param memoryBefore 本轮提问前的记忆快照；{@code null} = 本次不涉及记忆回滚
      */
-    private void handleStop(String sessionId, StreamContext context, String source,
+    private void handleStop(String sessionId, String key, StreamContext context, String source,
                             List<ChatMessage> memoryBefore) {
         log.info("[Agent编排] 会话[{}] 任务被用户停止,source={}, 半截文本长度={}",
                 sessionId, source, context == null ? 0 : context.partialOutput().length());
 
         // 1. 回滚记忆(仅 orchestrate 场景,resume 未写记忆)
         if ("orchestrate".equals(source)) {
-            restoreMemory(sessionId, memoryBefore);
+            restoreMemory(key, memoryBefore);
         }
 
         // 2. 清 checkpoint(不可恢复)
-        releaseCheckpointQuietly(sessionId, "用户停止");
+        releaseCheckpointQuietly(key, "用户停止");
 
         // 3. 推送停止事件给调用方
         if (context != null) {
@@ -997,9 +1007,10 @@ public class AgentOrchestrationService implements AgentService {
      *
      * @param memoryBefore 提问前的快照；{@code null} 表示异常发生在拍快照之前
      */
-    private void restoreMemory(String sessionId, List<ChatMessage> memoryBefore) {
+    private void restoreMemory(String key, List<ChatMessage> memoryBefore) {
+        String sessionId = SessionKeys.sessionIdOf(key);
         try {
-            ChatMemory memory = chatMemoryProvider.get(sessionId);
+            ChatMemory memory = chatMemoryProvider.get(key);
             if (!(memory instanceof DualConstraintChatMemory dual)) {
                 log.warn("[Agent编排] 会话[{}] memory 非 DualConstraintChatMemory,无法回滚记忆", sessionId);
                 return;
@@ -1017,16 +1028,15 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /** 静默清理 checkpoint:失败只记日志,不阻断主流程 */
-    private void releaseCheckpointQuietly(String sessionId, String reason) {
+    private void releaseCheckpointQuietly(String key, String reason) {
+        String sessionId = SessionKeys.sessionIdOf(key);
         try {
-            RunnableConfig config = RunnableConfig.builder().threadId(sessionId).build();
+            RunnableConfig config = RunnableConfig.builder().threadId(key).build();
             checkpointSaver.release(config);
             log.debug("[Agent编排] 会话[{}] checkpoint 已清除({})", sessionId, reason);
         } catch (Exception ex) {
             log.warn("[Agent编排] 会话[{}] 清 checkpoint 失败({}): {}", sessionId, reason, ex.getMessage());
         }
-        // 断点没了，"中断时的域"这条记录也就没有意义了；留着会让下一次 resume 拿它做无谓的域比对
-        interruptedProfiles.remove(sessionId);
     }
 
     /** 当前注册的流上下文数量(观测用) */

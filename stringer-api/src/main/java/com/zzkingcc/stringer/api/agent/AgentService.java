@@ -32,7 +32,9 @@ public interface AgentService {
      * 请求停止指定会话的任务(不可恢复)
      *
      * @param sessionId 会话 ID
+     * @param caller    调用方身份（域 / 租户 / 用户）。会话状态按 <b>(域, sessionId)</b> 隔离，
+     *                  停止必须携带与发起对话时<b>同一个域</b>，否则停不到那个域里的会话
      * @return true=本次设置成功; false=该会话已处于停止状态(幂等)
      */
-    boolean stop(String sessionId);
+    boolean stop(String sessionId, CallerContext caller);
 }

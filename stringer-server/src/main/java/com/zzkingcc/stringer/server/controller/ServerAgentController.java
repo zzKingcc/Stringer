@@ -101,13 +101,19 @@ public class ServerAgentController {
     /**
      * 停止正在执行的任务（不可恢复）
      *
+     * <p>会话状态按 (域, sessionId) 隔离：停止必须带上与 chat 时相同的域。
+     * body 省略时按根域算（只能停根域上的会话）。</p>
+     *
      * @param sessionId 会话 ID
+     * @param caller    调用方身份（可选；建议与 chat 一致）
      * @return {"code":0,"sessionId":"...","stopRequested":true|false}
      */
     @PostMapping("/stop/{sessionId}")
-    public Map<String, Object> stop(@PathVariable String sessionId) {
-        boolean triggered = agentService.stop(sessionId);
-        log.info("[Agent入口] 会话[{}] stop 请求, stopRequested={}", sessionId, triggered);
+    public Map<String, Object> stop(@PathVariable String sessionId,
+                                    @RequestBody(required = false) CallerContext caller) {
+        boolean triggered = agentService.stop(sessionId, caller);
+        log.info("[Agent入口] 会话[{}] stop 请求, stopRequested={}, profile={}",
+                sessionId, triggered, caller == null ? null : caller.profile());
         return Map.of("code", 0, "sessionId", sessionId, "stopRequested", triggered);
     }
 }

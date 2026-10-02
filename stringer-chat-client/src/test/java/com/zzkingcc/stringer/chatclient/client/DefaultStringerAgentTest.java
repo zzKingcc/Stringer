@@ -36,6 +36,7 @@ class DefaultStringerAgentTest {
 
     private final List<AgentRequest> chats = new ArrayList<>();
     private final List<CallerContext> resumes = new ArrayList<>();
+    private final List<CallerContext> stopCallers = new ArrayList<>();
     private final List<String> stops = new ArrayList<>();
 
     private Flux<AgentEvent> scripted = Flux.empty();
@@ -54,8 +55,9 @@ class DefaultStringerAgentTest {
         }
 
         @Override
-        public boolean stop(String sessionId) {
+        public boolean stop(String sessionId, CallerContext caller) {
             stops.add(sessionId);
+            stopCallers.add(caller);
             return true;
         }
     };
@@ -145,6 +147,7 @@ class DefaultStringerAgentTest {
 
         assertTrue(agent.stop(SESSION));
         assertEquals(SESSION, stops.get(0));
+        assertEquals("admin", stopCallers.get(0).profile(), "stop 必须带上门面绑定的域，服务端才能定位 (域, sessionId)");
     }
 
     @Test

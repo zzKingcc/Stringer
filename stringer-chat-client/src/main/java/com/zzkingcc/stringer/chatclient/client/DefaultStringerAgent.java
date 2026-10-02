@@ -115,7 +115,8 @@ public class DefaultStringerAgent implements StringerAgent {
 
     @Override
     public boolean stop(String sessionId) {
-        return transport.stop(sessionId);
+        // 会话状态按 (域, sessionId) 隔离：stop 必须带上本门面绑定的域，否则停不到这个域里的会话
+        return transport.stop(sessionId, CallerContext.of(domainId));
     }
 
     // ==================== 事件 → 异常 ====================

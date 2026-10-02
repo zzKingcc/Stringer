@@ -79,15 +79,21 @@ public class AgentServiceClient implements AgentService {
 
     /**
      * 停止任务。
+     *
+     * <p>会话状态在服务端按 (域, sessionId) 隔离，因此 stop 必须携带与 chat 相同的域 ——
+     * 门面已绑定域，这里由调用方传入的 {@code caller} 决定。</p>
      */
     @Override
-    public boolean stop(String sessionId) {
-        log.info("[Stringer客户端] stop 会话[{}]", sessionId);
+    public boolean stop(String sessionId, CallerContext caller) {
+        log.info("[Stringer客户端] stop 会话[{}] profile={}", sessionId,
+                caller == null ? null : caller.profile());
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> resp = webClient.post()
                     .uri("/api/agent/stop/{sessionId}", sessionId)
                     .header(ClientCredential.CREDENTIAL_HEADER, credential.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(caller)
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block();

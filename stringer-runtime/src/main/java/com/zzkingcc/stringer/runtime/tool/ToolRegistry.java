@@ -404,6 +404,20 @@ public class ToolRegistry {
     }
 
     /**
+     * 删域时清理：把这些域从"本进程出现过的域"里摘掉。
+     *
+     * <p>域全集（knownProfiles）是<b>展示 / 排障</b>口径，原本只增不减 —— 删掉的域不摘，
+     * 它会一直出现在两个清单端点里，且 DELETE 会报"域不存在"却删不掉。</p>
+     */
+    public void forgetProfiles(Collection<String> domains) {
+        if (domains == null || domains.isEmpty()) {
+            return;
+        }
+        declaredProfiles.removeAll(domains);
+        log.info("[工具注册] 已从域全集摘掉被删的域：{}", domains);
+    }
+
+    /**
      * 某工具被声明为<b>敏感</b>的参数名集合（递归含 DTO 展开出的字段名）。
      *
      * <p>用途只有一个：把"给人看的参数文本"（工具调用事件、审批 payload）掩码，

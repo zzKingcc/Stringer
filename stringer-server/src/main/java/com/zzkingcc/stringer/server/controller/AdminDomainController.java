@@ -2,10 +2,15 @@ package com.zzkingcc.stringer.server.controller;
 
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
+import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
+import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
+import com.zzkingcc.stringer.server.knowledge.DomainChannelProvider;
 import com.zzkingcc.stringer.server.knowledge.KnowledgeBaseService;
+import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
+import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
 import com.zzkingcc.stringer.server.settings.DomainStore;
 import lombok.Data;
 import org.slf4j.Logger;
@@ -49,12 +54,25 @@ public class AdminDomainController {
     private final DomainRegistry domainRegistry;
     private final DomainStore domainStore;
     private final KnowledgeBaseService knowledgeBase;
+    private final DomainSettingsStore domainSettingsStore;
+    private final ModelProfileRegistry modelProfileRegistry;
+    private final ToolRegistry toolRegistry;
+    private final DomainChannelProvider domainChannelProvider;
 
-    public AdminDomainController(DomainRegistry domainRegistry, DomainStore domainStore,
-                                 KnowledgeBaseService knowledgeBase) {
+    public AdminDomainController(DomainRegistry domainRegistry,
+                                 DomainStore domainStore,
+                                 KnowledgeBaseService knowledgeBase,
+                                 DomainSettingsStore domainSettingsStore,
+                                 ModelProfileRegistry modelProfileRegistry,
+                                 ToolRegistry toolRegistry,
+                                 DomainChannelProvider domainChannelProvider) {
         this.domainRegistry = domainRegistry;
         this.domainStore = domainStore;
         this.knowledgeBase = knowledgeBase;
+        this.domainSettingsStore = domainSettingsStore;
+        this.modelProfileRegistry = modelProfileRegistry;
+        this.toolRegistry = toolRegistry;
+        this.domainChannelProvider = domainChannelProvider;
     }
 
     /**
@@ -103,9 +121,12 @@ public class AdminDomainController {
     /**
      * 删除域及其全部子孙（递归）。只有根域拒绝删除。
      *
-     * <p>顺序是硬要求：<b>先删知识库索引，再删域</b>。一域一索引，索引就是该域知识的唯一载体；
-     * 域先没了，那些索引就再也没人认领（检索不到、上传也无从指定）。因此索引没删干净就直接拒绝
-     * 删域 —— 域一个没动，不存在回滚问题。</p>
+     * <p>顺序是硬要求：<b>先删知识库索引与切片预览文件，再清理域属性，最后删域</b>。
+     * 一域一索引，索引就是该域知识的唯一载体；域先没了，那些索引就再也没人认领
+     * （检索不到、上传也无从指定）。索引没删干净就直接拒绝删域 —— 域一个没动。</p>
+     *
+     * <p>域属性（提示词 / 模型绑定 / 工具声明派生记录 / 检索器缓存）也一并清理：
+     * 否则同路径域将来重建时会<b>静默复活</b>旧配置。</p>
      */
     @DeleteMapping("/admin/domains/{id}")
     public Map<String, Object> delete(@PathVariable("id") String id) {
@@ -125,13 +146,23 @@ public class AdminDomainController {
 
         List<String> removedIndices;
         try {
+            // 删索引前会先把这些域的切片预览文件（含文档全文）一并清掉
             removedIndices = knowledgeBase.deleteIndices(affected);
         } catch (KnowledgeBaseException e) {
             throw new BaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
                     "删除域 " + normalized + " 前清理知识库失败，已中止、域未删除：" + e.getMessage());
         }
+        // 索引检索器缓存一并失效：删除的索引还在缓存里会被旧检索器继续命中
+        List<String> affectedIndices = affected.stream().map(KbIndexes::nameOf).toList();
+        domainChannelProvider.evictIndices(affectedIndices);
 
-        // 3) 索引删干净了才动域
+        // 3) 域属性一并清理：提示词 / 模型绑定 / 工具声明派生记录。
+        //    不清理的话，同路径域将来重建时会"静默复活"旧配置。
+        domainSettingsStore.removePrompts(affected);
+        modelProfileRegistry.unbindDomains(affected);
+        toolRegistry.forgetProfiles(affected);
+
+        // 4) 以上都成功才动域
         DomainRegistry.DeleteResult deleted = domainRegistry.delete(normalized);
         if (!deleted.deleted()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, deleted.reason());

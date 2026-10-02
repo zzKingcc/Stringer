@@ -4,6 +4,7 @@ import com.zzkingcc.stringer.api.agent.Domains;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -193,6 +194,24 @@ public class ModelProfileRegistry {
             log.info("[模型档案] 域 {} 的可调用列表由 {} 改为 {}（整体覆盖）", key, previous, cleaned);
         }
         return null;
+    }
+
+    /**
+     * 删域时清理：摘掉这些域的模型绑定。
+     *
+     * <p>不清理的话，绑定会变成孤儿 —— 同路径域将来重建时会沿链<b>静默继承</b>旧绑定。</p>
+     */
+    public synchronized void unbindDomains(Collection<String> domains) {
+        if (domains == null || domains.isEmpty()) {
+            return;
+        }
+        Set<String> toRemove = new LinkedHashSet<>(domains);
+        ModelProfileSettings next = copyOf(settings);
+        boolean changed = next.getDomainBindings().keySet().removeIf(toRemove::contains);
+        if (changed) {
+            persist(next);
+            log.info("[模型档案] 已清理 {} 个被删域的模型绑定", toRemove.size());
+        }
     }
 
     /** 去空白、去重、保序 */

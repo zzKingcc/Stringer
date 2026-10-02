@@ -60,4 +60,25 @@ class ToolProfileRetentionTest {
         assertTrue(domains.contains("default.sales.order"));
         assertEquals(DomainRegistry.Source.DERIVED, domains.sourceOf("default.sales"));
     }
+
+    /**
+     * 显式删域时要把声明记录一并摘掉：否则被删的域会一直留在"域全集"里
+     * （两个清单端点照旧列出它，但它已经不在域树里、也删不掉）。
+     */
+    @Test
+    void forgetProfilesRemovesDeletedDomainsFromKnownSet() {
+        registry.register(tool("local_tool", "stringer", List.of("default.ops")));
+        registry.replaceInstanceTools("i1", "http://10.0.0.5:8081/invoke",
+                List.of(tool("remote_tool", "remote://i1", List.of("default.finance"))));
+
+        // 工具下线后域仍在（这是有意的保留语义）
+        registry.removeInstance("i1");
+        assertTrue(registry.knownProfiles().contains("default.finance"));
+
+        // 显式删域则把它从保留集合里摘掉
+        registry.forgetProfiles(List.of("default.finance"));
+
+        assertFalse(registry.knownProfiles().contains("default.finance"), "被删的域不该再出现在域全集里");
+        assertTrue(registry.knownProfiles().contains("default.ops"), "其它域不受影响");
+    }
 }

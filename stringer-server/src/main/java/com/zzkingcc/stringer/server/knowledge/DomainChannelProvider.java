@@ -14,6 +14,7 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -84,5 +85,21 @@ public class DomainChannelProvider implements CompositeRetriever.ChannelProvider
     private ContentRetriever keyword(String index) {
         return keywordCache.computeIfAbsent(index, name -> new KeywordMatchContentRetriever(
                 esClient, name, properties.getKeywordTopK(), properties.getMinimumShouldMatch()));
+    }
+
+    /**
+     * 删域时清理：失效这些索引对应的检索器缓存。
+     *
+     * <p>不失效的话，删除的索引还会被缓存里的旧检索器继续命中（ES 层报索引缺失），
+     * 且同路径域将来重建时会复用指向旧 mapping 的检索器。</p>
+     */
+    public void evictIndices(Collection<String> indexNames) {
+        if (indexNames == null || indexNames.isEmpty()) {
+            return;
+        }
+        for (String index : indexNames) {
+            vectorCache.remove(index);
+            keywordCache.remove(index);
+        }
     }
 }

@@ -347,8 +347,10 @@
 
     function deleteDomain(id) {
         var ok = confirm('确认删除域 ' + id + '？\n\n'
+            + '· 会递归删除它的全部子域\n'
             + '· 绑定该域的调用方会在启动校验或首次调用时报「域不存在」\n'
-            + '· 该域的提示词配置不会被自动清理');
+            + '· 该域及其子域的知识库索引与切片预览文件会被删除\n'
+            + '· 该域及其子域的提示词、模型绑定、工具声明记录会一并清理');
         if (!ok) { return; }
         Console.jsonRequest('/admin/domains/' + encodeURIComponent(id), 'DELETE')
             .then(function (r) {

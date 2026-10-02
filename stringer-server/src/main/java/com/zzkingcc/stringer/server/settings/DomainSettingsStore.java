@@ -70,6 +70,24 @@ public class DomainSettingsStore {
         }
     }
 
+    /**
+     * 删域时清理：移除这些域的提示词片段。
+     *
+     * <p>不清理的话，键会变成孤儿 —— 同路径域将来重建时会<b>静默复活</b>旧提示词。</p>
+     */
+    public void removePrompts(java.util.Collection<String> domains) {
+        if (domains == null || domains.isEmpty()) {
+            return;
+        }
+        DomainSettings settings = load();
+        boolean changed = settings.getPrompts().keySet()
+                .removeIf(domain -> domains.contains(domain));
+        if (changed) {
+            save(settings);
+            log.info("[域提示词] 已清理 {} 个被删域的提示词片段", domains.size());
+        }
+    }
+
     /** 设置文件路径（供管控台展示，便于运维确认落盘位置） */
     public String filePath() {
         return settingsFile.toAbsolutePath().toString();

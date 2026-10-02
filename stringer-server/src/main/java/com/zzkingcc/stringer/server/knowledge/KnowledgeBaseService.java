@@ -213,6 +213,9 @@ public class KnowledgeBaseService {
                 continue;
             }
             String index = KbIndexes.nameOf(domain.trim());
+            // 先删切片预览文件（含文档全文）再删索引：否则 ES 一删，docId 清单就没了着落，
+            // 预览目录里会留下带着完整知识内容的孤儿 txt
+            deleteExportFiles(index);
             if (EsIndexManager.deleteIndex(esClient, index)) {
                 storeCache.remove(index);
                 removed.add(domain.trim());
@@ -222,6 +225,36 @@ public class KnowledgeBaseService {
             log.info("[知识库] 已删除 {} 个域的索引：{}", removed.size(), removed);
         }
         return List.copyOf(removed);
+    }
+
+    /**
+     * 删除某索引前，先把该索引全部文档的切片预览文件清掉。
+     *
+     * <p>导出文件名里带 docId 短码，按 docId 匹配删除；查不到 / 删失败只告警，不阻断删索引。</p>
+     */
+    private void deleteExportFiles(String index) {
+        try {
+            SearchResponse<Map> resp = esClient.search(s -> s
+                            .index(index)
+                            .size(10_000)
+                            .source(src -> src.filter(f -> f.includes("metadata.doc_id"))),
+                    Map.class);
+            java.util.Set<String> docIds = new java.util.LinkedHashSet<>();
+            for (Hit<Map> hit : resp.hits().hits()) {
+                Object source = hit.source() == null ? null : hit.source().get("metadata");
+                if (source instanceof Map<?, ?> metadata && metadata.get("doc_id") != null) {
+                    docIds.add(String.valueOf(metadata.get("doc_id")));
+                }
+            }
+            for (String docId : docIds) {
+                chunkExporter.deleteByDocId(docId);
+            }
+            if (!docIds.isEmpty()) {
+                log.info("[知识库] 删索引前已清理 {} 个文档的切片预览文件（索引 {}）", docIds.size(), index);
+            }
+        } catch (Exception e) {
+            log.warn("[知识库] 清理索引 {} 的切片预览文件失败（不阻断删索引）: {}", index, e.getMessage());
+        }
     }
 
     /**

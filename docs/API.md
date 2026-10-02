@@ -79,9 +79,9 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `sessionId` | String | 是 | 会话唯一键 |
+| `sessionId` | String | 是 | 会话唯一键（**域内唯一**：不同域可以用同一个 sessionId，服务端状态按 `(域, sessionId)` 隔离；不得含 `\|`） |
 | `message` | String | 是 | 用户消息 |
-| `profile` | String | 否 | 域（**完整路径**，如 `default.sales`）；为空时归一化为根域 `default`。走 SDK 则用 `StringerAgentFactory.forDomain(...)` 在绑定时确定域，根本传不出空值；该域不存在（10004）会被拒绝 |
+| `profile` | String | 否 | 域（**完整路径**，如 `default.sales`）；为空时归一化为根域 `default`。走 SDK 则用 `StringerAgentFactory.forDomain(...)` 在绑定时确定域，根本传不出空值；该域不存在（`10004`）或**不是可调用单元**（`10010`）都会被拒绝 |
 | `tenantId` | String | 否 | 审计字段，写入日志；不承担隔离职责 |
 | `userId` | String | 否 | 同上 |
 | `attributes` | Map | 否 | 附加属性 |
@@ -94,17 +94,18 @@
 
 | 参数 | 位置 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `sessionId` | query | 是 | 会话键 |
+| `sessionId` | query | 是 | 会话键（域内唯一） |
 | `approved` | query | 是 | boolean，是否批准待执行动作 |
-| — | body | 是 | `CallerContext`，建议显式携带 `profile`；为空按根域 `default` 处理（与中断域不一致会被拒 30002）；可选 `tenantId`、`userId` |
+| — | body | 是 | `CallerContext`，建议显式携带 `profile`；为空按根域 `default` 处理 |
 
-约束：`profile` 必须与中断时一致，否则拒绝。响应同为 `text/event-stream`。
+约束：`profile` 必须与中断时一致 —— 断点存在键 `(域, sessionId)` 下，用别的域 resume **找不到断点**（`30001`）。响应同为 `text/event-stream`。
 
 ### 2.5 `POST /api/agent/stop/{sessionId}`
 
-| 参数 | 位置 | 必填 |
-| --- | --- | --- |
-| `sessionId` | path | 是 |
+| 参数 | 位置 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `sessionId` | path | 是 | 会话键（域内唯一） |
+| — | body | 否 | `CallerContext`；**停止必须带与 chat 相同的域**，省略按根域算（只能停根域上的会话） |
 
 响应：`{"code":0, "sessionId":"...", "stopRequested":true}`
 
@@ -156,7 +157,7 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `type` | String | 事件类型，见下表 |
-| `sessionId` | String | 会话键 |
+| `sessionId` | String | 会话键（域内唯一；事件里回显调用方声明的值） |
 | `content` | String | 主要载荷（文本或工具名），部分事件为 null |
 | `payload` | String | 附加载荷（JSON 字符串），部分事件为 null |
 | `code` | Integer | 错误码，仅 `ERROR` 非空 |
@@ -227,12 +228,25 @@
 | --- | --- | --- | --- |
 | GET | `/admin/tools` | — | 工具描述符列表 `ToolDescriptor` |
 | GET | `/admin/domains` | — | `stats{domainCount, toolCount, globalToolCount, approvalToolCount, missingPromptCount}`、`domains`、`globalTools`、`orphanPrompts`、`settingsFile` |
-| GET | `/admin/prompts` | — | `base`、`prompts`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
-| POST | `/admin/prompts` | body `DomainSettings`（可空） | `success`、`message`、`settingsFile` |
+| POST | `/admin/domains` | body `{id, callable?}` | 建域；`callable` 省略＝可调用单元。沿链补齐的**祖先一律是装配节点** |
+| PUT | `/admin/domains/{id}/callable` | body `{callable}` | 切换该域的角色（只影响这一个域，不向下传播） |
+| DELETE | `/admin/domains/{id}` | — | 递归删域：先删索引与切片预览文件，再清提示词 / 模型绑定 / 工具声明记录 / 检索器缓存，最后删域 |
+| GET | `/admin/prompts` | — | `base`、`prompts`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile`（编辑框里**只含已登记的域**） |
+| POST | `/admin/prompts` | body `DomainSettings`（可空） | `success`、`message`、`settingsFile`；含**未登记**的域键直接 400 |
+| GET | `/api/agent/domains` | — | **只返回可调用单元**：`domains`、`details[{id, source, toolCount, callable}]`、`fallback` |
 
 域是一棵树，标识是**从根域 `default` 出发的完整路径**。域有三个**来源**（`BUILTIN` 根域 / `MANUAL` 人工创建 / `DERIVED` 工具声明派生），**同级、不构成等级**；差异只在生命周期——`MANUAL` 落盘重启仍在，`DERIVED` 重启随声明重建。登记时沿链补齐缺失祖先，不留悬空节点；删除**递归**带走全部子孙，不向上提升，**只有根域不可删**。
 
-`10004` 只在「既非根域、又未被人工创建、也无任何工具声明过」的域上出现。每个域在响应里带 `source` / `sourceLabel` / `deletable` / `parentId` / `childrenCount`。
+域有两种**角色**，显式声明、互不传播：
+
+- **可调用单元**（`callable=true`）：能作为入口被调用，是"这一个 AI 切片"的入口；
+- **装配节点**（`callable=false`）：只把工具 / 提示词 / 模型绑定 / 知识传给后代，不能直接当入口。
+
+默认规则：被显式声明的那个域可调用，**沿链补齐出来的祖先一律不可调用**，根域恒可调用（空域会被归一化到它）；标记不沿链补齐。
+
+`10004`（域不存在）与 `10010`（域存在但不是可调用单元）**分开**：前者说明名字写错或没建域，后者说明把装配节点（父域）当成了入口。每个域在响应里带 `source` / `sourceLabel` / `deletable` / `parentId` / `childrenCount` / `directChildCount` / `hasChildren` / `callable`。
+
+写入口对域的要求：**工具 manifest / 本地 `@Tool(domains=...)` 校验格式**（非法整包拒绝或启动失败）；**知识库归属域 / 提示词 / 模型绑定必须已登记**（否则会为不存在的域建索引、落盘孤儿配置并被后代继承）。
 
 ### 4.4 在线实例
 
@@ -307,6 +321,7 @@
 | 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取 | 否 | 503 |
 | 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份 | 否 | 400 |
 | 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域。**当前实现中域为空会归一化为根域 `default`**，该码仅在根域缺失时出现（根域不可删除，故实际不触发；保留为理论码） | 否 | 400 |
+| 10010 | `DOMAIN_NOT_CALLABLE` | 该域不是可调用单元（装配节点不能当入口）。文案带出当前可调用集合与修法 | 否 | 400 |
 | 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | 是 | 429 |
 | 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试 | 是 | 429 |
 | 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试 | 是 | 503 |

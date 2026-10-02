@@ -57,6 +57,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -236,12 +237,37 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /**
+     * metadata 里携带本轮流式上下文的键名。
+     *
+     * <p>本轮的 {@link StreamContext} 必须<b>随图执行一路传下去</b>，绝不能在节点里按
+     * threadId 回查全局注册表：注册表里存的是"当前那一轮"，而节点跑的是"发起它的那一轮"。
+     * 两者在两个请求重叠时会不一致 —— 此时 A 的工具调用会被记到 B 的租户名下、
+     * A 的模型 token 会流进 B 的 SSE 流。这是跨租户串号，不是显示问题。</p>
+     */
+    private static final String CTX_METADATA_KEY = "stringer.streamContext";
+
+    /** 从图中取回本轮上下文；节点内只允许用这个方法取，禁止按 key 回查注册表 */
+    private StreamContext contextOf(RunnableConfig config) {
+        Optional<Object> carried = config.metadata(CTX_METADATA_KEY);
+        if (carried.isPresent() && carried.get() instanceof StreamContext ctx) {
+            return ctx;
+        }
+        // 兜底：仅用于图在编排器之外被直接驱动的情形（如测试）。
+        // 这里刻意告警而不是静默 —— 静默降级到"按 key 回查"正是本次要堵掉的串号来源。
+        StreamContext fallback = streamSinks.get(stateKeyOf(config));
+        log.warn("[Agent编排] 会话[{}] 图配置未携带本轮上下文，回退到按 key 查询注册表"
+                + "（若存在同一会话的重叠请求，可能取到别的轮次的上下文）", sessionIdOfKey(stateKeyOf(config)));
+        return fallback;
+    }
+
+    /**
      * agent 节点:调用流式模型,推送 TOKEN 事件,返回 AiMessage 到状态
      */
     private Map<String, Object> agentNode(MessagesState<ChatMessage> state, RunnableConfig config) {
         String key = stateKeyOf(config);
         String sessionId = sessionIdOfKey(key);
-        StreamContext context = streamSinks.get(key);
+        // 取本轮上下文，而不是按 key 回查注册表：见 contextOf 的说明
+        StreamContext context = contextOf(config);
         AtomicInteger llmOutputTokens = new AtomicInteger(0);
 
         // 按本轮所处的域过滤工具集：只有声明了该域（或未声明任何域）的工具才会出现在模型视野里。
@@ -324,7 +350,7 @@ public class AgentOrchestrationService implements AgentService {
     private Map<String, Object> toolsNode(MessagesState<ChatMessage> state, RunnableConfig config) {
         String key = stateKeyOf(config);
         String sessionId = sessionIdOfKey(key);
-        StreamContext context = streamSinks.get(key);
+        StreamContext context = contextOf(config);
 
         var lastMessage = state.lastMessage()
                 .orElseThrow(() -> new IllegalStateException("消息列表为空"));
@@ -413,7 +439,7 @@ public class AgentOrchestrationService implements AgentService {
 
             String key = stateKeyOf(config);
             String sessionId = sessionIdOfKey(key);
-            StreamContext context = streamSinks.get(key);
+            StreamContext context = contextOf(config);
             // 与 agentNode 使用同一份域、同一份过滤条件，保证"模型可见工具集"与"路由判断"一致
             Set<String> approvalTools = toolRouter.getToolsRequiringApproval(
                     context == null ? null : context.profile());
@@ -647,6 +673,7 @@ public class AgentOrchestrationService implements AgentService {
 
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(key)
+                    .addMetadata(CTX_METADATA_KEY, context)
                     .build();
 
             log.info("[Agent编排] 会话[{}] traceId={} 开始图编排,消息数={}",
@@ -764,6 +791,8 @@ public class AgentOrchestrationService implements AgentService {
 
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(key)
+                    // 同 runOrchestrate：resume 恢复出的图执行同样必须绑定"发起它的那一轮"
+                    .addMetadata(CTX_METADATA_KEY, context)
                     .build();
 
             var snapshot = compiledGraph.stateOf(config);

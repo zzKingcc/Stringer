@@ -569,8 +569,13 @@ public class AgentOrchestrationService implements AgentService {
         if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排] 会话[{}] 正在执行中，拒绝并发请求（如需重开请先 stop 并等其结束）", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
-            context.complete();
+            // 顺序是硬要求：**先注销再 complete**。complete() 会同步触发 sink.onDispose，
+            // 而 onDispose 里要靠 isCurrent 判断"这是不是我这一轮"——注销在前，它就判 false，
+            // 不会把"停止标志"打到别人身上。反过来（先 complete）的话，被拒绝的这一轮
+            // 会亲手把正在正常执行的那一轮置为停止：它的回答被回滚、事件被丢弃，
+            // 而被拒绝的请求只是拿到一个本该给别人的 SESSION_BUSY。
             streamSinks.unregister(key, context);
+            context.complete();
             return;
         }
 
@@ -746,8 +751,9 @@ public class AgentOrchestrationService implements AgentService {
         if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排-resume] 会话[{}] 正在执行中，拒绝并发 resume", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
-            context.complete();
+            // 同 orchestrate 的 busy 分支：先注销再 complete，否则会误停正在跑的那一轮
             streamSinks.unregister(key, context);
+            context.complete();
             return;
         }
         cancellationRegistry.clear(key);

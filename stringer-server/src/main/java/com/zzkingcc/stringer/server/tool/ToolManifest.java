@@ -1,6 +1,7 @@
 package com.zzkingcc.stringer.server.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
@@ -120,7 +121,7 @@ public final class ToolManifest {
                 entry.path("idempotent").asBoolean(true),
                 entry.path("toModel").asBoolean(true),
                 List.copyOf(params),
-                domains(entry.path("domains")),
+                domains(entry.path("domains"), name),
                 approval(entry),
                 // source 只作来源标识与排障，不参与路由（路由永远看地址列表）
                 "remote://" + instanceId + "@" + endpoint);
@@ -164,9 +165,23 @@ public final class ToolManifest {
         return Tool.Effect.READ;
     }
 
-    /** 域：去空白 + 去重 + 剔空（与注解扫描同规则——同名即同域，前后空格会造成静默分裂） */
-    private static List<String> domains(JsonNode node) {
-        return textList(node).stream().map(String::trim).distinct().toList();
+    /**
+     * 域：去空白 + 去重 + 剔空，并<b>校验路径合法性</b>；非法域直接拒绝整包注册。
+     *
+     * <p>为什么不能像以前那样只 warn 放过：这些字符串会进 {@code declaredProfiles} 并让入口放行，
+     * 等于让外部报文凭空造出一个"可用的域"。空列表是合法的（= 挂根域）。</p>
+     */
+    private static List<String> domains(JsonNode node, String toolName) {
+        List<String> domains = textList(node).stream().map(String::trim).distinct().toList();
+        for (String domain : domains) {
+            String reason = Domains.validatePath(domain);
+            if (reason != null) {
+                throw new IllegalArgumentException("工具 " + toolName + " 声明的域 '" + domain
+                        + "' 不合法（" + reason + "）；须为从 " + Domains.DEFAULT
+                        + " 出发的完整路径，如 default.sales");
+            }
+        }
+        return domains;
     }
 
     /**

@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -22,20 +23,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 管理面：域的创建与删除。
+ * 管理面：域的创建、可调用性切换与删除。
  *
- * <p>为什么需要它：域一直是由工具声明"顺带"产生的，于是"先建域、再启动应用"这件事做不到 ——
- * 一个还没有任何工具的新场景没法先把域建出来。有了创建入口，域成为可独立存在的实体。</p>
+ * <p>域有两种角色，由 {@code callable} 显式区分：</p>
+ * <ul>
+ *   <li><b>可调用单元</b>（{@code callable=true}）：能作为入口被调用，是"这一个 AI 切片"的入口；</li>
+ *   <li><b>装配节点</b>（{@code callable=false}）：只负责把工具 / 提示词 / 模型绑定 / 知识传给后代，不能直接调。</li>
+ * </ul>
+ *
+ * <p>为什么必须显式：可调用性曾经由"是否登记过"隐式决定，于是父域也能当入口；而"有没有子域"
+ * 是随时会变的派生事实 —— 拿它当判据会在新增子域时静默改变调用方的可用性。</p>
  *
  * <p>删除的边界：<b>只有根域不可删</b>。删除是<b>递归</b>的 —— 该域的全部子孙一并带走，
- * 不向上提升层级。三种来源（人工 / 工具派生）在删除规则上同级，不区分对待；
- * 派生域删后重启会随工具声明重建，那是它生命周期的固有结果，不另加限制。</p>
- *
- * <p>域标识是<b>从根域出发的完整路径</b>（{@code default.sales.order}）；链上缺失的祖先会一并建出，
- * 因此不会留下悬空节点。</p>
- *
- * <p>删除前会<b>先删知识库索引</b>：一域一索引，待删域及其子孙各自的索引一并删掉；
- * 删不干净就拒绝删域。顺序不能反 —— 域先没了，那些索引就成了没人认领的孤儿。</p>
+ * 不向上提升层级；删除前会先删知识库索引，删不干净就拒绝删域。</p>
  *
  * <p>路径在 {@code /admin/**} 之下，鉴权由凭证拦截器统一处理。</p>
  *
@@ -58,23 +58,46 @@ public class AdminDomainController {
     }
 
     /**
-     * 创建域（完整路径；链上缺失的祖先一并建出）。
+     * 创建域（完整路径；链上缺失的祖先一并建出，祖先一律是装配节点）。
      *
      * @param body {@code id} 域标识，须为从 {@code default} 出发的完整路径，
-     *             单段只允许字母 / 数字 / 下划线 / 连字符，自身链上不得重复段
+     *             单段只允许字母 / 数字 / 下划线 / 连字符，自身链上不得重复段；
+     *             {@code callable} 省略时按"可调用单元"创建
      */
     @PostMapping("/admin/domains")
     public Map<String, Object> create(@RequestBody CreateBody body) {
         if (body == null || body.getId() == null || body.getId().isBlank()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "域标识不能为空");
         }
-        DomainRegistry.CreateResult created = domainRegistry.create(body.getId());
+        boolean callable = body.getCallable() == null || body.getCallable();
+        DomainRegistry.CreateResult created = domainRegistry.create(body.getId(), callable);
         if (!created.created()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, created.reason());
         }
-        domainStore.saveManualDomains(domainRegistry.manualIds());
-        log.info("[域管理] 已创建域 {}（来源 MANUAL）", body.getId().trim());
+        domainStore.saveDeclarations(domainRegistry.manualConfig());
+        log.info("[域管理] 已创建域 {}（来源 MANUAL，可调用={}）", body.getId().trim(), callable);
         return view("created", body.getId().trim(), List.of());
+    }
+
+    /**
+     * 切换某个域的可调用性。
+     *
+     * <p>只影响这一个域，不向下传播；切回可调用后，以它为入口的调用立即恢复。</p>
+     *
+     * @param body {@code callable} 目标值
+     */
+    @PutMapping("/admin/domains/{id}/callable")
+    public Map<String, Object> setCallable(@PathVariable("id") String id,
+                                           @RequestBody(required = false) CallableBody body) {
+        if (body == null || body.getCallable() == null) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, "缺少 callable（true=可调用单元，false=装配节点）");
+        }
+        String normalized = Domains.normalize(id);
+        if (!domainRegistry.setCallable(normalized, body.getCallable())) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, "域不存在：" + normalized);
+        }
+        domainStore.saveDeclarations(domainRegistry.manualConfig());
+        return view("callable", normalized, List.of());
     }
 
     /**
@@ -113,7 +136,7 @@ public class AdminDomainController {
         if (!deleted.deleted()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, deleted.reason());
         }
-        domainStore.saveManualDomains(domainRegistry.manualIds());
+        domainStore.saveDeclarations(domainRegistry.manualConfig());
         log.info("[域管理] 已删除域 {} 及其子孙 {}；连带删除知识库索引 {} 个（域 {}）",
                 normalized, deleted.removed(), removedIndices.size(), removedIndices);
         return view("deleted", normalized, deleted.removed(), removedIndices);
@@ -131,6 +154,7 @@ public class AdminDomainController {
         result.put("removed", removed);
         result.put("removedIndices", removedIndices);
         result.put("manualDomains", domainRegistry.manualIds());
+        result.put("callableDomains", domainRegistry.callableIds());
         result.put("settingsFile", domainStore.filePath());
         return result;
     }
@@ -144,5 +168,15 @@ public class AdminDomainController {
     public static class CreateBody {
         /** 域标识 */
         private String id;
+
+        /** 是否建为可调用单元；省略 = true */
+        private Boolean callable;
+    }
+
+    /** 可调用性切换请求体 */
+    @Data
+    public static class CallableBody {
+        /** true=可调用单元，false=装配节点 */
+        private Boolean callable;
     }
 }

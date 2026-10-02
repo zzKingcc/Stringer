@@ -46,9 +46,11 @@ public class DomainRegistry {
      * @param id        完整路径标识
      * @param parentId  父域标识（根域为 {@code null}）
      * @param source    来源
+     * @param callable  是否为<b>可调用单元</b>：只有它为 {@code true} 的域能作为入口被调用，
+     *                  其余是<b>装配节点</b>（供后代继承工具 / 提示词 / 模型绑定 / 知识）
      * @param createdAt 创建时间戳（毫秒）
      */
-    public record Domain(String id, String parentId, Source source, long createdAt) {
+    public record Domain(String id, String parentId, Source source, boolean callable, long createdAt) {
     }
 
     /** 创建结果 */
@@ -100,39 +102,70 @@ public class DomainRegistry {
 
     private final Map<String, Domain> domains = new ConcurrentHashMap<>();
 
+    /**
+     * 被<b>显式声明过可调用性</b>的域 → 该值（落盘用）。
+     *
+     * <p>与 {@code domains} 的区别：沿链补齐出来的祖先、以及工具声明派生出来的域都不在这里 ——
+     * 它们的可调用性由创建路径的默认值决定（祖先不可调用、被声明的域可调用），重启后可按同样的
+     * 规则重建，不需要落盘。只有"人点过"的决定才需要持久化。</p>
+     */
+    private final Map<String, Boolean> explicitCallable = new ConcurrentHashMap<>();
+
     public DomainRegistry() {
+        // 根域恒为可调用：调用方不传域时会被归一化到它，若它不可调用会让"不传域"直接变成硬错误
         domains.put(Domains.DEFAULT,
-                new Domain(Domains.DEFAULT, null, Source.BUILTIN, System.currentTimeMillis()));
+                new Domain(Domains.DEFAULT, null, Source.BUILTIN, true, System.currentTimeMillis()));
     }
 
     // ==================== 登记 ====================
 
     /**
-     * 载入管控台创建的域（启动期从落盘恢复），按 {@link Source#MANUAL} 沿链补齐。
+     * 载入管控台声明的域（启动期从落盘恢复）。
+     *
+     * <p><b>只按条目显式给定的可调用性</b>；沿链补齐出来的祖先一律<b>不可调用</b>（装配节点），
+     * 因此"给 default.a.b 打标记"不会连带把 default 与 default.a 变成可调用单元。</p>
+     *
+     * <p>条目按路径长度升序处理：显式条目先落，避免某个条目在成为更深条目的祖先时被建成不可调用、
+     * 之后又因为"已存在即保留"而丢掉它自己声明的可调用性。</p>
      *
      * <p>非法路径只跳过并告警，不阻断启动。</p>
+     *
+     * @param callableById 域标识 → 是否可调用
      */
-    public void loadManual(Collection<String> ids) {
-        if (ids == null) {
+    public void loadManual(Map<String, Boolean> callableById) {
+        if (callableById == null || callableById.isEmpty()) {
             return;
         }
-        for (String id : ids) {
-            LinkResult linked = link(id, Source.MANUAL);
+        List<String> ordered = new ArrayList<>(callableById.keySet());
+        ordered.sort(Comparator.comparingInt(String::length));
+        for (String id : ordered) {
+            Boolean callable = callableById.get(id);
+            boolean effective = callable == null || callable;
+            LinkResult linked = link(id, Source.MANUAL, effective);
             if (!linked.ok()) {
                 log.warn("[域注册表] 落盘域 '{}' 非法（{}），已跳过。"
                                 + "域标识须为从 {} 出发的完整路径，如 default.sales",
                         id, linked.reason(), Domains.DEFAULT);
+                continue;
             }
+            explicitCallable.put(Domains.normalize(id), effective);
         }
     }
 
     /**
-     * 管控台创建域：按 {@link Source#MANUAL} 沿链补齐。
+     * 管控台创建域，默认建为<b>可调用单元</b>。
+     */
+    public CreateResult create(String domainId) {
+        return create(domainId, true);
+    }
+
+    /**
+     * 管控台创建域：目标域按 {@code callable} 落地，沿链补齐的祖先一律不可调用。
      *
      * @return 成功；或失败原因（路径非法 / 已存在）
      */
-    public CreateResult create(String domainId) {
-        LinkResult linked = link(domainId, Source.MANUAL);
+    public CreateResult create(String domainId, boolean callable) {
+        LinkResult linked = link(domainId, Source.MANUAL, callable);
         if (!linked.ok()) {
             return CreateResult.fail(linked.reason());
         }
@@ -140,8 +173,9 @@ public class DomainRegistry {
             return CreateResult.fail("域已存在：" + domainId.trim()
                     + "（来源 " + sourceOf(domainId) + "）");
         }
-        log.info("[域注册表] 已创建域 {}（新建节点 {}，来源 MANUAL）",
-                linked.domain(), linked.created());
+        log.info("[域注册表] 已创建域 {}（新建节点 {}，来源 MANUAL，可调用={}）",
+                linked.domain(), linked.created(), callable);
+        explicitCallable.put(Domains.normalize(domainId), callable);
         return CreateResult.ok();
     }
 
@@ -151,7 +185,7 @@ public class DomainRegistry {
      * <p>幂等 —— 重复声明同一个域不会改写它。</p>
      */
     public LinkResult ensureChain(String domainId) {
-        LinkResult linked = link(domainId, Source.DERIVED);
+        LinkResult linked = link(domainId, Source.DERIVED, true);
         if (linked.ok() && !linked.created().isEmpty()) {
             log.info("[域注册表] 工具声明派生域 {}（新建节点 {}，来源 DERIVED）",
                     linked.domain(), linked.created());
@@ -175,23 +209,55 @@ public class DomainRegistry {
     }
 
     /**
-     * 沿链登记：路径上每一段都确保存在，缺失的按 {@code source} 建出，已存在的原样保留。
+     * 沿链登记：路径上每一段都确保存在，缺失的按 {@code source} 建出，已存在的原样保留
+     * （<b>不改它的 source，也不改它的 callable</b> —— 显式声明过的可调用性优先）。
+     *
+     * @param targetCallable 链尾那个<b>被显式声明</b>的域是否可调用；沿链补齐出来的祖先一律不可调用
      */
-    private synchronized LinkResult link(String domainId, Source source) {
+    private synchronized LinkResult link(String domainId, Source source, boolean targetCallable) {
         String reason = Domains.validatePath(domainId);
         if (reason != null) {
             return LinkResult.fail(reason);
         }
         String id = domainId.trim();
         List<String> created = new ArrayList<>();
-        for (String step : Domains.chainOf(id)) {
+        List<String> chain = Domains.chainOf(id);
+        for (int i = 0; i < chain.size(); i++) {
+            String step = chain.get(i);
             if (domains.containsKey(step)) {
                 continue;
             }
-            domains.put(step, new Domain(step, Domains.parentOf(step), source, System.currentTimeMillis()));
+            // 祖先只负责装配（供后代继承），只有链尾那个被显式声明的域才可能是可调用单元
+            boolean callable = targetCallable && i == chain.size() - 1;
+            domains.put(step, new Domain(step, Domains.parentOf(step), source, callable,
+                    System.currentTimeMillis()));
             created.add(step);
         }
         return LinkResult.ok(id, created);
+    }
+
+    /**
+     * 切换某个域的可调用性（管控台「域空间」页）。
+     *
+     * <p>只影响这一个域，<b>不向下传播</b>：后代各自有自己的开关。</p>
+     *
+     * @return {@code false} = 域不存在
+     */
+    public synchronized boolean setCallable(String domainId, boolean callable) {
+        String id = Domains.normalize(domainId);
+        Domain current = domains.get(id);
+        if (current == null) {
+            return false;
+        }
+        if (current.callable() == callable) {
+            explicitCallable.put(id, callable);
+            return true;
+        }
+        domains.put(id, new Domain(current.id(), current.parentId(), current.source(), callable,
+                current.createdAt()));
+        explicitCallable.put(id, callable);
+        log.info("[域注册表] 域 {} 的可调用性改为 {}", id, callable);
+        return true;
     }
 
     // ==================== 删除 ====================
@@ -222,6 +288,7 @@ public class DomainRegistry {
             }
         }
         removed.forEach(domains::remove);
+        removed.forEach(explicitCallable::remove);
         removed.sort(Comparator.naturalOrder());
         log.info("[域注册表] 已删除域 {} 及其 {} 个子孙 {}", id, removed.size() - 1, removed);
         return DeleteResult.ok(removed);
@@ -232,6 +299,42 @@ public class DomainRegistry {
     /** 该域是否已被登记 */
     public boolean contains(String domainId) {
         return domains.containsKey(Domains.normalize(domainId));
+    }
+
+    /**
+     * 该域是否为<b>可调用单元</b>（入口唯一判据：既已登记、又被标为可调用）。
+     *
+     * <p>未登记的域一律 {@code false} —— 判据只认注册表，不看"是否曾经被工具声明过"。</p>
+     */
+    public boolean isCallable(String domainId) {
+        Domain domain = domains.get(Domains.normalize(domainId));
+        return domain != null && domain.callable();
+    }
+
+    /** 全部可调用单元（供客户端清单与入口提示） */
+    public Set<String> callableIds() {
+        return domains.values().stream()
+                .filter(Domain::callable)
+                .map(Domain::id)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * 该域的<b>直接子域</b>（不含更深的后代），按标识排序。
+     */
+    public List<String> childrenOf(String domainId) {
+        String id = Domains.normalize(domainId);
+        return domains.values().stream()
+                .filter(d -> id.equals(d.parentId()))
+                .map(Domain::id)
+                .sorted()
+                .collect(Collectors.toList());
+    }
+
+    /** 该域是否有子域（用于"装配节点"提示与死节点校验） */
+    public boolean hasChildren(String domainId) {
+        String id = Domains.normalize(domainId);
+        return domains.values().stream().anyMatch(d -> id.equals(d.parentId()));
     }
 
     /** 已登记的域标识（全部来源） */
@@ -275,6 +378,19 @@ public class DomainRegistry {
                 .filter(d -> d.source() == Source.MANUAL)
                 .map(Domain::id)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * 需要落盘的域与其可调用性（只含<b>被显式声明过</b>的域），按标识排序。
+     *
+     * <p>派生域与沿链补齐的祖先不进这里 —— 它们的可调用性能按创建规则重建。</p>
+     */
+    public Map<String, Boolean> manualConfig() {
+        Map<String, Boolean> config = new java.util.LinkedHashMap<>();
+        explicitCallable.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(e -> config.put(e.getKey(), e.getValue()));
+        return config;
     }
 
 }

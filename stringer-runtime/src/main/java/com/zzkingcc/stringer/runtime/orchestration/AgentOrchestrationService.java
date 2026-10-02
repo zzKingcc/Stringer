@@ -441,19 +441,27 @@ public class AgentOrchestrationService implements AgentService {
     }
 
     /**
-     * 校验本轮调用方身份与域：缺身份拒绝；<b>域为空归一化为根域</b>；域不存在报错。
+     * 校验本轮调用方身份与域：缺身份拒绝；<b>域为空归一化为根域</b>；域不存在或不是可调用单元都拒绝。
+     *
+     * <p>可调用性是<b>显式声明</b>的（见 {@code DomainRegistry}）：父域可以只做装配
+     * （供后代继承工具 / 提示词 / 模型绑定 / 知识），由叶子当入口。</p>
      */
     private ProfileCheck checkProfile(CallerContext caller) {
         if (caller == null) {
             return ProfileCheck.fail(ErrorCode.CALLER_CONTEXT_REQUIRED,
                     "缺少调用方身份（CallerContext 必填：tenantId / userId / profile）");
         }
-        // 域为空 → 归一化为根域 default（根域不可删、恒存在），不再当作入参错误。
-        // 归一化不等于放宽 —— 根域之外的域仍须被登记过，否则照旧 10004。
+        // 域为空 → 归一化为根域 default（根域不可删、恒存在且恒为可调用单元），不再当作入参错误。
         String profile = Domains.normalize(caller.normalizedProfile());
-        if (!toolRouter.acceptsProfile(profile)) {
+        if (!toolRouter.getKnownProfiles().contains(profile)) {
             return ProfileCheck.fail(ErrorCode.PROFILE_NOT_FOUND,
-                    "域不存在: " + profile + "（已注册的域: " + toolRouter.getKnownProfiles() + "）");
+                    "域不存在: " + profile + "（已登记的域: " + toolRouter.getKnownProfiles() + "）");
+        }
+        if (!toolRouter.isCallableDomain(profile)) {
+            return ProfileCheck.fail(ErrorCode.DOMAIN_NOT_CALLABLE,
+                    "域 " + profile + " 不是可调用单元：它只做装配（供后代继承工具 / 提示词 / 模型 / 知识），"
+                            + "不能直接作为入口。可调用的域: " + toolRouter.getCallableProfiles()
+                            + "；如需让它可调用，请在管控台「域空间」把它标记为可调用");
         }
         return ProfileCheck.OK;
     }

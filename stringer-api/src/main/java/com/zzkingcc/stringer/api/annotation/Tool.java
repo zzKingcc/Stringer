@@ -17,9 +17,9 @@ import java.lang.annotation.Target;
  * @Tool(desc = "按订单号查询订单状态。用户追问发货/物流时调用")
  * public OrderVO queryOrder(String orderNo) { ... }
  *
- * // 带治理与归属
+ * // 带治理与归属（域必须是从根域 default 出发的完整路径）
  * @Tool(desc = "按订单号退款。仅在用户明确要求退款时调用",
- *       domains = {"admin"}, effect = Tool.Effect.WRITE,
+ *       domains = {"default.admin"}, effect = Tool.Effect.WRITE,
  *       approval = Tool.Approval.ALWAYS, approvalReason = "退款需人工确认")
  * public String refundOrder(@ToolParam("订单号") String orderNo,
  *                           @ToolParam("退款金额，单位：元") BigDecimal amount) { ... }

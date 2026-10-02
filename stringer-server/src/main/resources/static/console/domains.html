@@ -33,13 +33,19 @@
             <div class="head-line">
                 <div>
                     <h2>域空间</h2>
-                    <p>一个域一张卡片：配置它可调用哪些模型、能看到哪些工具。新建的域默认<b>无可调用模型</b>，需显式指定。</p>
+                    <p>一个域一张卡片：配置它可调用哪些模型、能看到哪些工具。域有两种角色：
+                        <b>可调用单元</b>（能作为入口被调用）与<b>装配节点</b>（只把工具 / 提示词 / 模型 / 知识传给后代）。
+                        新建的域默认<b>无可调用模型</b>，需显式指定。</p>
                 </div>
                 <span class="count-badge" id="domainCount">—</span>
             </div>
             <div class="actions">
                 <input type="text" id="newDomain" placeholder="完整路径域，如 default.customer-service"
                        style="width:240px; font-family:ui-monospace,Consolas,monospace;">
+                <label class="card-note" style="display:inline-flex; align-items:center; gap:4px;"
+                       title="勾选=可调用单元（能作为入口）；不勾选=只做装配，供后代继承工具 / 提示词 / 模型 / 知识">
+                    <input type="checkbox" id="newDomainCallable" checked> 可调用
+                </label>
                 <button id="createDomainBtn">新建域</button>
                 <button class="ghost" id="refreshBtn">重新读取</button>
             </div>
@@ -208,14 +214,25 @@
                 +   DOM_ICON
                 +   '<h2 class="mono">' + esc(d.name) + '</h2>'
                 +   sourceTag(d)
+                +   (d.callable
+                        ? '<span class="tag read" title="可调用单元：能作为入口被调用">可调用</span>'
+                        : '<span class="tag approval" title="装配节点：只把工具 / 提示词 / 模型 / 知识传给后代，不能直接当入口">装配节点</span>')
                 +   '<span class="spacer"></span>'
                 +   '<span class="card-note">工具 ' + num(d.toolCount) + ' · 需确认 '
                 +     num(d.approvalCount) + '</span>'
+                +   '<button class="ghost" data-callable="' + esc(d.name) + '" data-to="'
+                +     (d.callable ? 'false' : 'true') + '">'
+                +     (d.callable ? '设为装配节点' : '设为可调用') + '</button>'
                 +   '<button class="ghost" data-cfg="' + esc(d.name) + '">配置模型</button>'
                 +   (d.deletable
                         ? '<button class="ghost" data-del="' + esc(d.name) + '">删除</button>'
                         : '')
                 + '</header>'
+                + (d.callable && d.hasChildren
+                        ? '<div class="card-note" style="margin-top:6px;">'
+                          + '提示：该域已经有子域。若它只负责给后代配工具 / 提示词 / 模型，'
+                          + '建议设为<b>装配节点</b>，避免调用方误把它当入口。</div>'
+                        : '')
                 + '<div class="model-meta">'
                 +   '<div><span class="k">可调用模型</span>' + boundTags + '</div>'
                 +   '<div><span class="k">提示词</span>'
@@ -231,6 +248,12 @@
 
         box.querySelectorAll('button[data-cfg]').forEach(function (b) {
             b.addEventListener('click', function () { openBind(b.getAttribute('data-cfg')); });
+        });
+        box.querySelectorAll('button[data-callable]').forEach(function (b) {
+            b.addEventListener('click', function () {
+                toggleCallable(b.getAttribute('data-callable'),
+                    b.getAttribute('data-to') === 'true');
+            });
         });
         box.querySelectorAll('button[data-del]').forEach(function (b) {
             b.addEventListener('click', function () { deleteDomain(b.getAttribute('data-del')); });
@@ -296,13 +319,30 @@
         var input = document.getElementById('newDomain');
         var id = (input.value || '').trim();
         if (!id) { alert('请先填写域标识'); input.focus(); return; }
-        Console.jsonRequest('/admin/domains', 'POST', { id: id })
+        var callable = document.getElementById('newDomainCallable').checked;
+        Console.jsonRequest('/admin/domains', 'POST', { id: id, callable: callable })
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '创建失败'); }
                 input.value = '';
                 load();
             })
             .catch(function (e) { alert('创建失败：' + e.message); });
+    }
+
+    /* 切换可调用性：只影响这一个域，不向下传播 */
+    function toggleCallable(id, callable) {
+        var tip = callable
+            ? '把 ' + id + ' 设为可调用单元？之后它可以作为入口被调用。'
+            : '把 ' + id + ' 设为装配节点？之后它不能再作为入口，'
+                + '只给后代提供工具 / 提示词 / 模型 / 知识。';
+        if (!confirm(tip)) { return; }
+        Console.jsonRequest('/admin/domains/' + encodeURIComponent(id) + '/callable', 'PUT',
+                            { callable: callable })
+            .then(function (r) {
+                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '切换失败'); }
+                load();
+            })
+            .catch(function (e) { alert('切换失败：' + e.message); });
     }
 
     function deleteDomain(id) {

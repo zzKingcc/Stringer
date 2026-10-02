@@ -1,7 +1,9 @@
 package com.zzkingcc.stringer.server.controller;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.BaseException;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.server.model.ModelProbe;
 import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
@@ -53,15 +55,19 @@ public class AdminModelProfileController {
     private final ModelProfileStore store;
     private final LlmModelHolder holder;
     private final ModelProbe probe;
+    /** 域注册表：绑定只能指向已登记的域（否则绑定会变成永远不生效的孤儿） */
+    private final DomainRegistry domainRegistry;
 
     public AdminModelProfileController(ModelProfileRegistry registry,
                                        ModelProfileStore store,
                                        LlmModelHolder holder,
-                                       ModelProbe probe) {
+                                       ModelProbe probe,
+                                       DomainRegistry domainRegistry) {
         this.registry = registry;
         this.store = store;
         this.holder = holder;
         this.probe = probe;
+        this.domainRegistry = domainRegistry;
     }
 
     /**
@@ -224,6 +230,14 @@ public class AdminModelProfileController {
     public Map<String, Object> bind(@PathVariable("domain") String domain,
                                     @RequestBody(required = false) BindBody body) {
         List<String> aliases = body == null ? null : body.getAliases();
+        // 绑定是"域 → 模型"的写入入口，域必须在注册表里：
+        // 否则会为树里不存在的域落盘一条绑定，并被它的后代域沿链继承（静默生效）
+        String normalized = Domains.normalize(domain);
+        if (!domainRegistry.contains(normalized)) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER,
+                    "域不存在：" + normalized + "（已登记的域: " + domainRegistry.ids() + "）；"
+                            + "请先在「域空间」创建该域，或把绑定写到它的祖先域上由后代继承");
+        }
         String failure = registry.bind(domain, aliases);
         if (failure != null) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);

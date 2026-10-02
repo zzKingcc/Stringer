@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.runtime.tool;
 
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.annotation.ToolDomains;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
@@ -128,6 +129,9 @@ public final class AnnotatedToolScanner {
      *
      * <p>这里<b>不</b>在留空时回填根域：留空本身有语义（挂根域、全树可见），由
      * {@link ToolDescriptor#declaredDomains()} 统一解释，避免两处判断各说各话。</p>
+     *
+     * <p>声明了就必须是<b>合法完整路径</b>：非法直接中断启动。以前只告警跳过，
+     * 结果是这个字符串照样进"已声明域"集合、让入口放行，等于凭空造出一个可用的域。</p>
      */
     private static List<String> resolveDomains(Class<?> declaringClass, Tool tool) {
         String[] raw = tool.domains().length > 0 ? tool.domains() : null;
@@ -140,11 +144,19 @@ public final class AnnotatedToolScanner {
         if (raw == null || raw.length == 0) {
             return List.of();
         }
-        return Arrays.stream(raw)
+        List<String> domains = Arrays.stream(raw)
                 .filter(p -> p != null && !p.isBlank())
                 .map(String::trim)
                 .distinct()
                 .toList();
+        for (String domain : domains) {
+            String reason = Domains.validatePath(domain);
+            if (reason != null) {
+                throw new IllegalStateException("@Tool(domains = {\"" + domain + "\"}) 不合法（" + reason
+                        + "）：域标识须为从 " + Domains.DEFAULT + " 出发的完整路径，如 default.sales");
+            }
+        }
+        return domains;
     }
 
     private static String firstNonBlank(String... candidates) {

@@ -75,12 +75,33 @@ public class ToolRouter {
     }
 
     /**
-     * 全部已知域 —— 注册表登记的内置与人工域 ∪ 工具声明派生的域（含"被声明过、此刻已无工具"的域）。
+     * 域<b>全集</b> —— 注册表登记的域 ∪ 工具声明派生过的域（含"被声明过、此刻已无工具"的域）。
+     *
+     * <p>口径是"出现过"，因此它<b>只适合展示与排障</b>（管控台域空间、提示词页、启动自检）；
+     * 判断"能不能被调用"必须用 {@link #isCallableDomain(String)}。</p>
      */
     public Set<String> getKnownProfiles() {
         Set<String> all = new LinkedHashSet<>(domainRegistry.ids());
         all.addAll(registry.knownProfiles());
         return Set.copyOf(all);
+    }
+
+    /**
+     * 域<b>可调用集</b> —— 入口唯一认可的域集合（显式标记为可调用单元的域）。
+     *
+     * <p>不含"仅被工具声明过"的域，也不含装配节点：父域可以只做装配，由叶子当入口。</p>
+     */
+    public Set<String> getCallableProfiles() {
+        return domainRegistry.callableIds();
+    }
+
+    /**
+     * 该域是否是<b>可调用单元</b>（入口判据）。
+     *
+     * <p>只认注册表里显式声明的可调用性；根域恒为可调用。</p>
+     */
+    public boolean isCallableDomain(String profile) {
+        return domainRegistry.isCallable(profile);
     }
 
     /**
@@ -91,10 +112,10 @@ public class ToolRouter {
     }
 
     /**
-     * 域是否可以被使用（入口层 fail-fast 的判据）。
+     * 域是否<b>已被登记或声明过</b>（域全集判据）。
      *
-     * <p>域可来自两处：注册表里内置或人工登记的域，或工具声明派生的域。任一处存在即放行 ——
-     * 因此"先把域建出来、再让应用启动"与"工具声明即产生域"两种用法都成立。</p>
+     * <p>入口<b>不用它</b>：入口用 {@link #isCallableDomain(String)}。这里保留是因为
+     * "曾经被工具声明过"对展示、排障、以及"域不该随工具断开而消失"的历史语义仍然有意义。</p>
      */
     public boolean acceptsProfile(String profile) {
         return domainRegistry.contains(profile) || registry.acceptsProfile(profile);

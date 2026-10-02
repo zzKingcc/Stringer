@@ -5,7 +5,10 @@ import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.ToolDescriptor;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -222,10 +225,99 @@ class DomainSemanticsTest {
     @Test
     void illegalPersistedDomainsAreSkipped() {
         DomainRegistry registry = new DomainRegistry();
-        registry.loadManual(List.of("*", "legacy-short-name", "default.kept"));
+        Map<String, Boolean> stored = new LinkedHashMap<>();
+        stored.put("*", true);
+        stored.put("legacy-short-name", true);
+        stored.put("default.kept", true);
+        registry.loadManual(stored);
 
         assertFalse(registry.contains("*"), "落盘里的通配符不应被当成域");
         assertFalse(registry.contains("legacy-short-name"), "非完整路径的存量域应被跳过");
         assertTrue(registry.contains("default.kept"));
+    }
+
+    // ==================== 可调用单元 ====================
+
+    @Test
+    void onlyExplicitlyDeclaredDomainsAreCallable() {
+        DomainRegistry registry = new DomainRegistry();
+
+        // 根域恒可调用：不传域会被归一化到它
+        assertTrue(registry.isCallable(Domains.DEFAULT));
+
+        registry.create("default.sales.order");
+
+        assertTrue(registry.isCallable("default.sales.order"), "被显式创建的域是可调用单元");
+        assertFalse(registry.isCallable("default.sales"), "沿链补齐的祖先只做装配");
+    }
+
+    @Test
+    void toolDeclaredDomainIsCallableButItsAncestorsAreNot() {
+        DomainRegistry registry = new DomainRegistry();
+
+        registry.ensureChain("default.sales.order");
+
+        assertTrue(registry.isCallable("default.sales.order"), "工具显式声明的那个域可以当入口");
+        assertFalse(registry.isCallable("default.sales"), "派生出来的祖先只做装配");
+    }
+
+    @Test
+    void callableSwitchDoesNotPropagate() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales.order");
+
+        assertTrue(registry.setCallable("default.sales.order", false));
+        assertFalse(registry.isCallable("default.sales.order"));
+        assertFalse(registry.setCallable("default.ghost", false), "域不存在时切换失败");
+    }
+
+    @Test
+    void callableIsNotInheritedFromAncestors() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales");
+
+        registry.ensureChain("default.sales.order");
+
+        assertTrue(registry.isCallable("default.sales"));
+        assertTrue(registry.isCallable("default.sales.order"));
+        assertEquals(Set.of(Domains.DEFAULT, "default.sales", "default.sales.order"),
+                registry.callableIds(), "可调用集是逐域显式声明的集合");
+    }
+
+    @Test
+    void childrenAndDescendantsAreDifferentQuestions() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales.order.refund");
+
+        assertEquals(List.of("default.sales"), registry.childrenOf(Domains.DEFAULT));
+        assertEquals(List.of("default.sales.order"), registry.childrenOf("default.sales"));
+        assertTrue(registry.hasChildren("default.sales"));
+        assertFalse(registry.hasChildren("default.sales.order.refund"));
+        assertEquals(2, registry.descendantsOf("default.sales").size(), "后代含更深层级");
+    }
+
+    @Test
+    void manualConfigOnlyKeepsExplicitDecisions() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales.order");
+        registry.ensureChain("default.fromTool");
+
+        Map<String, Boolean> config = registry.manualConfig();
+
+        assertTrue(config.containsKey("default.sales.order"), "显式创建的域要落盘");
+        assertFalse(config.containsKey("default.sales"), "沿链补齐的祖先不落盘");
+        assertFalse(config.containsKey("default.fromTool"), "派生域不落盘，重启后由工具声明重建");
+        assertTrue(config.get("default.sales.order"));
+    }
+
+    @Test
+    void deletingADomainForgetsItsCallableDeclaration() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales");
+        assertEquals(1, registry.manualConfig().size());
+
+        registry.delete("default.sales");
+
+        assertFalse(registry.manualConfig().containsKey("default.sales"));
     }
 }

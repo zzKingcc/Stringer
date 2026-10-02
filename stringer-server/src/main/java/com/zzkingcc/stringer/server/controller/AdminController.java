@@ -624,6 +624,11 @@ public class AdminController {
             d.put("deletable", !DomainRegistry.Source.BUILTIN.name().equals(source));
             d.put("parentId", Domains.parentOf(domain));
             d.put("childrenCount", domainRegistry.descendantsOf(domain).size());
+            // 直接子域数（childrenCount 是全部后代，两回事）
+            d.put("directChildCount", domainRegistry.childrenOf(domain).size());
+            d.put("hasChildren", domainRegistry.hasChildren(domain));
+            // 可调用单元 = 能当入口；装配节点只把工具 / 提示词 / 模型 / 知识传给后代
+            d.put("callable", domainRegistry.isCallable(domain));
             d.put("toolCount", tools.size());
             d.put("exclusiveToolCount", tools.stream()
                     .filter(t -> Boolean.TRUE.equals(t.get("exclusive"))).count());
@@ -1167,6 +1172,16 @@ public class AdminController {
     @PostMapping("/prompts")
     public Map<String, Object> savePrompts(@RequestBody(required = false) DomainSettings incoming) {
         DomainSettings toSave = normalize(incoming);
+        // 域必须已登记：提示词是域的属性，给树里不存在的域存片段只会变成永远不生效的孤儿
+        List<String> unknown = toSave.getPrompts().keySet().stream()
+                .filter(domain -> !domainRegistry.contains(domain))
+                .sorted()
+                .toList();
+        if (!unknown.isEmpty()) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER,
+                    "域不存在：" + unknown + "（已登记的域: " + domainRegistry.ids() + "）；"
+                            + "请先在「域空间」把这些域创建出来");
+        }
         log.info("[管控] 收到域提示词保存请求: {} 个域片段", toSave.getPrompts().size());
         Map<String, Object> result = new LinkedHashMap<>();
         try {
@@ -1222,6 +1237,10 @@ public class AdminController {
         for (String domain : toolRouter.getKnownProfiles()) {
             merged.putIfAbsent(domain, "");
         }
+        /* 编辑框里<b>不放未登记的域</b>：保存是整份覆盖，放进来等于让前端把孤儿键反复写回去，
+           而且保存入口现在会拒绝未登记的域 —— 留着它们会把整个页面卡在"保存失败"上。
+           孤儿键仍然通过 orphanPrompts 字段只读地暴露出来。 */
+        merged.keySet().removeIf(domain -> !domainRegistry.contains(domain));
         return merged;
     }
 

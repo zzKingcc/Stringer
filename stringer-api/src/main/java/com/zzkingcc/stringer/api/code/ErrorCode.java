@@ -24,6 +24,8 @@ public enum ErrorCode {
             "检查或删除 config/accounts.json 后重启服务"),
     CALLER_CONTEXT_REQUIRED(10008, "缺少调用方身份", 400, false, "在请求中携带 tenantId / userId / profile"),
     PROFILE_REQUIRED(10009, "未指定本轮所处的域", 400, false, "显式指定 profile"),
+    DOMAIN_NOT_CALLABLE(10010, "该域不是可调用单元", 400, false,
+            "改用可调用的叶子域，或在管控台「域空间」把该域标记为可调用"),
 
     // ===== 20xxx 限流与容量 =====
     RATE_LIMITED(20000, "请求过于频繁，请稍后再试", 429, true, "退避后重试"),

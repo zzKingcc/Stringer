@@ -84,7 +84,7 @@ public class PromptToolConsistencyAudit {
             } else {
                 log.warn("[启动自检] 提示词点名的工具在对应域不可见，共 {} 项 —— "
                                 + "模型会被告知有能力却调不到。修法二选一：把工具声明到这些域"
-                                + "（@Tool(domains = {...}) 里加域名，或显式写 \"*\"），"
+                                + "（在 @Tool(domains = {...}) 里写上完整路径域，如 default.sales.order），"
                                 + "或从提示词里删掉该工具名",
                         mismatches.size());
                 for (int i = 0; i < Math.min(mismatches.size(), MAX_DETAILS); i++) {

@@ -38,7 +38,7 @@ class AnnotatedToolScannerTest {
 
         ToolSpec note = specs.get("addNote");
         assertEquals("记一条备注", note.description());
-        assertEquals(List.of("admin"), note.domains());
+        assertEquals(List.of("default.admin"), note.domains());
         assertEquals("WRITE", note.sideEffect());
         assertTrue(note.requiresApproval(), "声明了 ALWAYS 审批就应需要人工确认");
         assertEquals("ALWAYS", note.approvalMode());
@@ -110,7 +110,7 @@ class AnnotatedToolScannerTest {
 
     static class DemoTools {
 
-        @Tool(desc = "记一条备注", value = "addNote", domains = {"admin"},
+        @Tool(desc = "记一条备注", value = "addNote", domains = {"default.admin"},
                 effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
                 approvalReason = "写操作需确认")
         public String addNote(@ToolParam("备注内容") String text) {
@@ -122,7 +122,7 @@ class AnnotatedToolScannerTest {
             return "城市 " + count + " 个：" + city + "，类型 " + level;
         }
 
-        @Tool(desc = "按订单号改绑手机号", value = "rebind", domains = {"admin"},
+        @Tool(desc = "按订单号改绑手机号", value = "rebind", domains = {"default.admin"},
                 effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
                 approvalReason = "改绑需人工核对")
         @ToolAdvanced(example = {"orderNo=FR2024001", "phone=13800000000"},

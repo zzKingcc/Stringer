@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.toolprovider.spring;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.annotation.ToolDomains;
 import com.zzkingcc.stringer.api.annotation.ToolParam;
@@ -39,7 +40,7 @@ import java.util.Set;
  * 参数 schema、副作用等级、审批策略全都堆在一段与业务方法分离的代码里。
  * 本扫描器让这些治理信息回到方法本身：</p>
  * <pre>
- * &#64;Tool(desc = "退款", value = "refundOrder", domains = {"admin"},
+ * &#64;Tool(desc = "退款", value = "refundOrder", domains = {"default.admin"},
  *           effect = Tool.Effect.WRITE, approval = Tool.Approval.ALWAYS,
  *           approvalReason = "退款需人工确认")
  * public String refundOrder(&#64;ToolParam("订单号") String orderNo,
@@ -214,8 +215,19 @@ public final class AnnotatedToolScanner {
                 .distinct()
                 .toList();
 
+        // 合法性在本地就拦下来：非法域发到服务端会被整包拒绝，不如启动期就报清楚是哪个方法
+        String toolName = annotation.value().isBlank() ? method.getName() : annotation.value().trim();
+        for (String domain : profiles) {
+            String reason = Domains.validatePath(domain);
+            if (reason != null) {
+                throw new IllegalStateException("@Tool(" + toolName + ", domains = {\"" + domain
+                        + "\"}) 不合法（" + reason + "）：域标识须为从 " + Domains.DEFAULT
+                        + " 出发的完整路径，如 default.sales");
+            }
+        }
+
         return new ToolSpec(
-                annotation.value().isBlank() ? method.getName() : annotation.value().trim(),
+                toolName,
                 annotation.desc(),
                 "default",
                 "1.0.0",

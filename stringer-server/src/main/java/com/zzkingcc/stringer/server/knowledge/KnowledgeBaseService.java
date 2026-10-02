@@ -15,6 +15,7 @@ import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessS
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategyFactory;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.IngestReport;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtNormalizer;
+import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.server.config.RagProperties;
 import com.zzkingcc.stringer.server.settings.LlmModelHolder;
 import dev.langchain4j.data.document.Metadata;
@@ -71,6 +72,8 @@ public class KnowledgeBaseService {
     private final RagProperties ragProperties;
     private final LlmModelHolder modelHolder;
     private final ChunkExporter chunkExporter;
+    /** 域注册表：归属域必须是登记过的域（写入前校验，避免凭空造索引） */
+    private final DomainRegistry domainRegistry;
     private final ThreadPoolExecutor ingestExecutor;
     private final Semaphore ingestPermit = new Semaphore(1);
 
@@ -81,12 +84,14 @@ public class KnowledgeBaseService {
                                 @Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
                                 RagProperties ragProperties,
                                 LlmModelHolder modelHolder,
-                                ChunkExporter chunkExporter) {
+                                ChunkExporter chunkExporter,
+                                DomainRegistry domainRegistry) {
         this.esClient = esClient;
         this.embeddingModel = embeddingModel;
         this.ragProperties = ragProperties;
         this.modelHolder = modelHolder;
         this.chunkExporter = chunkExporter;
+        this.domainRegistry = domainRegistry;
         AtomicLong seq = new AtomicLong();
         this.ingestExecutor = new ThreadPoolExecutor(
                 ragProperties.getIngestPoolSize(),
@@ -294,6 +299,13 @@ public class KnowledgeBaseService {
                     "文件 " + name + " 超过大小上限：" + content.length + " 字节，上限 " + max + " 字节");
         }
         String effective = normalizeDomain(domain);
+        // 归属域必须是被登记过的域：否则会给一个树里不存在的域凭空建出索引、写进文档，
+        // 而那个索引既检索不到（没有域的祖先链包含它）又要靠手工清（删域接口只认注册表）
+        if (!domainRegistry.contains(effective)) {
+            throw new KnowledgeBaseException(ErrorCode.INVALID_PARAMETER,
+                    "域不存在：" + effective + "（已登记的域: " + domainRegistry.ids() + "）；"
+                            + "请先在管控台「域空间」创建该域，或把文档传到已存在的域");
+        }
 
         // ===== 类型分叉 =====
         // 文本类：在这里一次性转成 UTF-8 语义的文本。放在提交任务之前，是为了让"编码判不出"

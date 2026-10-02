@@ -76,12 +76,30 @@ public class RetrievalConfiguration {
     }
 
     /**
+     * 域通道提供者：按当前域解析出"该查哪些索引、每个索引走哪两路召回"。
+     *
+     * <p>提成独立 bean 而不是内联 new 进 {@link CompositeRetriever}：
+     * 删域流程要用它失效检索器缓存（索引删了但还在缓存里会被旧检索器继续命中），
+     * 那是与"查询"无关的另一条使用路径。内联构造时它拿不到 bean 引用，
+     * {@code AdminDomainController} 就只能声明一个根本不存在类型的依赖 ——
+     * 于是 ES 未配置、检索器未装配的场景下整个应用起不来。</p>
+     */
+    @Bean
+    @Lazy
+    public DomainChannelProvider stringerDomainChannelProvider(
+            @Qualifier("stringerElasticsearchClient") ElasticsearchClient esClient,
+            EmbeddingModel embeddingModel,
+            RetrievalProperties retrievalProps) {
+        return new DomainChannelProvider(esClient, embeddingModel, retrievalProps);
+    }
+
+    /**
      * 组合检索器：按当前域解析通道（域链上每个索引 × 2 路）→ 召回编排 → 双轨融合重排。
      */
     @Bean
     @Lazy
     public ContentRetriever myContentRetriever(
-            @Qualifier("stringerElasticsearchClient") ElasticsearchClient esClient,
+            @Qualifier("stringerDomainChannelProvider") DomainChannelProvider channelProvider,
             @Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
             RetrievalProperties retrievalProps,
             @Qualifier("retrievalExecutor") ExecutorService retrievalExecutor) {
@@ -105,7 +123,7 @@ public class RetrievalConfiguration {
                 retrievalProps.getTopN(), retrievalProps.getRrfK(), retrievalProps.getAncestorDecay());
 
         return new CompositeRetriever(
-                new DomainChannelProvider(esClient, embeddingModel, retrievalProps),
+                channelProvider,
                 fusion, executor, retrievalProps.getTimeoutMs(), new AdaptiveFusionStrategy());
     }
 }

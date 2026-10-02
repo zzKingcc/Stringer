@@ -42,7 +42,7 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | `stringer-chat-client` | 对话 SDK：`AgentServiceClient`（内部通道）、**唯一入口** `StringerAgent`（`DefaultStringerAgentFactory` / `DefaultStringerAgent`） | `chatclient` |
 | `stringer-kb-client` | 知识库 SDK：`KnowledgeBaseClient`（上传 / 列表 / 删除） | `kbclient` |
 | `stringer-tool-provider` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolprovider` |
-| ~~`stringer-example`~~ | **已移除**（例子后期重写） | — |
+| ~~`stringer-example`~~ | **未交付**（不参与依赖方向） | — |
 
 依赖方向：`api → common → domain → infrastructure → runtime → server`；`sdk-core` 依赖 `api` + `common`；`client-core` 依赖 `sdk-core`；`chat-client` 与 `kb-client` 都依赖 `client-core`（两者互不依赖）；`tool-provider` 只依赖 `sdk-core`（与服务端只通过 HTTP 报文耦合）。
 
@@ -98,7 +98,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 删除 | **递归**带走全部子孙，不向上提升层级；**只有根域不可删**（它是整棵树起点）。删前先删该域及子孙的知识库索引**与切片预览文件**，再清提示词 / 模型绑定 / 工具声明记录 / 检索器缓存，最后才删域；索引没删干净则拒绝删域 |
 | 可见性判定 | **累加**：工具声明命中该域或它的任一祖先即见。挂在父域上的工具，其所有后代域都能用 |
 | 声明留空 | 挂在根域 `default`；根域在每个域的祖先链里，故留空＝**全树可见**。想收紧就显式写完整路径 |
-| 通配 | **没有通配写法**。旧版 `{"*"}` 已删除，"全域可见"的写法就是挂根域 |
+| 通配 | **没有通配写法**。"全域可见"的写法就是挂根域 |
 | 维度数量 | 域是工具可见性的 **唯一维度**，不叠加第二个权限维度 |
 | `profile` 缺失 / 空 | 归一化为根域 `default`（恒存在、不可删、恒可调用），不报错 |
 | `profile` 非空但域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具** |
@@ -144,11 +144,11 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 实际生效范围（当前实现）：
 
-- 扫描：`AnnotatedToolScanner` 只识别 `@Tool`（服务端进程内与工具实例 SDK 两侧规则一致）；`StringerToolProvider` 接口已退化为可选标记。
+- 扫描：`AnnotatedToolScanner` 只识别 `@Tool`（服务端进程内与工具实例 SDK 两侧规则一致）；`StringerToolProvider` 仅作可选标记。
 - 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`）；`@ToolParam` 只补说明。
 - `@ToolAdvanced` 在参数树建好后**按名字**套上（名字既可是形参名，也可是 DTO 展开出的字段名）：`allowValues` → 模型 schema 的 `enum`；`example` → `Param.example` **并追加进模型可见的参数说明**（底层 schema 只有 description 一个自由文本位，没有 example 槽）；`sensitive` → `Param.sensitive` + 事件与审批 payload 的**值掩码**。
 - 审批判定只看 `@Tool#approval` 是否非 `NONE`；新注解只暴露 `NONE` / `ALWAYS` 两态。
-- 仅登记、不参与运行行为：`idempotent`、`toModel`、`ToolDescriptor.Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`（新注解不再暴露这三个字段，记录结构保留以备后续真落地）。
+- 仅登记、不参与运行行为：`idempotent`、`toModel`、`ToolDescriptor.Approval` 的 `condition`/`approverRoles`/`timeoutSeconds`。
 - 域归属合并：`@Tool(domains=)` 与 `@ToolDomains`（类级默认）合并判定，方法级优先。
 
 ### 5.2 工具来源
@@ -252,7 +252,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- |
 | 索引粒度 | 每个域一个独立索引；文档"属于哪个域"＝它被上传到哪个域的索引 |
 | 索引名 | 由域路径**确定性派生**：`stringer_kb_<安全前缀>_<8位哈希>`（`KbIndexes.nameOf`，纯函数、不依赖任何注册表）。不用域路径直连做索引名——点号在 ES 通配 / 日期数学 / 隐藏索引场景下有歧义，且大小写敏感的域（`a` 与 `A`）转小写后会撞名，故用哈希后缀保证唯一 |
-| 索引创建 | **按需创建**：首次向该域上传文档时建出，映射含 IK 中文分词配置与向量维度。不再有"启动期建全局索引"——域是运行期由用户创建的，索引跟着域走 |
+| 索引创建 | **按需创建**：首次向该域上传文档时建出，映射含 IK 中文分词配置与向量维度——域在运行期由用户创建，索引跟着域走 |
 | 通配 | `stringer_kb_*` 覆盖全部知识库索引（枚举、ES 连接探测、重建用） |
 | 删除 | 删域时**先删该域及全部子孙的索引**，删不干净则拒绝删域（顺序不能反：域先没了，索引就成了没人认领的孤儿） |
 | 重建 | 删掉全部知识库索引并按当前维度重建；一个都没有时建出根域的索引。**索引会被清空，文档需重新上传** |
@@ -318,7 +318,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 模型接入分两层：**「模型设置」页的全局配置**（`config/llm-settings.json`，一套对话模型 + 一套向量模型；向量那套是知识库检索<b>唯一</b>在用的向量模型）与**多 LLM 模型档案**（`config/models.json`，域可绑定到不同 OpenAI 兼容端点的档案）。
 
-> **没有"内置 `default` 模型别名"这一说。** 对话模型只来自用户自建的模型档案：一个域若没有显式绑定任何可用的对话档案，调用时直接抛 `NotConfiguredException`（`90005` 类，`DEPENDENCY_NOT_CONFIGURED`），<b>不再回落到全局对话模型</b>。全局对话模型配置（`llm-settings.json` 的 chat 段）仅作为"解析器未装配"时的兜底与 `chatConfigured` 指示的一项来源；向量模型始终只走 `llm-settings.json`（单一实例，知识库检索用）。
+> 对话模型只来自用户自建的模型档案：一个域若没有显式绑定任何可用的对话档案，调用时直接抛 `NotConfiguredException`（`90005` 类，`DEPENDENCY_NOT_CONFIGURED`）。全局对话模型配置（`llm-settings.json` 的 chat 段）仅作为"解析器未装配"时的兜底与 `chatConfigured` 指示的一项来源；向量模型始终只走 `llm-settings.json`（单一实例，知识库检索用）。
 
 ### 9.1 模型档案（多 LLM，`config/models.json`）
 
@@ -326,12 +326,12 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- |
 | 单元 | `ModelProfile`：一个 OpenAI 兼容端点的<b>一份</b>配置（别名 `alias` 唯一；同一模型可配多份档案，域绑的是档案而非模型名） |
 | 字段（落盘 `ProfileData`） | `alias`、`endpoints`(端点族 List，可多选，空＝`["chat"]`)、`input` / `output`(输入 / 输出模态 List)、`baseUrl`、`apiKey`、`modelName`、`temperature`(Double，可空)、`maxTokens`(Integer，可空)、`dimensions`(Integer，仅 embedding 用，可空)、`capabilities`(布尔能力 List：`streaming` / `tools`)、`fallbacks`(降级链，暂只存不生效) |
-| 是否对话模型 | 不再有 `type` 字段；用 `isChat()` = `endpoints.contains("chat")` 判定；向量档案靠 `endpoints.contains("embedding")` |
+| 是否对话模型 | 无 `type` 字段；用 `isChat()` = `endpoints.contains("chat")` 判定；向量档案靠 `endpoints.contains("embedding")` |
 | 必填 | `baseUrl` / `apiKey` / `modelName` 三者齐备才 `isUsable()`；缺失则拒绝保存 |
 | 能力声明 | `capabilities` 由使用者显式写出；未声明 `tools` → 该域模型<b>不会调用任何工具</b>（只告警不拒绝）；缺失能力时 `capabilityHint()` 提示 |
 | 绑定规则 | <b>档案不自动绑定域</b>：新档案默认"未绑定"；绑定只能由管控台显式写。<b>一个域可绑一组有序的模型别名</b>（整体覆盖，列表首个为当前使用的对话模型，其余留给多 agent / 降级）；<b>空列表＝该域"无可调用模型"</b> |
-| 解析顺序 | `ModelProfileRegistry#resolveAliases(domain)` 返回该域<b>显式绑定</b>的别名列表（有序）；列表为空 → 不再回落任何默认值，由 `DefaultModelResolver` 抛 `NotConfiguredException`；列表按序试：首个 `isUsable()` 且 `isChat()` 的档案即命中 |
-| 域绑定 | `bind(domain, aliases)`：`aliases` 空 / 全部空白＝<b>解绑</b>（该域进入"无可调用"状态）；列表整体覆盖；`default` 已不再作为可绑定的模型别名（绑定只能指向自建档案）；绑到不存在的档案被拒 |
+| 解析顺序 | `ModelProfileRegistry#resolveAliases(domain)` 返回该域<b>显式绑定</b>的别名列表（有序）；列表为空 → 由 `DefaultModelResolver` 抛 `NotConfiguredException`；列表按序试：首个 `isUsable()` 且 `isChat()` 的档案即命中 |
+| 域绑定 | `bind(domain, aliases)`：`aliases` 空 / 全部空白＝<b>解绑</b>（该域进入"无可调用"状态）；列表整体覆盖；绑定只能指向自建档案（不存在内置 `default` 别名）；绑到不存在的档案被拒 |
 | 删除 | <b>级联清理</b>：删除档案时先把它从所有域的绑定里摘掉、摘空的域绑定直接移除，再删档案本身；那些域立即进入"无可调用"状态（由管控台「域空间」页明确提示），而不是把删除拦在半路。返回结果带出被摘掉绑定的域清单 |
 | 客户端缓存 | `ModelClientFactory` 按<b>档案指纹</b>（含 `baseUrl + modelName + 温度 + maxTokens + SHA-256(apiKey)` 的 SHA-256 前 16 位）缓存；轮换 Key / 端点 → 指纹变 → 自然换实例，旧实例被回收 |
 | 落盘 | `ModelProfileStore` → `config/models.json`；先改内存再整体落盘，落盘失败抛异常（调用方必须感知）；文件缺失 / 解析失败按空配置（所有域均"无可调用"，需到管控台逐一配置） |

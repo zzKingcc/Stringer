@@ -65,7 +65,22 @@ public class ToolInstanceAutoConfiguration {
                 config.instanceId(), client.toolNames().size(), annotated, count,
                 config.serverUrl(), config.endpoint());
         warnIfEndpointPathMismatch(config);
+        warnAboutUnauthenticatedInvokeEndpoint(config);
         return client;
+    }
+
+    /**
+     * 提示端点的暴露面 —— 刻意提醒而非拦截。
+     *
+     * <p>{@code /stringer/invoke} 不自带鉴权是产品契约（见 docs/INSTANCE.md §4.7）：
+     * 实例端口的暴露面由接入方负责收敛。因此这里只把这条事实讲清楚，
+     * 让接入方在日志里就能看到，不做任何行为变更。</p>
+     */
+    private void warnAboutUnauthenticatedInvokeEndpoint(ToolInstanceConfig config) {
+        log.info("[工具实例] {} 暴露的 {} 不自带鉴权（SDK 刻意不内置）："
+                        + "能连到本端口的一方可以直接执行本实例的工具，且不经过服务端的审批闸门与域过滤。"
+                        + "请确保该端口只在可信网络内可达；需要鉴权时在自己的应用里加拦截器即可。",
+                config.instanceId(), ToolInstanceInvokeController.INVOKE_PATH);
     }
 
     /** 心跳开关（装配完成后启动，关闭时停止） */

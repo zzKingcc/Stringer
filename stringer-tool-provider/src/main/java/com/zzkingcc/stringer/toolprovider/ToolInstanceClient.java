@@ -288,9 +288,13 @@ public class ToolInstanceClient implements ToolRegistrar {
             return response;
         }
 
-        JsonNode arguments = request.path("arguments");
-        String argumentsJson = arguments.isMissingNode() || arguments.isNull() ? "{}" : arguments.toString();
-        String traceId = request.path("traceId").asText("");
+        // request 允许为 null（controller 是 @RequestBody(required = false)），
+        // 上面已按空处理过 requestId/toolName，这里也必须同样处理，
+        // 否则一个没有 body 的 POST 会直接 NPE → 500 + 堆栈外泄。
+        JsonNode arguments = request == null ? null : request.path("arguments");
+        String argumentsJson = arguments == null || arguments.isMissingNode() || arguments.isNull()
+                ? "{}" : arguments.toString();
+        String traceId = request == null ? "" : request.path("traceId").asText("");
 
         long startedAt = System.currentTimeMillis();
         try {

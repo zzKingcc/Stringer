@@ -3,6 +3,7 @@ package com.zzkingcc.stringer.infrastructure.ingestion.docx;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.ingestion.block.Block;
+import com.zzkingcc.stringer.infrastructure.ingestion.block.MarkdownTable;
 import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
@@ -43,9 +44,6 @@ import java.util.regex.Pattern;
  * @author zzkingcc
  */
 public final class DocxReader {
-
-    /** 表格各单元格的宽度上限（超过就截断，避免一张畸形表撑爆切片） */
-    private static final int MAX_CELL_CHARS = 200;
 
     private static final Pattern HEADING_NUMBER = Pattern.compile("(\\d+)\\s*$");
 
@@ -176,52 +174,26 @@ public final class DocxReader {
     // ==================== 表格 ====================
 
     /**
-     * 表格 → <b>markdown 表格</b>。
+     * 表格 → {@link MarkdownTable}。
      *
-     * <p>为什么不是纯文本：纯文本会丢掉"哪一列是哪一列"。表头与数据行的对应关系一断，
-     * 这条知识就废了；markdown 表格同时让 BM25（表头词）和向量（表头 + 数据同现）都吃得到。</p>
+     * <p>渲染细节（列齐平、单元格转义、截断）与旧版 doc、excel 共用同一份实现 ——
+     * 三个格式的表在检索侧必须长得一样，不然 BM25 的字段权重就没法统一。</p>
      */
     private static Block tableBlock(XWPFTable table) {
         List<List<String>> rows = new ArrayList<>();
-        int columns = 0;
         for (XWPFTableRow row : table.getRows()) {
             List<String> cells = new ArrayList<>();
             for (XWPFTableCell cell : row.getTableCells()) {
-                cells.add(escape(cellText(cell)));
+                cells.add(MarkdownTable.cell(joinedParagraphs(cell)));
             }
             rows.add(cells);
-            columns = Math.max(columns, cells.size());
         }
-        if (rows.isEmpty() || columns == 0) {
-            return null;
-        }
-        StringBuilder md = new StringBuilder();
-        md.append(textRow(rows.get(0), columns));
-        md.append('\n').append(delimiterRow(columns));
-        for (int i = 1; i < rows.size(); i++) {
-            md.append('\n').append(textRow(rows.get(i), columns));
-        }
-        return Block.table(md.toString());
+        String md = MarkdownTable.render(rows);
+        return md.isEmpty() ? null : Block.table(md);
     }
 
-    private static String textRow(List<String> cells, int columns) {
-        StringBuilder sb = new StringBuilder("|");
-        for (int i = 0; i < columns; i++) {
-            String cell = i < cells.size() ? cells.get(i) : "";
-            sb.append(' ').append(cell).append(" |");
-        }
-        return sb.toString();
-    }
-
-    private static String delimiterRow(int columns) {
-        StringBuilder sb = new StringBuilder("|");
-        for (int i = 0; i < columns; i++) {
-            sb.append(" --- |");
-        }
-        return sb.toString();
-    }
-
-    private static String cellText(XWPFTableCell cell) {
+    /** 单元格内的多个段落用空格接起来（POI 的单元格是段落容器，不清空的话会连成一片） */
+    private static String joinedParagraphs(XWPFTableCell cell) {
         StringBuilder sb = new StringBuilder();
         for (XWPFParagraph paragraph : cell.getParagraphs()) {
             String text = clean(paragraph.getText());
@@ -232,13 +204,7 @@ public final class DocxReader {
                 sb.append(text);
             }
         }
-        String joined = sb.toString().trim();
-        return joined.length() > MAX_CELL_CHARS ? joined.substring(0, MAX_CELL_CHARS) : joined;
-    }
-
-    /** 单元格里的竖线会破坏表格结构 */
-    private static String escape(String raw) {
-        return raw.replace("|", "\\|");
+        return sb.toString().trim();
     }
 
     // ==================== 工具 ====================

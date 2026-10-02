@@ -18,8 +18,9 @@ import java.util.List;
  * <p>格式适配用 POI 直读：段落样式拿标题层级、{@code getBodyElements()} 保证表格与段落按原文顺序穿插、
  * 页眉页脚压根不读。之后的打包与去重交给通用的 {@link BlockSplitter}。</p>
  *
- * <p><b>旧版 {@code .doc} 不支持</b>：HWPF 拿不到段落样式（没有标题层级），解析出来接近乱文本，
- * 入库只会拖低整体检索质量。它的扩展名不在这里注册。</p>
+ * <p><b>旧版 {@code .doc} 走另一条策略</b>（{@code DocDocumentProcessStrategy} + HWPF）：
+ * 二进制格式不同、标题层级的来源也不同（docx 读 {@code Heading N} 样式，doc 还要靠大纲级别兜底），
+ * 所以是两个适配器，不是一个。</p>
  *
  * @author zzkingcc
  */

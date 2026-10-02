@@ -11,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * PDF（{@code .pdf}）文档处理策略。
@@ -74,13 +73,5 @@ public class PdfDocumentProcessStrategy extends AbstractDocumentProcessStrategy 
     @Override
     public String strategyName() {
         return "PDF类型";
-    }
-
-    /**
-     * 判断给定扩展名是否为 PDF 类型
-     */
-    public static boolean isPdfExtension(String ext) {
-        if (ext == null || ext.isBlank()) return false;
-        return PDF_EXTENSIONS.contains(ext.toLowerCase(Locale.ROOT));
     }
 }

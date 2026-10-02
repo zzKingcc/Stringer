@@ -27,10 +27,15 @@ public class RagProperties {
      * 允许上传的扩展名白名单（小写）。
      *
      * <p>格式决定走哪条格式适配层：{@code txt} 靠正则<b>猜</b>结构，
-     * {@code md} / {@code markdown} 由 Markdown 解析器、{@code docx} 由 POI、{@code pdf} 由 PDFBox
-     * <b>读</b>结构。加一种新格式 = 加一套适配器，不是给这个列表加一项就够了。</p>
+     * {@code md} / {@code markdown} 由 Markdown 解析器、{@code docx} 与 {@code doc} 由 POI、
+     * {@code pdf} 由 PDFBox、{@code xls} / {@code xlsx} 由 POI <b>读</b>结构。
+     * 加一种新格式 = 加一套适配器，不是给这个列表加一项就够了。</p>
+     *
+     * <p>{@code xls} 与 {@code xlsx} 由同一条策略覆盖：{@code WorkbookFactory} 按文件头判类型，
+     * 两个扩展名共用一个适配器。</p>
      */
-    private List<String> allowedExtensions = List.of("txt", "md", "markdown", "docx", "pdf");
+    private List<String> allowedExtensions =
+            List.of("txt", "md", "markdown", "docx", "doc", "pdf", "xls", "xlsx");
 
     /**
      * 单文件（单次上传）允许的最大切片数。

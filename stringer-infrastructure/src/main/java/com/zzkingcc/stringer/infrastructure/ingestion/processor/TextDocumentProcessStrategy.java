@@ -5,7 +5,6 @@ import com.zzkingcc.stringer.infrastructure.ingestion.txt.TxtChunking;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 纯文本类型文档处理策略（只认 {@code .txt}）。
@@ -14,8 +13,8 @@ import java.util.Locale;
  * 去重与向量化流程由 {@link AbstractDocumentProcessStrategy} 统一封装。</p>
  *
  * <p>md 走 {@code MarkdownDocumentProcessStrategy}（md 有原生结构，#{@code #} 前缀是确定信息，
- * 不该退化成"按纯文本猜标题"）；docx 走 POI、pdf 走 PDFBox，都是按同一接口新增的策略，
- * 工厂与现有策略一行都不用改。</p>
+ * 不该退化成"按纯文本猜标题"）；docx / doc 走 POI、pdf 走 PDFBox、xls/xlsx 走 POI，
+ * 都是按同一接口新增的策略，工厂与现有策略一行都不用改。</p>
  *
  * @author zzkingcc
  */
@@ -38,13 +37,5 @@ public class TextDocumentProcessStrategy extends AbstractDocumentProcessStrategy
     @Override
     public String strategyName() {
         return "纯文本类型";
-    }
-
-    /**
-     * 判断给定扩展名是否为纯文本类型（工厂调用用）
-     */
-    public static boolean isTextExtension(String ext) {
-        if (ext == null || ext.isBlank()) return false;
-        return TEXT_EXTENSIONS.contains(ext.toLowerCase(Locale.ROOT));
     }
 }

@@ -24,7 +24,9 @@ public class DocumentProcessStrategyFactory {
             new TextDocumentProcessStrategy(),          // .txt
             new MarkdownDocumentProcessStrategy(),      // .md .markdown
             new DocxDocumentProcessStrategy(),          // .docx
+            new DocDocumentProcessStrategy(),           // .doc（Word 97-2003）
             new PdfDocumentProcessStrategy(),           // .pdf
+            new ExcelDocumentProcessStrategy(),         // .xls .xlsx
             UnknownDocumentProcessStrategy.INSTANCE     // 未知文件类型
     );
 

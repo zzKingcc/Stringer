@@ -55,11 +55,12 @@ stringer:
       min-idle: 0
       max-wait: -1ms
 
-  # 会话记忆窗口与过期策略
+  # 会话记忆：上限只约束"能不能开新一轮"，最终回答永远可写
   memory:
     max-messages: 100
     max-tokens: 30000
-    ttl: ${STRINGER_MEMORY_TTL:72h}
+    # 保留期：这里不写 = 永久不过期（记忆是长期存储，靠 Redis RDB+AOF 保住）。
+    # 需要保留期时设环境变量 STRINGER_MEMORY_TTL=30d，或在此加一行 ttl: 30d
     checkpoint-ttl: 24h
 
   # 图编排线程池

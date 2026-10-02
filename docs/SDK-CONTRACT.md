@@ -91,7 +91,7 @@
 | `stream` | `String sessionId, String question` | `Flux<String>` | 逐字输出（只含 TOKEN 内容） | ~25% |
 | `stream` | `String sessionId, String question, String tenantId, String userId` | `Flux<String>` | 同上，带归属 | — |
 | `events` | `String sessionId, String question` | `Flux<AgentEvent>` | 完整事件（工具调用、审批、错误、耗时） | ~5% |
-| `resume` | `String sessionId, boolean approved` | `Flux<AgentEvent>` | 审批恢复。**域须与中断时一致**，否则 30002 | — |
+| `resume` | `String sessionId, boolean approved` | `Flux<AgentEvent>` | 审批恢复。**域须与中断时一致**，否则按新域找不到断点（`30001`） | — |
 | `stop` | `String sessionId` | `boolean` | 请求停止（幂等） | — |
 | `domainId` | — | `String` | 返回本实例绑定的域，**永不为空** | — |
 

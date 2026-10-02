@@ -200,8 +200,11 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 - 执行前检查取消标志；工具不可见或已下线时不执行，回文本给模型。
 - 命中审批的工具：发出 `INTERRUPT` 事件并中断图，等待调用方 `resume`。
 - `resume` 必须携带 `profile`；执行 `resume` 时按**本次域**重新校验工具可见性（工具已下线也拦下）。
-- `resume` 只接受中断时的那个域；域不一致直接拒绝。
-- 请求入口若发现断点停在审批点，拒绝该轮 `chat`（`30002`），不清理断点。
+- `resume` 只接受中断时的那个域；域不一致时按新域找不到断点（`30001`）。
+- 请求入口若发现断点停在审批点（说明用户没回复审批就开了新对话）→ **视为用户拒绝了那次审批**：
+  该轮 `chat` 照常处理，同时补一条占位回答并**删掉断点**（那个待授权动作永久作废）。
+- 请求入口若发现会话记忆已达上限 → 直接拒绝该轮（`30004`），**零副作用**（不写记忆、不清断点、不调模型）；
+  调用方需换 `sessionId`。
 - 同一 `sessionId` 不允许并发：已在执行时直接拒绝（`30003`），不排队。
 
 ---
@@ -210,11 +213,13 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 | 项 | 规定 |
 | --- | --- |
-| 会话键 | `sessionId`，字符串，由调用方提供 |
-| 记忆内容 | 仅用户消息与最终 AI 回答；工具调用与工具结果不进记忆 |
-| 记忆约束 | `stringer.memory.max-messages`＝100、`max-tokens`＝30000、`ttl`＝72h |
-| 检查点 | LangGraph4j 检查点存 Redis，`stringer.memory.checkpoint-ttl`＝24h |
-| 记忆与检查点的域关系 | 域是 per-request；记忆按 `sessionId` 唯一键，跨域共享同一份 |
+| 会话键 | `(域, sessionId)`（`SessionKeys`，分隔符 `\|`）；**`sessionId` 由调用方提供、域内唯一**，不同域可以用同一个 id |
+| 记忆内容 | 仅用户消息与最终 AI 回答；工具调用与工具结果不进记忆（它们只在检查点里） |
+| 记忆约束 | `stringer.memory.max-messages`＝100 条、`max-tokens`＝30000；**只增不淘汰** |
+| 到上限 | 入口拒绝新一轮（`30004 SESSION_MEMORY_FULL`，零副作用），**粘性**：只要还满着就每次拒绝；平台不代为切换，**调用方换 `sessionId`**。上限只约束入口——最终回答永远可写（否则留下有问无答的孤立提问） |
+| 记忆保留期 | `stringer.memory.ttl`＝**永久**（null）。记忆是长期存储，靠 Redis RDB+AOF 保住；启动期 `RedisPersistenceAudit` 自检持久化与淘汰策略，只告警不阻断 |
+| 检查点 | LangGraph4j 检查点存 Redis，`stringer.memory.checkpoint-ttl`＝24h；正常跑完由框架 `releaseThread(true)` 删除 |
+| 挂起未批 | 用户不回审批而是直接开新对话 = **视为拒绝**：补占位回答让那一轮完整，并**删除断点**（否则事后任何一次 resume 都会执行那个待授权动作），新对话照常处理 |
 | 停止语义 | `stop` 只置取消标志，由 `agentNode.onPartialResponse` 与 `toolsNode` 在工具执行前检查后抛出；随后回滚本轮记忆、清检查点、推 `STOPPED`、结束流 |
 
 消息通道：图的 `messages` 通道使用去重被禁用的追加器（`appenderWithDuplicate`），允许同内容消息重复入列。
@@ -481,7 +486,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.redis.pool.max-wait` | Duration | -1ms |
 | `stringer.memory.max-messages` | int | 100 |
 | `stringer.memory.max-tokens` | int | 30000 |
-| `stringer.memory.ttl` | Duration | 72h |
+| `stringer.memory.ttl` | Duration | **`null`（永久）** |
 | `stringer.memory.checkpoint-ttl` | Duration | 24h |
 | `stringer.agent.core-pool-size` / `max-pool-size` / `queue-capacity` / `keep-alive-seconds` | int / long | 8 / 32 / 200 / 60 |
 | `stringer.instance.timeout-seconds` | long | 35 |

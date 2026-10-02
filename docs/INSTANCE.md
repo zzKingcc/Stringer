@@ -109,6 +109,12 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 | `password` | — | 无密码模式可空 |
 | `database` | `0` | 库号。默认 0（集群/云托管常只给 0 号库）。隔离靠 key 前缀 `stringer:`，不靠库号。**换库号＝换数据源，历史会话不迁移** |
 
+> ⚠️ **Redis 是会话记忆的唯一存储，请开启持久化**：`appendonly yes` + `appendfsync everysec`（最坏丢 1 秒）；
+> 淘汰策略必须是 **`maxmemory-policy noeviction`**，否则内存紧张时 Redis 会直接淘汰记忆 key = 随机丢用户历史。
+> 平台在启动期自检这两项并**只告警不阻断**（`RedisPersistenceAudit`）；受管 Redis 禁用 `CONFIG` 时该检查会跳过。
+> 改成 `noeviction` 后写满会导致写入失败（对话报错），所以请同时按容量配置 `maxmemory` 并做用量告警
+> —— 单会话上限约 60–120 KB（100 条 / 30k token）。
+
 ### 2.5 域提示词 `prompts.json`（管控台「提示词设定」页）
 
 提示词**沿域链拼接**：从根域到当前域依次取出每段片段。根域 `default` 的片段是基底，后代的追加在后。
@@ -167,9 +173,9 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 | 配置键 | 默认 | 作用 |
 |---|---|---|
 | `stringer.ai.prompt.base` / `stringer.ai.prompt.prompts` | 空 | 提示词的 yaml 兜底（管控台优先级更高） |
-| `stringer.memory.max-messages` | `100` | 会话记忆窗口（消息数） |
-| `stringer.memory.max-tokens` | `30000` | 会话记忆窗口（token 数） |
-| `stringer.memory.ttl` | `72h` | 记忆过期；比 `checkpoint-ttl` 长一档 |
+| `stringer.memory.max-messages` | `100` | 会话记忆条数上限（≈50 轮问答）。**只增不淘汰**，到上限后入口拒绝新一轮（`30004`） |
+| `stringer.memory.max-tokens` | `30000` | 会话记忆 token 估算上限（同上，只约束入口；最终回答永远可写） |
+| `stringer.memory.ttl` | **永久**（null） | 记忆保留期。记忆是**长期存储**（靠 Redis RDB+AOF 保住），默认不过期；设了值则成为保留期 |
 | `stringer.memory.checkpoint-ttl` | `24h` | 断点（待审批会话）保留时长 |
 | `stringer.agent.core-pool-size` / `max-pool-size` / `queue-capacity` | `8` / `32` / `200` | 编排线程池（阻塞式执行，不可复用公共池） |
 | `stringer.instance.timeout-seconds` | `35` | 实例心跳判死窗（≈心跳周期×7） |
@@ -543,6 +549,21 @@ public class LocalTools {                                  // 任意 Spring Bean
 - **没有通配写法**：全域可见的写法就是挂根域。
 - 越权判断（角色→域映射）在宿主侧：平台信任调用方声明的域，只校验「域是否存在且可调用」。
 - **会话状态按 (域, sessionId) 隔离**：同一个 `sessionId` 可以在不同域各用一份，记忆 / 断点 / 停止 / 事件流互不影响；`stop` 与 `resume` 必须带与 `chat` 相同的域。
+
+### 6.1 会话记忆：只增不淘汰，到上限就换会话
+
+会话记忆（`stringer:chat:memory:{域}|{sessionId}`）存的是**对话面**：每轮的用户提问 + 最终文字回答。工具调用与工具结果**不进记忆**（它们只在检查点里）。
+
+- **只增不淘汰**：到达上限（`max-messages`=100 条 / `max-tokens`=30000）之前不会丢弃任何历史 ——
+  静默丢最旧的消息会让用户"以为还记得"。
+- **到上限 → 拒绝新一轮**：入口判定不通过就返回 `30004 SESSION_MEMORY_FULL`，并且**零副作用**
+  （不写记忆、不清断点、不调模型）。判定是**粘性**的：只要记忆还满着，之后每次都用同一个码拒绝。
+- **平台不代为切换**：`sessionId` 自始至终由调用方提供，满了由调用方**自己换一个新 id** 重新开始。
+  旧会话的数据保留在 Redis 里（默认不过期），只是不再接受写入。
+- **上限只约束"能不能开新一轮"**，不约束"能不能收尾"：最终回答永远允许写入，
+  否则会留下有问无答的孤立提问。所以一轮结束后总量可能略微超过上限。
+- **挂起未批 + 用户直接开新对话 = 用户拒绝了那次审批**：不再用 `30002` 把新对话挡回去，
+  而是补一条占位回答后**取消那个待审批动作**（断点一并删除，避免事后被 resume 执行）。
 
 ---
 

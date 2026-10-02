@@ -15,6 +15,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -92,6 +93,61 @@ class DomainStoreTest {
         assertTrue(stored.callables().isEmpty(), "读不动就按空配置启动，由管控台重建");
     }
 
+    /**
+     * 损坏必须与"文件不存在"区分开。
+     *
+     * <p>两者都返回空集合时，启动期的一次性迁移会把这份空配置当成权威写回磁盘，
+     * 人工建的域全部消失、迁移标记被置 true 且再也不会重来 —— 一次磁盘故障升级成永久数据丢失。</p>
+     */
+    @Test
+    void corruptFileIsDistinguishedFromMissingFile() throws IOException {
+        Files.createDirectories(settingsFile().getParent());
+        Files.writeString(settingsFile(), "{ this is not json", StandardCharsets.UTF_8);
+
+        DomainStore.StoredDomains stored = store().load();
+
+        assertEquals(DomainStore.StoredDomains.Status.CORRUPT, stored.status());
+        assertFalse(stored.usable(), "损坏状态下的空集合不可被误当成有效配置");
+    }
+
+    @Test
+    void missingFileIsAbsentNotCorrupt() {
+        assertEquals(DomainStore.StoredDomains.Status.ABSENT, store().load().status());
+    }
+
+    /**
+     * 损坏时拒绝覆盖写 —— 挡住"把空配置写回磁盘、抹掉人工域"这一不可逆动作。
+     */
+    @Test
+    void corruptFileRefusesToBeOverwritten() throws IOException {
+        Files.createDirectories(settingsFile().getParent());
+        String original = "{ this is not json";
+        Files.writeString(settingsFile(), original, StandardCharsets.UTF_8);
+
+        DomainStore store = store();
+        store.load();
+
+        assertThrows(IllegalStateException.class,
+                () -> store.save(Map.of("default.sales", true), true),
+                "损坏时写入必须失败，而不是用内存里的空注册表覆盖掉原始文件");
+
+        assertEquals(original, Files.readString(settingsFile(), StandardCharsets.UTF_8),
+                "原始文件必须原样保留 —— 它可能还能被修复");
+    }
+
+    /** 管理端改域时走的路径同样不能覆盖损坏文件 */
+    @Test
+    void saveDeclarationsAlsoRefusesWhenCorrupt() throws IOException {
+        Files.createDirectories(settingsFile().getParent());
+        Files.writeString(settingsFile(), "{ broken", StandardCharsets.UTF_8);
+
+        DomainStore store = store();
+        store.load();
+
+        assertThrows(IllegalStateException.class,
+                () -> store.saveDeclarations(Map.of("default.sales", true)));
+    }
+
     @Test
     void saveDeclarationsKeepsTheMigrationFlag() {
         DomainStore store = store();
@@ -102,5 +158,21 @@ class DomainStoreTest {
         DomainStore.StoredDomains stored = store().load();
         assertTrue(stored.callableMigrated(), "管理端改域不该把迁移标记清掉，否则每次重启都会重跑迁移");
         assertEquals(Boolean.FALSE, stored.callables().get("default.hr"));
+    }
+
+    /**
+     * 迁移标记不再靠"重读文件"保留：文件损坏时它必须保持原值，
+     * 否则运维手工切过的可调用性会在下次重启被静默推翻。
+     */
+    @Test
+    void migrationFlagSurvivesAWriteWithoutRereadingTheFile() {
+        DomainStore store = store();
+        store.save(Map.of("default.sales", true), true);
+
+        // 进程内连续多次管理端写，标记都应保持
+        store.saveDeclarations(Map.of("default.sales", false));
+        store.saveDeclarations(Map.of("default.sales", true));
+
+        assertTrue(store().load().callableMigrated());
     }
 }

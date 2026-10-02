@@ -34,6 +34,11 @@ public class DomainConfiguration {
         DomainRegistry registry = new DomainRegistry();
         DomainStore.StoredDomains stored = domainStore.load();
         registry.loadManual(stored.callables());
+        if (stored.status() == DomainStore.StoredDomains.Status.CORRUPT) {
+            log.error("[域注册表] 配置文件损坏且无法解析（{}），已用空声明初始化注册表："
+                            + "人工创建的域本轮不可用，但服务照常启动，且不会把这份空配置写回磁盘",
+                    domainStore.filePath());
+        }
         log.info("[域注册表] 初始化完成：已登记 {} 个域 {}，其中可调用 {} 个 {}；"
                         + "另有工具声明派生的域由注册表侧维护",
                 registry.ids().size(), registry.ids(),
@@ -56,28 +61,48 @@ public class DomainConfiguration {
     public SmartInitializingSingleton domainCallableMigration(DomainRegistry domainRegistry,
                                                              DomainStore domainStore) {
         return () -> {
-            if (domainStore.load().callableMigrated()) {
-                return;
-            }
-            List<String> changed = new ArrayList<>();
-            for (DomainRegistry.Domain domain : domainRegistry.all()) {
-                if (Domains.DEFAULT.equals(domain.id()) || !domain.callable()) {
-                    continue;
-                }
-                if (domainRegistry.hasChildren(domain.id())) {
-                    domainRegistry.setCallable(domain.id(), false);
-                    changed.add(domain.id());
-                }
-            }
-            domainStore.save(domainRegistry.manualConfig(), true);
-            if (changed.isEmpty()) {
-                log.info("[域] 可调用性迁移完成：没有需要改为装配节点的域（可调用集合 {} 个）",
-                        domainRegistry.callableIds().size());
-            } else {
-                log.warn("[域] 可调用性迁移：已把 {} 个「有子域」的域改为装配节点（不可直接调用，根域豁免）：{}；"
-                                + "如需其中一个照旧能被调用，请在管控台「域空间」把它切回可调用",
-                        changed.size(), changed);
+            // 自检类的 bean 一律不该把启动带崩：这里是唯一没有 try/catch 的一个，
+            // 而配置目录在容器里常常是只读挂载 —— 迁移失败应当"下次启动再试"，而不是进程起不来。
+            try {
+                runMigration(domainRegistry, domainStore);
+            } catch (Exception e) {
+                log.error("[域] 可调用性迁移失败（不影响启动，下次启动会重试）：{}", e.getMessage(), e);
             }
         };
+    }
+
+    private void runMigration(DomainRegistry domainRegistry, DomainStore domainStore) {
+        DomainStore.StoredDomains stored = domainStore.load();
+        if (stored.status() == DomainStore.StoredDomains.Status.CORRUPT) {
+            // 损坏时**绝不迁移、绝不写盘**：此刻注册表里只有根域与工具派生域，
+            // 人工建的域一个都没有。此时写回磁盘就是把它们全部抹掉，且迁移标记一旦置 true
+            // 就再也不会重来 —— 一次磁盘故障升级成永久的数据丢失。
+            // 让服务带着"只有派生域"的状态启动，至少原始文件还在，运维修好后重启即可恢复。
+            log.error("[域] 配置文件已损坏，跳过可调用性迁移并拒绝写盘。"
+                    + "请修复或恢复 {}；在此之前人工建的域不会生效（服务仍可正常启动）", domainStore.filePath());
+            return;
+        }
+        if (stored.callableMigrated()) {
+            return;
+        }
+        List<String> changed = new ArrayList<>();
+        for (DomainRegistry.Domain domain : domainRegistry.all()) {
+            if (Domains.DEFAULT.equals(domain.id()) || !domain.callable()) {
+                continue;
+            }
+            if (domainRegistry.hasChildren(domain.id())) {
+                domainRegistry.setCallable(domain.id(), false);
+                changed.add(domain.id());
+            }
+        }
+        domainStore.save(domainRegistry.manualConfig(), true);
+        if (changed.isEmpty()) {
+            log.info("[域] 可调用性迁移完成：没有需要改为装配节点的域（可调用集合 {} 个）",
+                    domainRegistry.callableIds().size());
+        } else {
+            log.warn("[域] 可调用性迁移：已把 {} 个「有子域」的域改为装配节点（不可直接调用，根域豁免）：{}；"
+                            + "如需其中一个照旧能被调用，请在管控台「域空间」把它切回可调用",
+                    changed.size(), changed);
+        }
     }
 }

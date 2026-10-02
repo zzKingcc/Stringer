@@ -350,20 +350,30 @@
 
 ---
 
-## 6 接入方（starter）
+## 6 接入方 SDK（starter）
+
+三块能力三个坐标，**按需引入**；互相独立，同时引入也不冲突 —— WebClient / 凭证 / 启动探测是三者共用的底座，只装配一份。
+
+| 坐标 | 能力 | 该坐标暴露的 Bean |
+| --- | --- | --- |
+| `stringer-chat-client` | 对话（`ask` / `stream` / `events` / `resume` / `stop`） | `stringerAgentFactory` |
+| `stringer-kb-client` | 知识库（上传 / 列表 / 删除） | `stringerKnowledgeBaseClient` |
+| `stringer-tool-provider` | 工具注册（需显式打开 `stringer.tools=true`） | `ToolInstanceClient` |
+
+> `stringer-client-core`（WebClient / 凭证 / 错误翻译 / 启动探测）与 `stringer-sdk-core`（契约 + 连接配置）是**传递依赖**，接入方不直接引。
 
 ### 6.1 配置
 
-前缀 `stringer.server`（地址与账号，与工具实例共用同一份）：
+前缀 `stringer.*`（地址与账号，对话 / 知识库 / 工具实例共用同一份）：
 
 | 键 | 默认值 |
 | --- | --- |
-| `host` | `localhost` |
-| `port` | `9527` |
+| `server` | `http://localhost:9527` |
 | `username` | `stringer` |
 | `password` | `stringer` |
+| `tools` | `false` |
 
-前缀 `stringer.client`（调用行为）：
+前缀 `stringer.client`（调用行为，两个 SDK 共用）：
 
 | 键 | 默认值 |
 | --- | --- |
@@ -373,15 +383,11 @@
 
 ### 6.2 自动配置与 Bean
 
-自动配置类 `StringerAutoConfiguration`，注册以下 Bean：
-
-| Bean | 类型 | 说明 |
-| --- | --- | --- |
-| `stringerWebClient` | `WebClient` | 内部与自定义调用使用 |
-| `stringerClientCredential` | `ClientCredential` | 凭证缓存与登录 |
-| `stringerAgentFactory` | `StringerAgentFactory` | **唯一入口**：`forDomain(...)` → `StringerAgent`（`ask`/`stream`/`events`/`resume`/`stop`） |
-| `stringerKnowledgeBaseClient` | `KnowledgeBaseClient` | 知识库管理 |
-| `stringerConnectivityCheck` | `SmartInitializingSingleton` | 启动期探测，失败即中断启动 |
+| 自动配置类（所在坐标） | 注册的 Bean |
+| --- | --- |
+| `StringerClientAutoConfiguration`<br>（`stringer-client-core`） | `stringerWebClient`（`WebClient`，baseUrl 指向服务端）；`stringerClientCredential`（`ClientCredential`，凭证缓存与登录）；`stringerConnectivityCheck`（`SmartInitializingSingleton`，启动期探测，失败即中断启动） |
+| `ChatAutoConfiguration`<br>（`stringer-chat-client`） | `stringerAgentFactory`（`StringerAgentFactory`）：**对话唯一入口**，`forDomain(...)` → `StringerAgent`（`ask`/`stream`/`events`/`resume`/`stop`） |
+| `KnowledgeBaseAutoConfiguration`<br>（`stringer-kb-client`） | `stringerKnowledgeBaseClient`（`KnowledgeBaseClient`）：知识库管理 |
 
 > 底层的 `AgentService` / `AgentServiceClient` 是 SDK 内部通道，**不作为 Bean 暴露** —— 对外只有 `StringerAgent` 一个入口。
 
@@ -406,6 +412,8 @@
 
 ## 7 工具实例（SDK）
 
+> 坐标 `stringer-tool-provider`，与对话 / 知识库 SDK 相互独立（见 §6）；开启开关是 `stringer.tools=true`（不在本组前缀下）。
+
 ### 7.1 注解
 
 工具实例侧只认一套注解：
@@ -421,13 +429,13 @@
 
 ### 7.2 配置
 
-服务端地址与账号读 `stringer.server.*`（`host` / `port` / `username` / `password`，默认 `localhost` / `9527` / `stringer` / `stringer`），与客户端 starter 共用同一份。
+服务端地址与账号读 `stringer.server`（单个 URL，默认 `http://localhost:9527`）与 `stringer.username` / `password`（默认 `stringer` / `stringer`），与对话 / 知识库 SDK 共用同一份。
 
 前缀 `stringer.tool-instance`：
 
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | false | 必须显式开启 |
+| `stringer.tools` | `false` | **开启开关不在本组**：必须显式写 `stringer.tools=true`，否则整组配置不生效 |
 | `scan-annotated` | true | 是否扫描 `@Tool` 注解方法并自动注册；关闭后只认 `ToolInstanceContributor` 编程式注册 |
 | `instance-id` | — | 实例标识 |
 | `endpoint` | 推导 | 本实例对外可达地址，服务端反向调用用；留空按 `http://localhost:{本进程端口}/stringer/invoke` 推导，跨机部署必须显式填写 |

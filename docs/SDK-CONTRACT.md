@@ -79,8 +79,8 @@
 | --- | --- | --- |
 | `StringerAgentFactory` | `StringerAgent forDomain(String domainId)` | 唯一的域绑定入口。`domainId` 为 `null`/空白 → 根域 `default`；返回的实例**可缓存复用**（线程安全） |
 
-> 落地情况：`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
-> （实现 `DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`StringerAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
+> 落地情况：坐标 `stringer-chat-client`；`StringerAgentFactory.forDomain(domainId)` → `StringerAgent`
+> （实现 `DefaultStringerAgentFactory` / `DefaultStringerAgent`，按归一化域名缓存；`ChatAutoConfiguration` 暴露 `StringerAgentFactory` Bean）。
 
 ### 5.2 `StringerAgent` 方法
 
@@ -124,13 +124,14 @@
 
 ## 6 配置项（SDK 运行参数）
 
+三个坐标**读同一份配置**：按需引入的只是能力，配置不随之分叉。
+
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `stringer.server` | `String`（URL） | — | 服务端地址，一个 URL 取代 `host` + `port` |
-| `stringer.username` / `password` | `String` | — | 接入账号 |
-| `stringer.domains` | `String[]` | `{}` | 启动期校验这些域存在（替代 `@DomainBinding` 扫描） |
+| `stringer.server` | `String`（URL） | `http://localhost:9527` | 服务端地址，一个 URL 取代 `host` + `port`；对话 / 知识库 / 工具实例共用 |
+| `stringer.username` / `password` | `String` | `stringer` | 接入账号 |
 | `stringer.tools` | `boolean` | `false` | 是否把本进程的 `@Tool` 方法注册给服务端 |
-| `stringer.tools.domains` | `String[]` | `{}` | 本应用所有工具的**默认可用域**（替代逐个注解写 `domains`） |
+| `stringer.client.*` | — | — | 调用行为（`health-check-timeout` / `connect-timeout` / `read-timeout`），两个 SDK 共用 |
 
 **不要求填的（有默认值，只在需要时改）**：健康检查/连接/读取超时、实例 id（自动生成）、端点（自动推导）、心跳周期、退避上限、请求超时。
 

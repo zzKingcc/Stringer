@@ -6,14 +6,16 @@
 
 ## 1 系统定位与交付形态
 
-Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形态为三件套：
+Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形态为**一个服务端 + 三个按需引入的 SDK**：
 
 | 交付物 | 模块 | 部署位置 |
 | --- | --- | --- |
 | 服务端（独立进程） | `stringer-server` | 客户自部署，端口 `9527`（`server.port` / `STRINGER_SERVER_PORT`） |
-| 消费侧 SDK | `stringer-agent-client` | 引入调用方业务应用，提供 `StringerAgentFactory`（唯一入口：`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`）与 `KnowledgeBaseClient` Bean，并传递 `sdk-core` 与工具实例 SDK（工具能力默认关闭） |
-| 工具实例 SDK | `stringer-tool-provider` | 引入工具提供方应用，把本地方法注册到服务端；也可单独引入（只当工具方、不调 AI） |
-| 共享契约层 | `stringer-sdk-core` | 被 `agent-client` 与 `tool-provider` 共同依赖，承载 `ServerProperties`（`stringer.server.*`）等共用配置 |
+| 对话 SDK | `stringer-chat-client` | 引入调用方业务应用，提供 `StringerAgentFactory`（唯一入口：`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`） |
+| 知识库 SDK | `stringer-kb-client` | 引入调用方业务应用，提供 `KnowledgeBaseClient`（上传 / 列表 / 删除） |
+| 工具 SDK | `stringer-tool-provider` | 引入工具提供方应用，把本地方法注册到服务端（开关 `stringer.tools`） |
+| 客户端底座（传递） | `stringer-client-core` | WebClient / 凭证 / 错误翻译 / 启动探测，被对话与知识库 SDK 共用 |
+| 共享契约层（传递） | `stringer-sdk-core` | 对外契约 + 公共异常 + 服务端连接配置（`stringer.server` / `username` / `password` / `tools`） |
 
 形态约束：
 
@@ -35,14 +37,16 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |
 | `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消、模型解析 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` `runtime.model` `runtime.domain` |
 | `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台、模型档案与域管理 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` `server.model` |
-| `stringer-sdk-core` | 共享契约层：被两个 SDK 共同依赖，承载 `ServerProperties`（`stringer.server.*`）、`ClientProperties` 等共用配置 | `sdkcore` |
-| `stringer-agent-client` | 消费侧 SDK：凭证管理、`AgentServiceClient`（内部通道）、**唯一入口** `StringerAgent`（`DefaultStringerAgentFactory` / `DefaultStringerAgent`）、`KnowledgeBaseClient`、启动连通性探测 | `agentclient` |
+| `stringer-sdk-core` | 共享契约层：被三个 SDK 共同依赖，承载对外契约（`api`）、公共异常（`common`）与服务端连接配置（`stringer.server` / `username` / `password` / `tools`） | `sdkcore` |
+| `stringer-client-core` | 客户端底座：`WebClient` 装配、`ClientCredential`（凭证换取与缓存）、传输层错误翻译、启动期连通性探测 | `clientcore` |
+| `stringer-chat-client` | 对话 SDK：`AgentServiceClient`（内部通道）、**唯一入口** `StringerAgent`（`DefaultStringerAgentFactory` / `DefaultStringerAgent`） | `chatclient` |
+| `stringer-kb-client` | 知识库 SDK：`KnowledgeBaseClient`（上传 / 列表 / 删除） | `kbclient` |
 | `stringer-tool-provider` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolprovider` |
 | ~~`stringer-example`~~ | **已移除**（例子后期重写） | — |
 
-依赖方向：`api → common → domain → infrastructure → runtime → server`；`sdk-core` 依赖 `api`+`common`；`agent-client` 与 `tool-provider` 都依赖 `sdk-core`（两者互不依赖，可单独或同时引入）；`tool-provider` 不依赖任何其它 Stringer 模块（与服务端只通过 HTTP 报文耦合）。
+依赖方向：`api → common → domain → infrastructure → runtime → server`；`sdk-core` 依赖 `api` + `common`；`client-core` 依赖 `sdk-core`；`chat-client` 与 `kb-client` 都依赖 `client-core`（两者互不依赖）；`tool-provider` 只依赖 `sdk-core`（与服务端只通过 HTTP 报文耦合）。
 
-消费侧依赖边界：`stringer-agent-client` 是接入坐标，聚合 `stringer-api`（契约）、`stringer-common`（异常与输入安全）、`stringer-sdk-core`（共用配置）与 `stringer-tool-provider`（工具实例 SDK），引入即同时具备「调 AI」与「提供工具」两种能力；工具能力默认关闭——`tool-provider` 的自动装配整体受 `stringer.tool-instance.enabled=true` 约束，未开启时不注册回调端点、不启动心跳。聚合的依赖成本为零：`common`/`sdk-core` 只依赖 `api`，`tool-provider` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全部已在 agent-client 既有依赖树内。`stringer-tool-provider` 仍保留独立坐标供纯工具方（工具微服务、非 Java 应用）使用，其「不依赖任何 Stringer 模块」的契约不变。**Web 容器始终归宿主**：agent-client 与 `tool-provider` 都只用 `spring-web` 的注解模型，不引容器；宿主已有 Servlet 栈时两者共存仍判定为 SERVLET，若把容器写进 SDK，纯 WebFlux 宿主会被判成 SERVLET 而失去 `DispatcherHandler` 装配。
+消费侧依赖边界：三个 SDK **按需引入、互不依赖** —— 要对话引 `stringer-chat-client`，要知识库引 `stringer-kb-client`，要当工具方引 `stringer-tool-provider`；同时引多个也不冲突，因为公共底座（`client-core` 的 WebClient / 凭证 / 启动探测）与公共契约（`sdk-core`）都是传递依赖，且以 `@ConditionalOnMissingBean` 装配，只会装配一份。工具能力仍默认关闭：`stringer.tools` 未开启时不注册回调端点、不启动心跳、不建任何工具实例 Bean。**Web 容器始终归宿主**：三个 SDK 都只用 `spring-web` 的注解模型与出站 `WebClient`，不引容器；宿主已有 Servlet 栈时共存仍判定为 SERVLET，若把容器写进 SDK，纯 WebFlux 宿主会被判成 SERVLET 而失去 `DispatcherHandler` 装配。
 
 ---
 
@@ -500,10 +504,10 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | int | 2 / 16 |
 | `stringer.export.path` | String | `/var/lib/stringer/chunks`（`STRINGER_EXPORT_PATH` 覆盖） |
 | `spring.web.resources.cache.cachecontrol.no-cache` | boolean | true |
-| `stringer.server.host` / `port` | String / int | localhost / 9527 |
-| `stringer.server.username` / `password` | String | stringer / stringer |
+| `stringer.server` | String（URL） | `http://localhost:9527` |
+| `stringer.username` / `password` | String | stringer / stringer |
 | `stringer.client.health-check-timeout` / `connect-timeout` / `read-timeout` | Duration | 5s / 5s / 10m |
-| `stringer.tool-instance.enabled` | boolean | false |
+| `stringer.tools` | boolean | false |
 | `stringer.tool-instance.instance-id` | String | — |
 | `stringer.tool-instance.endpoint` | String | 留空按本进程端口推导 |
 | `stringer.tool-instance.scan-annotated` | boolean | true |

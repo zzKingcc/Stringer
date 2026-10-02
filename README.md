@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 StringerAgent 就能调 AI，方法上加 @Tool 就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
+  <strong>Java 生态的 AI Agent 运行时中间件。<br>按需引 starter：注入 StringerAgent 就能调 AI，方法上加 @Tool 就能让 AI 调你，引知识库 SDK 就能传文档。编排、工具治理、知识库、管控台都在服务端。</strong>
 </p>
 
 <p align="center">
@@ -127,22 +127,28 @@ http://localhost:9527/admin.html      # 默认账号 stringer / stringer
 ### 第二步：业务系统接入
 
 ```xml
+<!-- 对话：只要"能问 AI"就引这个 -->
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-agent-client</artifactId>
+    <artifactId>stringer-chat-client</artifactId>
+    <version>v1.0-beta.1</version>
+</dependency>
+
+<!-- 知识库：要把文档传进去就再引这个（与对话相互独立） -->
+<dependency>
+    <groupId>com.zzkingcc</groupId>
+    <artifactId>stringer-kb-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
-> **一个依赖就够。** `stringer-agent-client` 同时带来三件事：调 AI（`StringerAgent`，用 `StringerAgentFactory.forDomain(...)` 取）、把本进程的方法作为工具交给 Agent（工具实例 SDK，**默认关闭**，需要时打开 `stringer.tool-instance.enabled`）、公共异常与输入安全。Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。只想当工具方（工具微服务、非 Java 应用）可只引 `stringer-tool-provider`。详见[实例文档 §1.1](docs/INSTANCE.md#11-一个依赖跑起来)。
+> **三个坐标，按需引入。** `stringer-chat-client` 只做对话（`StringerAgent`，用 `StringerAgentFactory.forDomain(...)` 取）；`stringer-kb-client` 只做知识库（上传 / 列表 / 删除）；`stringer-tool-provider` 只做工具注册（把本进程的方法作为工具交给 Agent，需显式打开 `stringer.tools=true`）。WebClient / 凭证 / 启动探测是三者共用的底座，同时引入也只装配一份；Web 容器不在其中——宿主原有的 Spring MVC / WebFlux 栈保持不变即可。详见[实例文档 §1.1](docs/INSTANCE.md#11-按需要引几个依赖)。
 
 ```yaml
 stringer:
-  server:                       # 客户端与工具实例共用这一份地址与账号
-    host: localhost
-    port: 9527
-    username: stringer          # 服务端改过密码后需同步
-    password: stringer
+  server: http://localhost:9527   # 对话 SDK / 知识库 SDK / 工具实例共用这一份
+  username: stringer              # 服务端改过密码后需同步
+  password: stringer
 ```
 
 > **服务端必须先启动**（与 Redis / Nacos 的接入习惯一致）。引入 starter 的应用在启动完成前会换取签名凭证并探测服务端健康状态，连不上或账号密码错误会**直接中断启动**并给出排查提示——不提供关闭开关：允许应用先于中间件启动，等于让它在必然不可用的状态下对外服务。
@@ -185,7 +191,7 @@ public class MyService {
 
 ### 第四步：方法上加个注解，把业务方法变成工具
 
-打开 `stringer.tool-instance.enabled=true`，然后在任意 Spring Bean 的方法上声明：
+引入 `stringer-tool-provider` 并打开 `stringer.tools=true`，然后在任意 Spring Bean 的方法上声明：
 
 ```java
 // 只读工具：客服域可见，参数 schema 由方法签名推导
@@ -240,8 +246,11 @@ stringer-server
 | `stringer-infrastructure` | 基础设施：ES 检索与索引管理 / 文档摄取切片 / Redis / 向量化 |
 | `stringer-runtime` | Agent 运行时内核：图编排 / 工具注册表与路由 / 实例注册表 / 流式 / 提示词 |
 | `stringer-server` | **服务端**：可独立部署，承载全部重逻辑与管控台 |
-| `stringer-agent-client` | **消费侧唯一坐标**：`StringerAgent`（`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`）+ 工具实例 SDK + 公共异常与输入安全 |
-| `stringer-tool-provider` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
+| `stringer-sdk-core` | SDK 公共层：对外契约 + 公共异常 + 服务端连接配置（随 SDK 传递，接入方不直接引） |
+| `stringer-client-core` | SDK 客户端底座：WebClient / 凭证换取 / 错误翻译 / 启动期探测，被对话与知识库两个 SDK 共用 |
+| `stringer-chat-client` | **对话 SDK**：`StringerAgent`（`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`） |
+| `stringer-kb-client` | **知识库 SDK**：文档上传 / 列表 / 删除，按域落到对应索引 |
+| `stringer-tool-provider` | **工具 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层，不含内部实现 |
 
 ## 接口
 

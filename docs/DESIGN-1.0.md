@@ -28,15 +28,21 @@ Stringer 是 **Java 生态的 AI Agent 运行时中间件**：服务端承载全
                     └──────────────────────────────────────────┘
 ```
 
-模块坐标（消费侧只需引一个）：
+模块坐标（三个 SDK **按需引入、互不依赖**；同时引多个也不冲突，公共底座只装配一份）：
 
 | 坐标 | 作用 |
 | --- | --- |
-| `stringer-agent-client` | **消费侧唯一坐标**：`StringerAgent` 门面 + 工具实例 SDK |
-| `stringer-tool-provider` | 工具实例 SDK（随 starter 传递，也可单独引） |
+| `stringer-chat-client` | **对话 SDK**：`StringerAgent` 门面（`forDomain` → `ask` / `stream` / `events` / `resume` / `stop`） |
+| `stringer-kb-client` | **知识库 SDK**：`KnowledgeBaseClient`（文档上传 / 列表 / 删除，按域落到对应索引） |
+| `stringer-tool-provider` | **工具 SDK**：把本进程的 `@Tool` 方法注册给服务端（`stringer.tools=true` 才装配） |
+| `stringer-client-core` | 客户端底座（传递）：WebClient / 凭证换取 / 错误翻译 / 启动期探测，被对话与知识库 SDK 共用 |
+| `stringer-sdk-core` | 契约 + 公共异常 + 连接配置（传递，接入方不直接引） |
 | `stringer-server` | 服务端，承载编排、注册表、管控台 |
-| `stringer-api` | 契约层（注解、事件、错误码）——只依赖 `jackson-annotations` |
-| 其余（`common` / `domain` / `infrastructure` / `runtime` / `sdk-core`） | 内部实现，不单独交付 |
+| `stringer-api` | 契约层（注解、事件、错误码）——只依赖 `jackson-annotations`，随 `sdk-core` 传递 |
+| 其余（`common` / `domain` / `infrastructure` / `runtime`） | 内部实现，不单独交付 |
+
+三个 SDK 读**同一份** `stringer.*` 配置（服务端只有一个账号、工具注册表也只有一份），
+且都只用 `spring-web` 的注解模型与出站 `WebClient`：**Web 容器始终归宿主**，引 SDK 不会改变宿主的 Web 栈判定。
 
 ---
 
@@ -200,7 +206,22 @@ stringer:
 | `stringer.client.*` | 见 `DESIGN.md` | 调用超时（高级，几乎不改） |
 | `stringer.tool-instance.*` | 见 `DESIGN.md` | 实例 id / 回调地址 / 心跳（跨机部署才动） |
 
-### 5.3 裸 HTTP
+### 5.3 知识库 SDK：`KnowledgeBaseClient`
+
+引 `stringer-kb-client` 即自动装配，与对话 SDK 相互独立（地址与账号读同一份 `stringer.*`）：
+
+```java
+KnowledgeBaseClient.UploadResult r = kb.upload(bytes, "员工手册.pdf", false);      // 落到根域 default
+kb.upload(bytes, "销售政策.docx", true, "default.sales");                          // 声明归属域
+List<KnowledgeBaseClient.DocumentItem> docs = kb.list();
+kb.delete(r.docId());                                                             // 删除后同名可再传
+```
+
+**这里没有检索接口**：检索与上下文注入是服务端内部行为，模型经检索工具自动取用。
+文档归属的域决定**哪些对话能检索到它**——挂在该域即其全部后代域可见，留空 = 挂根域 = 全域可见，无通配写法。
+上传是同步的（切片与向量化完成后才返回），文件名需在服务端白名单内。
+
+### 5.4 裸 HTTP
 
 `POST /api/agent/chat`（SSE），请求体为 `AgentRequest`：`sessionId` / `message` / `profile`（即域）/ `tenantId` / `userId`。
 `AgentService` 是内核契约，SDK 内部持有其远程实现；消费侧入口只有 `StringerAgent`。

@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>An AI agent runtime middleware for the Java ecosystem.<br>Add one starter: inject StringerAgent to call AI, annotate a method with @Tool to let AI call you. Orchestration, tool governance, knowledge base and the ops console all live in the server.</strong>
+  <strong>An AI agent runtime middleware for the Java ecosystem.<br>Pick the starters you need: inject StringerAgent to call AI, annotate a method with @Tool to let AI call you, add the knowledge base SDK to upload documents. Orchestration, tool governance, knowledge base and the ops console all live in the server.</strong>
 </p>
 
 <p align="center">
@@ -127,22 +127,28 @@ Enter the chat and embedding models under "Models", and the ES / Redis connectio
 ### Step 2: Integrate into your application
 
 ```xml
+<!-- Chat: add this when you just need to ask the agent -->
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-agent-client</artifactId>
+    <artifactId>stringer-chat-client</artifactId>
+    <version>v1.0-beta.1</version>
+</dependency>
+
+<!-- Knowledge base: add this when you need to upload documents (independent of chat) -->
+<dependency>
+    <groupId>com.zzkingcc</groupId>
+    <artifactId>stringer-kb-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
-> **One dependency is enough.** `stringer-agent-client` brings three things at once: calling the agent (`StringerAgent`, obtained via `StringerAgentFactory.forDomain(...)`), handing your own methods to the agent as tools (tool instance SDK, **off by default** — set `stringer.tool-instance.enabled` to turn it on), and the shared exception / input-sanitization support. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. Tool-provider-only deployments (tool microservices, non-Java apps) can depend on `stringer-tool-provider` alone. See [instance doc §1.1](docs/INSTANCE.md#11-一个依赖跑起来).
+> **Three coordinates, pick what you need.** `stringer-chat-client` does chat only (`StringerAgent`, obtained via `StringerAgentFactory.forDomain(...)`); `stringer-kb-client` does the knowledge base only (upload / list / delete); `stringer-tool-provider` does tool registration only (handing your own methods to the agent as tools — set `stringer.tools=true` to turn it on). The WebClient, credential and startup probe are a shared base: pulling in several of them still wires that base once. No web container is included — your existing Spring MVC or WebFlux stack simply stays as it is. See [instance doc §1.1](docs/INSTANCE.md#11-按需要引几个依赖).
 
 ```yaml
 stringer:
-  server:                       # one address and one account, shared by client and tool instance
-    host: localhost
-    port: 9527
-    username: stringer          # keep in sync if the server password changes
-    password: stringer
+  server: http://localhost:9527   # one address, shared by chat SDK / KB SDK / tool instance
+  username: stringer              # keep in sync if the server password changes
+  password: stringer
 ```
 
 > **The server must start first** (same habit as integrating Redis or Nacos). Before startup completes, an app that uses the starter exchanges a signed credential and probes the server health; if it cannot connect, or the credentials are wrong, **startup is aborted** with troubleshooting hints — there is no switch to turn this off: letting an app start before the middleware means serving in a state that is guaranteed to be broken.
@@ -185,7 +191,7 @@ The **domain** decides which tools the model can see and which prompt it receive
 
 ### Step 4: Annotate a method, turn it into a tool
 
-Set `stringer.tool-instance.enabled=true`, then declare on any Spring bean method:
+Add `stringer-tool-provider` and set `stringer.tools=true`, then declare on any Spring bean method:
 
 ```java
 // Read-only: visible in the customer domain; the parameter schema is derived from the signature
@@ -244,8 +250,11 @@ Tool provider (tool-provider SDK, or your own HTTP implementation)
 | `stringer-infrastructure` | Infrastructure: ES retrieval and index management / document ingestion and splitting / Redis / embedding |
 | `stringer-runtime` | Agent runtime core: graph orchestration / tool registry and routing / instance registry / streaming / prompts |
 | `stringer-server` | **Server**: standalone deployable, hosts all heavy logic and the console |
-| `stringer-agent-client` | **Consumer-side single coordinate**: remote calls + tool instance SDK + shared exceptions and input security |
-| `stringer-tool-provider` | **Tool instance SDK**: registration and heartbeat keep-alive plus the invocation endpoint; depends only on the contract module `stringer-api`, no internal implementation (delivered transitively by the starter) |
+| `stringer-sdk-core` | SDK common layer: contracts + shared exceptions + server connection properties (transitive, never depended on directly) |
+| `stringer-client-core` | SDK client base: WebClient / credential / error translation / startup probe, shared by the chat and KB SDKs |
+| `stringer-chat-client` | **Chat SDK**: `StringerAgent` (`forDomain` → `ask`/`stream`/`events`/`resume`/`stop`) |
+| `stringer-kb-client` | **Knowledge base SDK**: document upload / list / delete, filed into the index of the given domain |
+| `stringer-tool-provider` | **Tool SDK**: registration and heartbeat keep-alive plus the invocation endpoint; depends only on the contract layer, no internal implementation |
 
 ## API
 

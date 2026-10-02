@@ -5,34 +5,35 @@
 
 ---
 
-## 1. 总览：你拿到的是三件东西
+## 1. 总览：一个服务端 + 三个按需引入的 SDK
 
-Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对外只给薄薄的消费侧 SDK。
+Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对外只给薄薄的 SDK。
 
 | 交付物 | 模块 | 角色 | 你做什么 |
 |---|---|---|---|
 | 服务端 jar | `stringer-server` | 承载编排 / 工具注册表 / 知识库 / ES·Redis·LLM 连接，暴露 HTTP+SSE | 自部署，通过管控台配置 |
-| 客户端 starter | `stringer-agent-client` | 极薄，只把调用转发到服务端 | 注入 `StringerAgent`（用 `StringerAgentFactory.forDomain(...)` 取） |
-| 工具实例 SDK | `stringer-tool-provider` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@Tool`（或实现 `ToolInstanceContributor` 编程式声明） |
+| 对话 SDK | `stringer-chat-client` | 极薄，只把调用转发到服务端 | 注入 `StringerAgent`（用 `StringerAgentFactory.forDomain(...)` 取） |
+| 知识库 SDK | `stringer-kb-client` | 文档上传 / 列表 / 删除 | 注入 `KnowledgeBaseClient` |
+| 工具 SDK | `stringer-tool-provider` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@Tool`（或实现 `ToolInstanceContributor` 编程式声明） |
 
-starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-provider` 保留独立坐标，供只想当工具方的进程单独使用。
+三个 SDK **相互独立、按需引入**，同时引多个也不冲突 —— 公共底座（`stringer-client-core` 的 WebClient / 凭证 / 错误翻译 / 启动探测，`stringer-sdk-core` 的契约与连接配置）是传递依赖，只装配一份。
 
 > 环境要求：Java 21、Spring Boot 3.x。坐标均为 `com.zzkingcc`，版本 `v1.0-beta.1`（随 `stringer.version`）。
 
-### 1.1 一个依赖跑起来
+### 1.1 按需要引几个依赖
 
-消费侧只需一个坐标 `stringer-agent-client`，它一次给出三件事：
+| 你要做的事 | 引哪个坐标 | 拿到什么 |
+|---|---|---|
+| 调 AI：发起对话、拿答案 / 事件流 | `stringer-chat-client` | 注入 `StringerAgentFactory`，`forDomain(...)` 取门面后用 `ask`/`stream`/`events`（见 §3） |
+| 把文档传进知识库 | `stringer-kb-client` | 注入 `KnowledgeBaseClient`，用 `upload` / `list` / `delete`（用法见 [SDK 使用手册 §3](SDK-USAGE.md)） |
+| 把本进程的方法交给 Agent 调用 | `stringer-tool-provider` | 方法上写 `@Tool`，打开 `stringer.tools`（见 §4） |
 
-| 得到的能力 | 怎么用 |
-|---|---|
-| 调 AI：发起对话、拿答案 / 事件流 | 注入 `StringerAgentFactory`，`forDomain(...)` 取门面后用 `ask`/`stream`/`events`，配 `stringer.server.*`（见 §3） |
-| 当工具方：把本进程的方法交给 Agent 调用 | 方法上写 `@Tool`，打开 `stringer.tool-instance.enabled`（见 §4） |
-| 公共异常与输入安全 | 复用 `ErrorCode` / `BaseException` / `InputSanitizer` 等 |
-
-- **工具能力默认关闭**：`stringer.tool-instance.enabled` 默认 `false`。未打开时不注册回调端点、不启动心跳、不建任何工具实例 Bean，只想调 AI 的应用不受影响。
-- **Web 容器自备**：starter 只用 Spring Web 的注解模型（`@RestController` / `@RequestBody`）与出站 `WebClient`，**不含任何容器**——自带 `spring-boot-starter-webflux` 仅服务于 SSE 出站调用。宿主原有的 Web 栈保持不变；要让服务端回调进来，宿主本来就需要一个可被访问的 Web 栈。
+- **工具能力默认关闭**：`stringer.tools` 默认 `false`。未打开时不注册回调端点、不启动心跳、不建任何工具实例 Bean。
+- **服务端连接只配一份**：`stringer.server`（单个 URL）+ `stringer.username` / `password`，三个 SDK 共用同一份（见 §3.2）。
+- **公共异常与输入安全**随任一 SDK 传递，可直接复用 `ErrorCode` / `BaseException` / `InputSanitizer`。
+- **Web 容器自备**：SDK 只用 Spring Web 的注解模型（`@RestController` / `@RequestBody`）与出站 `WebClient`，**不含任何容器**——自带 `spring-boot-starter-webflux` 仅服务于 SSE 出站调用。宿主原有的 Web 栈保持不变；要让服务端回调进来，宿主本来就需要一个可被访问的 Web 栈。
 - 因此不要把 Web 容器声明进 SDK：Spring Boot 判定 Web 应用类型时，Reactive 分支要求「`DispatcherHandler` 在且 `DispatcherServlet` 不在」；SDK 一旦带上 `spring-boot-starter-web`，纯 WebFlux 宿主就会被判成 SERVLET，`DispatcherHandler` 相关装配随之失效。
-- **只想当工具方**（工具微服务、非 Java 应用）不必引 starter：`stringer-tool-provider` 保留独立坐标，且不依赖任何 Stringer 模块，也可照 HTTP 协议自实现。
+- **非 Java 工具方**不必引 SDK：`stringer-tool-provider` 不含内部实现，也可照 HTTP 协议自实现（见 §4）。
 
 ---
 
@@ -195,36 +196,33 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 ```xml
 <dependency>
     <groupId>com.zzkingcc</groupId>
-    <artifactId>stringer-agent-client</artifactId>
+    <artifactId>stringer-chat-client</artifactId>
     <version>v1.0-beta.1</version>
 </dependency>
 ```
 
 引入即自动装配（注册于 `AutoConfiguration.imports`），**无需** `@ComponentScan` 覆盖内部包。你只需配服务端地址。
 
-这一个依赖同时带来工具实例 SDK 与公共异常（见 §1.1）：只想调 AI 时无需任何额外配置，工具能力默认关闭。
+本坐标只做对话；公共底座（WebClient / 凭证 / 启动探测）与公共异常随它传递，无需额外配置。要传文档再加 `stringer-kb-client`、要提供工具再加 `stringer-tool-provider`（见 §1.1）。
 
 ### 3.2 application.yml 配置
 
-地址与账号在 `stringer.server.*`，只写一份，客户端与工具实例共用（见 §4.2）：
+地址与账号只写一份，三个 SDK 与工具实例共用（见 §4.2）：
 
 ```yaml
 stringer:
-  server:
-    host: ${STRINGER_SERVER_HOST:localhost}          # 服务端主机（不含协议与端口）
-    port: ${STRINGER_SERVER_PORT:9527}                # 服务端端口（默认 9527）
-    username: ${STRINGER_SERVER_USERNAME:stringer}     # 接入账号（服务端账号）
-    password: ${STRINGER_SERVER_PASSWORD:stringer}     # 接入密码
+  server: ${STRINGER_SERVER:http://localhost:9527}   # 服务端地址（含协议与端口）
+  username: ${STRINGER_USERNAME:stringer}            # 接入账号（服务端账号）
+  password: ${STRINGER_PASSWORD:stringer}            # 接入密码
   client:
-    health-check-timeout: 5s                            # 启动连通性探测超时
+    health-check-timeout: 5s                          # 启动连通性探测超时
 ```
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
-| `stringer.server.host` | `localhost` | 服务端主机（不含协议与端口）。客户端与工具实例共用 |
-| `stringer.server.port` | `9527` | 服务端端口 |
-| `stringer.server.username` | `stringer` | 接入账号。与服务端账号一致（默认种子即 `stringer/stringer`） |
-| `stringer.server.password` | `stringer` | 接入密码。**不每次请求携带**：启动期用它们换签名凭证并缓存，失效才自动重登一次 |
+| `stringer.server` | `http://localhost:9527` | 服务端地址（含协议与端口）。对话 SDK / 知识库 SDK / 工具实例共用 |
+| `stringer.username` | `stringer` | 接入账号。与服务端账号一致（默认种子即 `stringer/stringer`） |
+| `stringer.password` | `stringer` | 接入密码。**不每次请求携带**：启动期用它们换签名凭证并缓存，失效才自动重登一次 |
 | `stringer.client.health-check-timeout` | `5s` | 启动期探测服务端可达性的超时 |
 | `stringer.client.connect-timeout` | `5s` | HTTP 连接超时 |
 | `stringer.client.read-timeout` | `10min` | HTTP 读超时（SSE 长连接，0＝不超时） |
@@ -334,7 +332,7 @@ boolean triggered = agent.stop(sessionId);
 </dependency>
 ```
 
-该坐标**已由 `stringer-agent-client` 传递**（见 §1.1）；单独引入适用于只想当工具方、不调 AI 的进程。两条路径都必须打开 `stringer.tool-instance.enabled`——引了 jar 不等于要当工具提供方。
+独立坐标，与对话 / 知识库 SDK 互不依赖（见 §1.1）——只想当工具方、不调 AI 的进程就只引它。必须打开 `stringer.tools`：引了 jar 不等于要当工具提供方。
 
 本 SDK 不自带 Spring 容器，也刻意不引 Web 容器：它只要求宿主进程里存在一个能被服务端访问到的 Web 栈（Spring MVC 或 WebFlux 均可）。
 
@@ -342,13 +340,11 @@ boolean triggered = agent.stop(sessionId);
 
 ```yaml
 stringer:
-  server:                                               # 与客户端共用同一份地址与账号（见 §3.2）
-    host: ${STRINGER_SERVER_HOST:localhost}
-    port: ${STRINGER_SERVER_PORT:9527}
-    username: ${STRINGER_SERVER_USERNAME:stringer}
-    password: ${STRINGER_SERVER_PASSWORD:stringer}
+  tools: true                                           # 默认 false：引了 jar 不等于要当工具提供方
+  server: http://localhost:9527                          # 与对话 / 知识库 SDK 共用同一份（见 §3.2）
+  username: ${STRINGER_USERNAME:stringer}
+  password: ${STRINGER_PASSWORD:stringer}
   tool-instance:
-    enabled: true                                       # 默认 false：引了 jar 不等于要当工具提供方
     instance-id: ${STRINGER_INSTANCE_ID:order-svc-01}   # 重连必须沿用同一个
     # endpoint 留空即自动推导（见下），跨机部署必须显式写服务端可达的地址
     # endpoint: ${STRINGER_INSTANCE_ENDPOINT:http://10.0.0.5:8081/stringer/invoke}
@@ -357,9 +353,9 @@ stringer:
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
-| `enabled` | `false` | 是否启用。会起心跳线程并暴露 HTTP 端点，属显式选择 |
-| `stringer.server.host` / `port` | `localhost` / `9527` | 服务端地址。**与客户端共用同一份**——服务端只有一份工具注册表、一个账号，指向不同服务端属破坏性配置 |
-| `stringer.server.username` / `password` | `stringer` | 接入账号（同服务端账号），用于登录换凭证 |
+| `stringer.tools` | `false` | 是否启用工具实例。会起心跳线程并暴露 HTTP 端点，属显式选择 |
+| `stringer.server` | `http://localhost:9527` | 服务端地址。**与对话 / 知识库 SDK 共用同一份**——服务端只有一份工具注册表、一个账号，指向不同服务端属破坏性配置 |
+| `stringer.username` / `stringer.password` | `stringer` | 接入账号（同服务端账号），用于登录换凭证 |
 | `instance-id` | — | 实例标识。**重连必须沿用同一个**，否则服务端留下摘不掉的旧副本 |
 | `endpoint` | 自动推导 | 工具调用回流地址：服务端 POST 到这里执行工具。留空时推导为 `http://localhost:{本进程端口}/stringer/invoke`（端口取 `local.server.port`，缺失则取 `server.port`）；**路径必须是 `/stringer/invoke`** |
 | `heartbeat-interval-seconds` | `5` | 心跳周期。服务端判死窗默认 `35s`（≈心跳×7），退避上限必须小于它 |

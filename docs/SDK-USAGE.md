@@ -9,18 +9,23 @@
 
 ## 0 前置条件
 
-- **依赖**：`stringer-agent-client`（消费侧唯一坐标）。
-- **配置**：`stringer.server.*`（服务端地址与账号，对话 SDK 与工具实例 SDK 共用一份）。
-- **对话主入口**：`StringerAgentFactory`（`forDomain(...)` → `StringerAgent`：`ask` / `stream` / `events` / `resume` / `stop`），由 starter 自动装配，直接注入即可。
+三个坐标**按需引入**，互相独立，同时引入也不冲突（WebClient / 凭证 / 启动探测是共用底座，只装配一份）：
+
+| 坐标 | 什么时候引 | 主入口 |
+| --- | --- | --- |
+| `stringer-chat-client` | 要问 AI | `StringerAgentFactory`（`forDomain(...)` → `StringerAgent`：`ask` / `stream` / `events` / `resume` / `stop`） |
+| `stringer-kb-client` | 要往知识库里传文档 | `KnowledgeBaseClient`（`upload` / `list` / `delete`） |
+| `stringer-tool-provider` | 要把本进程的方法交给 AI 调 | `@Tool` / `@ToolParam` / `@ToolDomains` / `@ToolAdvanced` |
+
+- **配置**：`stringer.*`（服务端地址与账号，三个坐标共用同一份）。
+- **对话主入口**：`StringerAgentFactory`，由 starter 自动装配，直接注入即可。
 - **工具注解**：`com.zzkingcc.stringer.api.annotation` 包下的 `@Tool` / `@ToolParam` / `@ToolDomains` / `@ToolAdvanced`。
 
 ```yaml
 stringer:
-  server:
-    host: localhost
-    port: 9527
-    username: stringer
-    password: stringer
+  server: http://localhost:9527
+  username: stringer
+  password: stringer
 ```
 
 ---
@@ -350,7 +355,54 @@ curl -N -X POST "http://localhost:9527/api/agent/resume?sessionId=s-001&approved
 
 ---
 
-## 3 常见坑
+## 3 知识库 SDK 使用方式（`KnowledgeBaseClient`）
+
+引 `stringer-kb-client` 即可，与对话 SDK 完全独立 —— 服务端地址与账号读同一份 `stringer.*`。
+
+### 3.1 注入
+
+```java
+@Service
+public class DocService {
+    private final KnowledgeBaseClient kb;              // starter 自动装配，无需任何注解
+
+    public DocService(KnowledgeBaseClient kb) {
+        this.kb = kb;
+    }
+}
+```
+
+### 3.2 上传 / 列表 / 删除
+
+```java
+// 上传到根域 default（全树可见）
+KnowledgeBaseClient.UploadResult r = kb.upload(bytes, "员工手册.pdf", false);
+log.info("已入库 docId={} 切片数={}", r.docId(), r.chunks());
+
+// 上传到指定域：default.sales 及其全部后代域都能检索到
+kb.upload(bytes, "销售政策.docx", true, "default.sales");
+
+// 列表 / 删除（删除后同名可再次上传）
+List<KnowledgeBaseClient.DocumentItem> docs = kb.list();
+kb.delete(r.docId());
+```
+
+| 方法 | 说明 |
+| --- | --- |
+| `upload(byte[], String fileName, boolean replace)` | 落到根域 `default` 的索引（全树可见）；`replace=true` 覆盖同名 |
+| `upload(byte[], String fileName, boolean replace, String domain)` | 声明归属域（**从根域出发的完整路径**；留空 = 根域） |
+| `list()` | 已入库文档（`docId` / `fileName` / `chunks`） |
+| `delete(String docId)` | 删除并释放文件名 |
+
+**域决定谁能检索到它**，与 `@Tool(domains = {...})` 同构：挂在该域即其**全部后代域**都能检索；留空 = 挂根域 = 全域可见。路径非法服务端直接拒绝，**没有通配写法**。
+
+**这里没有检索接口**：检索是服务端内部行为 —— 模型通过检索工具自动取用，SDK 侧没有检索参数要配。要让某个域检索得到，只需两件事：文档传到那个域（或它的祖先），且检索工具在该域可见（见 §4 常见坑）。
+
+上传是**同步**的，切片与向量化完成后才返回；文件名需在服务端白名单内（默认 `txt` / `md` / `docx` / `doc` / `pdf` / `xls` / `xlsx`），同名默认拒绝。
+
+---
+
+## 4 常见坑
 
 - **域为空**：SDK 侧用 `forDomain(...)` 在绑定时就定好域，`ask` / `stream` / `events` 的签名里没有域参数，传不出空值；只有裸 HTTP（§2.8）才会把空域归一到 `default`。域不存在被拒（`10004`）—— 不需要启动期预先校验域，第一次调用就会报清楚。
 - **`sessionId` 不稳定**：同一会话必须复用同一个 `sessionId`，否则记忆与检查点断裂、看起来"失忆"。

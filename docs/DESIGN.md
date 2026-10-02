@@ -247,7 +247,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 导入方式 | 部署方上传（管控台 / HTTP / starter），服务端不内置文档 |
-| 支持类型 | `stringer.rag.allowed-extensions`：`txt` / `md` / `markdown` / `docx`。txt 靠正则**猜**结构，md 与 docx **读**结构（不引 Tika，实测它对 docx 丢标题层级）。pdf 的抽行与页眉页脚清洗尚未落地，扩展名已占住、上传会给明确答复。完整规则见 [`MULTI-FORMAT-INGESTION-DESIGN.md`](MULTI-FORMAT-INGESTION-DESIGN.md) |
+| 支持类型 | `stringer.rag.allowed-extensions`：`txt` / `md` / `markdown` / `docx` / `pdf`。txt 靠正则**猜**结构；md / docx / pdf **读**结构 —— md 自研解析、docx 直连 POI（段落样式取标题层级）、pdf 直连 PDFBox（抽行取字号与坐标）。不引 Tika：实测它对 docx 丢标题层级、对 pdf 丢字号，而这两样正是切片要用的。pdf 本轮不做字号推断标题，按「页」分节（`section_path = 文件名 > 第N页`）。完整规则见 [`MULTI-FORMAT-INGESTION-DESIGN.md`](MULTI-FORMAT-INGESTION-DESIGN.md) |
 | 大小上限 | `stringer.rag.max-file-size`，默认 10MB |
 | 单文件切片上限 | `stringer.rag.max-chunks-per-document`，默认 2000 片 —— 超限直接拒绝并提示拆分。几百页的文档一次能产出几千片，一次上传就能堵死导入队列 |
 | 字符集 | **只对文本类生效**：入口探测一次（BOM → 严格 UTF-8 → GB18030）并转码；判不出编码则**拒绝该文件**，不猜。**docx 是二进制，不解码** —— 原始字节交给 POI |
@@ -255,7 +255,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 同一性判定 | **同一域内**同名不区分大小写；默认拒绝，带 `replace=true` 则先删旧再写入 |
 | 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名）。docId 里看不出所在域，故逐个索引查找 |
 | 唯一键 | `doc_id`（UUID，删除与聚合的依据）与 `file_name`（展示与同名校验） |
-| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`domain`、`section_path`、`section_title`、`chunk_seq`、`chunk_total`、`content_hash`。`metadata` 在 mapping 里是 `dynamic:false` + 全部显式声明 |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`domain`、`section_path`、`section_title`、`chunk_seq`、`chunk_total`、`page_from`（仅 pdf）、`content_hash`。`metadata` 在 mapping 里是 `dynamic:false` + 全部显式声明 |
 | 去重键 | `content_hash = SHA256(切片正文)`，**不含文件名** —— 改了文件名重传也算同一份内容 |
 | 切片规则 | 分两层：**格式适配层**（每格式一套，产出统一 `Block` 流）+ **通用切片层**（全格式共用）。txt 的四步是：统一字符集 → 清洗 → 认标题 → 按句子切片；md / docx 只换"认标题"那一步 —— 它们的标题层级是格式自带的。`max-chars` 是**上限不是固定长度**（撞标题即断）。完整规则见 [`TXT-INGESTION-DESIGN.md`](TXT-INGESTION-DESIGN.md) 与 [`MULTI-FORMAT-INGESTION-DESIGN.md`](MULTI-FORMAT-INGESTION-DESIGN.md) |
 | 切片预览 | 上传后把该文档的切片写成 UTF-8 txt 落到 `stringer.export.path`（默认 `%ProgramData%\Stringer\chunks`），管控台只展示路径 |
@@ -493,7 +493,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | `stringer.retrieval.inject-top-n` | int | 8 |
 | `stringer.retrieval.max-context-chars` | int | 3000 |
 | `stringer.rag.max-file-size` | DataSize | 10MB |
-| `stringer.rag.allowed-extensions` | List | `[txt, md, markdown, docx]` |
+| `stringer.rag.allowed-extensions` | List | `[txt, md, markdown, docx, pdf]` |
 | `stringer.rag.max-chunks-per-document` | int | 2000 |
 | `stringer.rag.chunking.max-chars` / `overlap-sentences` / `min-chars` | int | 400 / 1 / 60 |
 | `stringer.rag.ingest-lock-wait-seconds` | long | 60 |

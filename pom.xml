@@ -25,7 +25,9 @@
         <module>stringer-infrastructure</module>
         <module>stringer-runtime</module>
         <module>stringer-sdk-core</module>
-        <module>stringer-agent-client</module>
+        <module>stringer-client-core</module>
+        <module>stringer-chat-client</module>
+        <module>stringer-kb-client</module>
         <module>stringer-tool-provider</module>
         <module>stringer-server</module>
     </modules>
@@ -145,7 +147,17 @@
             </dependency>
             <dependency>
                 <groupId>com.zzkingcc</groupId>
-                <artifactId>stringer-agent-client</artifactId>
+                <artifactId>stringer-client-core</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-chat-client</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-kb-client</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>

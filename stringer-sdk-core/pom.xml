@@ -13,7 +13,7 @@
     <artifactId>stringer-sdk-core</artifactId>
     <name>stringer-sdk-core</name>
     <description>Stringer SDK 公共契约层：对外契约（api）+ 公共异常 / 输入安全（common）+ 服务端连接配置，
-        被对话 SDK 与工具 SDK 共同依赖，本身不含任何可独立运行的能力</description>
+        被对话 / 知识库 / 工具三个 SDK 共同依赖，本身不含任何可独立运行的能力</description>
 
     <dependencies>
         <!-- ===== 对外契约层：StringerAgent / 事件 / DTO / 错误码 / 工具注解 ===== -->

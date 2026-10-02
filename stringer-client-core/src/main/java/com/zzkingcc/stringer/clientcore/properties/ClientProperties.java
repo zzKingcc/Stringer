@@ -1,0 +1,33 @@
+package com.zzkingcc.stringer.clientcore.properties;
+
+import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
+
+/**
+ * 客户端调用行为配置（{@code stringer.client.*}）
+ *
+ * <p>只管"怎么调"，不管"调哪里"——服务端地址与账号在 {@link StringerProperties}。</p>
+ *
+ * <p>对话 SDK 与知识库 SDK 读的是同一份：两者连的是同一个服务端、共用一个凭证，
+ * 不存在"对话超时 10 分钟、知识库超时 5 秒"这类分头配置的用法。</p>
+ *
+ * @author zzkingcc
+ */
+@Data
+@ConfigurationProperties(prefix = "stringer.client")
+public class ClientProperties {
+
+    /**
+     * 启动期连通性探测的超时时间（默认 5s）。
+     */
+    private Duration healthCheckTimeout = Duration.ofSeconds(5);
+
+    /** 连接超时 */
+    private Duration connectTimeout = Duration.ofSeconds(5);
+
+    /** 响应读取超时（SSE 为长连接，可适当放宽；0 表示不超时） */
+    private Duration readTimeout = Duration.ofMinutes(10);
+}

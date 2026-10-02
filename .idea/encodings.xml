@@ -3,18 +3,16 @@
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-agent/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-api/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-capability/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/stringer-chat-client/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/stringer-client-core/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-common/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-core/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-domain/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-example/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-infrastructure/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-retrieval/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/stringer-kb-client/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-runtime/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/stringer-sdk-core/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/stringer-server/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-spring-boot-starter/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/stringer-tool-instance/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/stringer-tool-provider/src/main/java" charset="UTF-8" />
   </component>
 </project>

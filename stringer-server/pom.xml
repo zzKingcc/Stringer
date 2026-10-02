@@ -12,7 +12,7 @@
 
     <artifactId>stringer-server</artifactId>
     <name>stringer-server</name>
-    <description>Stringer 服务端（可独立部署）：承载 Agent 编排 / 知识库 / 工具调用 / ES / Redis，暴露 HTTP + SSE 供客户端 starter 连接</description>
+    <description>Stringer 服务端（可独立部署）：承载 Agent 编排 / 知识库 / 工具调用 / ES / Redis，暴露 HTTP + SSE 供 SDK 与工具实例连接</description>
 
     <dependencies>
         <!-- ===== 内部模块（服务端承载全部重逻辑） ===== -->

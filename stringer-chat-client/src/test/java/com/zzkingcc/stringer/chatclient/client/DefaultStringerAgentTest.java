@@ -18,6 +18,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -129,13 +130,57 @@ class DefaultStringerAgentTest {
         scripted = Flux.just(
                 AgentEvent.token(SESSION, "你好"),
                 AgentEvent.toolCall(SESSION, "ping", "{}"),
-                AgentEvent.token(SESSION, "，在的"));
+                AgentEvent.token(SESSION, "，在的"),
+                AgentEvent.done(SESSION));
 
         List<String> chunks = agentOf("customer").stream(SESSION, "在吗").collectList().block();
         assertEquals(List.of("你好", "，在的"), chunks);
 
         List<AgentEvent> events = agentOf("customer").events(SESSION, "在吗").collectList().block();
-        assertEquals(3, events.size(), "events 原样透传，不做筛选");
+        assertEquals(4, events.size(), "events 原样透传，不做筛选");
+    }
+
+    /**
+     * 流被容器/网关中途掐断时，只有半截内容、没有终止事件。
+     *
+     * <p>这曾被当成"流正常结束"，于是 ask/stream 把残缺答案当成功交给业务方 ——
+     * 现在必须判为失败。</p>
+     */
+    @Test
+    void ask遇流被截断时抛异常而不是返回半截答案() {
+        scripted = Flux.just(
+                AgentEvent.token(SESSION, "订单 "),
+                AgentEvent.token(SESSION, "FR2024001 已"));
+
+        StringerException ex = assertThrows(StringerException.class,
+                () -> agentOf("customer").ask(SESSION, "查订单"));
+        assertEquals(ErrorCode.EXTERNAL_SERVICE_TIMEOUT.getCode(), ex.getErrorCode().getCode());
+    }
+
+    @Test
+    void stream遇流被截断时补一个错误() {
+        scripted = Flux.just(AgentEvent.token(SESSION, "说到一半"));
+
+        List<String> emitted = new ArrayList<>();
+        Throwable error = null;
+        try {
+            agentOf("customer").stream(SESSION, "在吗").doOnNext(emitted::add).blockLast();
+        } catch (Throwable e) {
+            error = e;
+        }
+
+        assertEquals(List.of("说到一半"), emitted, "截断前的内容仍然已经流出去了");
+        assertNotNull(error, "截断必须以错误收尾，否则半截答案会被当成流正常结束");
+        assertTrue(error instanceof StringerException, "应是带码异常，实际: " + error);
+    }
+
+    @Test
+    void 收到终止事件即视为完整不报截断() {
+        scripted = Flux.just(
+                AgentEvent.token(SESSION, "完整答案"),
+                AgentEvent.done(SESSION));
+
+        assertEquals("完整答案", agentOf("customer").ask(SESSION, "在吗"));
     }
 
     @Test

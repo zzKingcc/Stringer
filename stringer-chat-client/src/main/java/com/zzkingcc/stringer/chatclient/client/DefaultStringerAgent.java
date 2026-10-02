@@ -59,6 +59,7 @@ public class DefaultStringerAgent implements StringerAgent {
             return "";
         }
         StringBuilder answer = new StringBuilder();
+        boolean terminated = false;
         for (AgentEvent event : collected) {
             switch (event.getType()) {
                 case TOKEN -> answer.append(event.getContent() == null ? "" : event.getContent());
@@ -69,12 +70,40 @@ public class DefaultStringerAgent implements StringerAgent {
                 case STOPPED -> {
                     return answer.toString();
                 }
+                case DONE -> terminated = true;
+                // TOOL_CALL / TOOL_RESULT：ask 只关心最终文本
                 default -> {
-                    // TOOL_CALL / TOOL_RESULT / DONE：ask 只关心最终文本
                 }
             }
         }
+        // 没收到任何终止事件就走到这里 = 流被中途掐断（容器异步超时、网关截断、连接重置…）。
+        // 此时手上的 answer 只是半截，绝不能当成功返回 —— 那等于让业务方拿着残缺答案继续跑。
+        if (!terminated) {
+            throw truncated(sessionId, collected.size());
+        }
         return answer.toString();
+    }
+
+    /**
+     * 终止事件：流"正常结束"的唯一凭据。
+     *
+     * <p>没有它，HTTP 连接被中间层掐断与"这一轮答完了"在客户端看来一模一样。</p>
+     */
+    private static boolean isTerminal(AgentEventType type) {
+        return type == AgentEventType.DONE
+                || type == AgentEventType.STOPPED
+                || type == AgentEventType.ERROR
+                || type == AgentEventType.INTERRUPT;
+    }
+
+    /** 流在收到终止事件前结束 */
+    private static StringerException truncated(String sessionId, int received) {
+        log.warn("[StringerAgent] 会话[{}] 事件流未收到终止事件即结束，已收到 {} 个事件，判定为流被截断",
+                sessionId, received);
+        return new StringerException(ErrorCode.EXTERNAL_SERVICE_TIMEOUT,
+                "事件流在收到终止事件（DONE/STOPPED/ERROR）前结束，答案不完整（已收到 " + received
+                        + " 个事件）；若本轮耗时较长，请调大 stringer.client.read-timeout 或服务端"
+                        + " spring.mvc.async.request-timeout");
     }
 
     @Override
@@ -84,12 +113,26 @@ public class DefaultStringerAgent implements StringerAgent {
 
     @Override
     public Flux<String> stream(String sessionId, String question, String tenantId, String userId) {
-        return events(sessionId, question, tenantId, userId).concatMap(event -> switch (event.getType()) {
-            case TOKEN -> Flux.just(event.getContent() == null ? "" : event.getContent());
-            case INTERRUPT -> Flux.error(approvalRequired(sessionId, event));
-            case ERROR -> Flux.error(failure(event));
-            default -> Flux.empty();
-        });
+        // 截断检测：记录是否见过终止事件，流"正常结束"时若没见过就补一个错误，
+        // 否则半截答案会以"流正常结束"的形式交给业务方。
+        var terminated = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var counter = new java.util.concurrent.atomic.AtomicInteger();
+        return events(sessionId, question, tenantId, userId)
+                .concatMap(event -> {
+                    counter.incrementAndGet();
+                    if (isTerminal(event.getType())) {
+                        terminated.set(true);
+                    }
+                    return switch (event.getType()) {
+                        case TOKEN -> Flux.just(event.getContent() == null ? "" : event.getContent());
+                        case INTERRUPT -> Flux.error(approvalRequired(sessionId, event));
+                        case ERROR -> Flux.error(failure(event));
+                        default -> Flux.empty();
+                    };
+                })
+                .concatWith(Flux.defer(() -> terminated.get()
+                        ? Flux.empty()
+                        : Flux.error(truncated(sessionId, counter.get()))));
     }
 
     @Override

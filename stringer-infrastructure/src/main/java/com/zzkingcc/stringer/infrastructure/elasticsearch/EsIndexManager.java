@@ -206,6 +206,7 @@ public class EsIndexManager {
                               "content_hash":    { "type": "keyword" },
                               "chunk_seq":       { "type": "integer" },
                               "chunk_total":     { "type": "integer" },
+                              "page_from":       { "type": "integer" },
                               "section_title":   { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
                               "section_path": {
                                 "type": "text",

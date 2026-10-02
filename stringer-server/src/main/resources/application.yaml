@@ -118,12 +118,13 @@ stringer:
     # 导入失败等不阻断启动：索引完全是运行期按需建出来的
     ingest-pool-size: 2
     ingest-queue-capacity: 16
-    # 上传白名单：txt 靠正则猜结构，md 由解析器读结构、docx 由 POI 直读（pdf 待补）
+    # 上传白名单：txt 靠正则猜结构，md 由解析器读结构、docx 由 POI、pdf 由 PDFBox 直读
     allowed-extensions:
       - txt
       - md
       - markdown
       - docx
+      - pdf
     # 单文件切片数上限：几百页的文档一次就能产出几千片，超限直接拒绝并提示拆分
     max-chunks-per-document: 2000
     # 切片参数（只这三项可调，其余阈值都是代码常量）

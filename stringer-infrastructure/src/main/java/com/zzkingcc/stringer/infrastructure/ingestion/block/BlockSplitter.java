@@ -79,7 +79,7 @@ public final class BlockSplitter {
             if (block.splittable()) {
                 String text = block.text().strip();
                 if (!text.isEmpty()) {
-                    packer.pending.add(text);
+                    packer.pending.add(new Pending(text, block.pageNo()));
                 }
             }
         }
@@ -92,6 +92,10 @@ public final class BlockSplitter {
     }
 
     // ==================== 内部：打包状态机 ====================
+
+    /** 待打包的一行正文 + 它的页码（只有 pdf 会带上页码，其余格式恒为 0） */
+    private record Pending(String text, int pageNo) {
+    }
 
     /** 一片待落地的切片（可变的，代码块那片还允许后续正文并入） */
     private static final class Piece {
@@ -116,8 +120,8 @@ public final class BlockSplitter {
         private final String fallback;
         /** 标题路径栈：下标 1~6 对应标题层级 1~6 */
         private final String[] stack = new String[7];
-        /** 攒着的可切正文行 */
-        private final List<String> pending = new ArrayList<>();
+        /** 攒着的可切正文行（带页码：pdf 的段落要能落进 metadata.page_from） */
+        private final List<Pending> pending = new ArrayList<>();
         private final List<Piece> pieces = new ArrayList<>();
         /** 当前路径 / 当前路径末节 */
         private Piece open;
@@ -165,12 +169,18 @@ public final class BlockSplitter {
             if (pending.isEmpty()) {
                 return;
             }
-            List<String> chunks = chunker.chunk(pending);
+            // 整批取首行的页码：一批就是一个 section 内的连续正文，起点即归属
+            int page = pending.get(0).pageNo();
+            List<String> lines = new ArrayList<>(pending.size());
+            for (Pending item : pending) {
+                lines.add(item.text());
+            }
             pending.clear();
+            List<String> chunks = chunker.chunk(lines);
             boolean first = true;
             for (String chunk : chunks) {
                 // 只有紧跟着代码块的第一片才允许并入代码块那片
-                addPiece(chunk, first, 0, false);
+                addPiece(chunk, first, page, false);
                 first = false;
             }
         }

@@ -14,7 +14,8 @@ import java.util.Locale;
  * 去重与向量化流程由 {@link AbstractDocumentProcessStrategy} 统一封装。</p>
  *
  * <p>md 走 {@code MarkdownDocumentProcessStrategy}（md 有原生结构，#{@code #} 前缀是确定信息，
- * 不该退化成"按纯文本猜标题"）；docx / pdf 将来按同一接口新增策略，工厂与现有策略都不动。</p>
+ * 不该退化成"按纯文本猜标题"）；docx 走 POI、pdf 走 PDFBox，都是按同一接口新增的策略，
+ * 工厂与现有策略一行都不用改。</p>
  *
  * @author zzkingcc
  */

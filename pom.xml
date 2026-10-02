@@ -42,6 +42,7 @@
         <elasticsearch.version>9.4.4</elasticsearch.version>
         <spring-security-crypto.version>6.3.3</spring-security-crypto.version>
         <poi.version>5.4.1</poi.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
     </properties>
 
     <dependencyManagement>
@@ -74,6 +75,23 @@
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi-ooxml</artifactId>
                 <version>${poi.version}</version>
+            </dependency>
+            <!--
+              文档解析：pdf 抽行。
+              Java 生态里唯一能同时拿到「文本 + 字号 + 坐标 + 页码」的成熟纯 Java 库，Apache-2.0。
+              Tika 走的是「格式无关纯文本」，恰好把字号与标题层级丢掉，所以 pdf 与 docx 都直连底层库。
+            -->
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
+                <exclusions>
+                    <!-- PDFBox 自带 commons-logging；交给 spring-jcl 统一转 slf4j，避免两个 jcl 实现打架 -->
+                    <exclusion>
+                        <groupId>commons-logging</groupId>
+                        <artifactId>commons-logging</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>org.elasticsearch.client</groupId>

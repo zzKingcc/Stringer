@@ -24,7 +24,7 @@ public class DocumentProcessStrategyFactory {
             new TextDocumentProcessStrategy(),          // .txt
             new MarkdownDocumentProcessStrategy(),      // .md .markdown
             new DocxDocumentProcessStrategy(),          // .docx
-            new PdfDocumentProcessStrategy(),           // .pdf（尚未落地，占住扩展名给明确答复）
+            new PdfDocumentProcessStrategy(),           // .pdf
             UnknownDocumentProcessStrategy.INSTANCE     // 未知文件类型
     );
 

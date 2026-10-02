@@ -21,7 +21,10 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 /**
  * 会话记忆配置
  *
- * <p>窗口阈值与 TTL 全部取自 {@code stringer.memory.*}。</p>
+ * <p>上限与保留期取自 {@code stringer.memory.*}。一期语义：记忆<b>只增不淘汰</b>、默认<b>永久不过期</b>
+ * ——到上限后由入口拒绝新一轮（{@code 30004}），调用方必须换 {@code sessionId}；Redis 侧靠 RDB+AOF
+ * 保住（启动期由 {@code RedisPersistenceAudit} 自检并告警）。</p>
+ *
  * @author zzkingcc
  */
 @Configuration
@@ -39,7 +42,8 @@ public class MemoryConfiguration {
             MemoryProperties memoryProperties) {
         String ttlText = memoryProperties.getTtl() != null
                 ? memoryProperties.getTtl().toMinutes() + " 分钟" : "永久";
-        log.info("[会话记忆] RedisChatMemoryStore 初始化，双约束：maxMessages={} 条（≈{} 轮问答），maxTokens={} tokens（问答累计），TTL={}",
+        log.info("[会话记忆] RedisChatMemoryStore 初始化，双约束（只增不淘汰）：maxMessages={} 条（≈{} 轮问答），"
+                        + "maxTokens={} tokens，TTL={}；到上限后入口拒绝新一轮（30004），需换 sessionId",
                 memoryProperties.getMaxMessages(), memoryProperties.getMaxMessages() / 2,
                 memoryProperties.getMaxTokens(), ttlText);
         return new RedisChatMemoryStore(stringRedisTemplate, memoryProperties.getTtl());

@@ -38,6 +38,8 @@ public enum ErrorCode {
     SESSION_NOT_FOUND(30001, "会话不存在或已过期", 404, false, "新建会话"),
     SESSION_STATE_INVALID(30002, "会话状态异常，无法继续", 409, false, "新建会话"),
     SESSION_BUSY(30003, "会话正在执行中，拒绝并发请求", 409, false, "等待当前任务结束，或先 stop 再重发"),
+    SESSION_MEMORY_FULL(30004, "会话记忆已达上限，该会话不再接受新消息", 409, false,
+            "更换 sessionId 开启新会话（平台不代为切换，sessionId 由调用方提供）"),
 
     // ===== 40xxx 客户端 / 入参校验 =====
     INVALID_PARAMETER(40000, "请求参数非法", 400, false, "检查入参"),

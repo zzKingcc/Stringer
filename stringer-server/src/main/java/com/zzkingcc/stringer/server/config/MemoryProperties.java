@@ -21,8 +21,10 @@ public class MemoryProperties {
     /** 单会话消息累计 Token 估算上限 */
     private int maxTokens = 30000;
 
-    /** 会话记忆过期时间;默认与检查点同量级(更长一档),避免"断点已过期而提问仍留在记忆里" */
-    private Duration ttl = Duration.ofHours(72);
+    /** 会话记忆保留期；{@code null} = <b>永久不过期</b>（一期默认）。
+     *  记忆是长期存储（靠 Redis RDB+AOF 保住），不再是缓存 —— 到上限后由入口拒绝新一轮，
+     *  而不是丢弃最旧的消息（静默丢历史会让用户"以为还记得"）。 */
+    private Duration ttl = null;
 
     /** 图检查点保留时长;中断后未 resume 的会话靠此兜底清理 */
     private Duration checkpointTtl = Duration.ofHours(24);

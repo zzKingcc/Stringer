@@ -14,9 +14,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 双约束会话记忆
- * 1、消息条数，上线50伦
- * 2、Token 数，30k
+ * 双约束会话记忆（消息条数 + Token 估算）
+ *
+ * <p><b>一期语义：只增不淘汰。</b>记忆是长期存储（Redis + RDB/AOF），不再为了塞下新消息而丢弃最旧的
+ * —— 静默丢历史会让用户"以为还记得"。到上限后改由<b>入口</b>拒绝新一轮：该会话作废，调用方必须换
+ * {@code sessionId} 重新开始（判定见 {@link #capacityFor(String)}）。</p>
+ *
+ * <p>上限只约束"能不能开新一轮"，不约束"能不能收尾"：最终回答永远允许写入，否则会留下有问无答的
+ * 孤立提问。因此一轮结束后总量可能略微超过上限（回答长度不可预估）。</p>
+ *
  * @author zzkingcc
  */
 public class DualConstraintChatMemory implements ChatMemory {
@@ -51,26 +57,52 @@ public class DualConstraintChatMemory implements ChatMemory {
 
     @Override
     public void add(ChatMessage message) {
+        // 纯追加：不淘汰、不判上限。上限由入口的 capacityFor(...) 把关，
+        // 出口（最终回答）永远允许写入。
         List<ChatMessage> messages = new ArrayList<>(store.getMessages(id));
         messages.add(message);
-
-        // 增量维护 token 总量:淘汰是"从最旧删除",只需减去被删消息的量,避免平方复杂度重算
-        int totalTokens = estimateTokens(messages);
-        int evictedCount = 0;
-
-        while (messages.size() > 1
-                && (messages.size() > maxMessages || totalTokens > maxTokens)) {
-            ChatMessage removed = messages.remove(0);
-            totalTokens -= estimateTokens(extractText(removed)) + PER_MESSAGE_OVERHEAD;
-            evictedCount++;
-        }
-
-        if (evictedCount > 0) {
-            log.debug("[会话记忆] 会话[{}] 淘汰 {} 条旧消息（当前 {} 条，约 {} tokens）",
-                    id, evictedCount, messages.size(), Math.max(totalTokens, 0));
-        }
-
         store.updateMessages(id, messages);
+    }
+
+    /**
+     * 入口容量判定：把"本轮提问"算进去，判断这个会话还能不能再开一轮。
+     *
+     * <p>判定是<b>粘性</b>的：记忆只增不减，所以一旦满了，之后每次判定都会失败 ——
+     * 不需要额外记"已封顶"标记位。（唯一能解除的是 Redis 数据丢失，所以 RDB+AOF 是这套语义的前提。）</p>
+     *
+     * <p>条数按<b>整轮预留</b>（提问 + 回答）判定，让"100 条"成为真正的硬上限；Token 只按提问判定
+     * （回答长度不可预估），因此允许一轮结束后轻度超出。</p>
+     */
+    public Capacity capacityFor(String pendingQuestion) {
+        List<ChatMessage> messages = store.getMessages(id);
+        int currentTokens = estimateTokens(messages);
+        int questionTokens = estimateTokens(pendingQuestion) + PER_MESSAGE_OVERHEAD;
+
+        if (questionTokens > maxTokens) {
+            return Capacity.full("单条提问已超过会话记忆上限（约 " + questionTokens + " tokens > 上限 "
+                    + maxTokens + "），请缩短内容，或更换 sessionId 开启新会话");
+        }
+        if (messages.size() + 2 > maxMessages) {
+            return Capacity.full("会话记忆已达上限（当前 " + messages.size() + " 条 + 本轮 2 条 > 上限 "
+                    + maxMessages + " 条 ≈ " + (maxMessages / 2) + " 轮问答），请更换 sessionId 开启新会话");
+        }
+        if (currentTokens + questionTokens > maxTokens) {
+            return Capacity.full("会话记忆已达上限（当前约 " + currentTokens + " tokens + 本轮提问约 "
+                    + questionTokens + " > 上限 " + maxTokens + " tokens），请更换 sessionId 开启新会话");
+        }
+        return Capacity.ok();
+    }
+
+    /** 入口容量判定结果；{@code canAccept=false} 时 {@code detail} 是可直接回给调用方的拒绝原因 */
+    public record Capacity(boolean canAccept, String detail) {
+
+        static Capacity ok() {
+            return new Capacity(true, null);
+        }
+
+        static Capacity full(String detail) {
+            return new Capacity(false, detail);
+        }
     }
 
     @Override

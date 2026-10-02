@@ -1,13 +1,17 @@
 package com.zzkingcc.stringer.server.config;
 
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
+import com.zzkingcc.stringer.server.env.RedisPersistenceAudit;
 import com.zzkingcc.stringer.server.prompt.PromptToolConsistencyAudit;
 import com.zzkingcc.stringer.server.settings.DomainSettingsStore;
+import com.zzkingcc.stringer.server.settings.InfraSettingsHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
  * 启动期自检：专门挑"<b>声明与事实不一致、但不会报错</b>"的那类问题。
@@ -36,5 +40,19 @@ public class StartupSelfCheckConfiguration {
                                                                         PromptProperties promptProperties) {
         log.debug("[启动自检] 已注册：提示词 ↔ 工具可见性一致性检查");
         return () -> new PromptToolConsistencyAudit(toolRouter, domainSettingsStore, promptProperties).audit();
+    }
+
+    /**
+     * Redis 持久化 ↔ 淘汰策略自检。
+     *
+     * <p>挡的是"会话记忆是长期存储、但 Redis 根本没开持久化或用了会淘汰 key 的策略"——
+     * 这两种情况都不报错，只会在某天重启或内存紧张时<b>静默丢用户历史</b>。</p>
+     */
+    @Bean
+    public SmartInitializingSingleton stringerRedisPersistenceAudit(
+            @Qualifier("stringerStringRedisTemplate") StringRedisTemplate stringRedisTemplate,
+            InfraSettingsHolder infraSettingsHolder) {
+        log.debug("[启动自检] 已注册：Redis 持久化 ↔ 淘汰策略检查");
+        return () -> new RedisPersistenceAudit(stringRedisTemplate, infraSettingsHolder).audit();
     }
 }

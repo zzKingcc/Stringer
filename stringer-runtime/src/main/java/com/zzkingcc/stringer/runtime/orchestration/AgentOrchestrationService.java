@@ -86,6 +86,14 @@ public class AgentOrchestrationService implements AgentService {
     private static final String BRANCH_AUTO = "auto";
     private static final String BRANCH_REVIEW = "review";
 
+    /**
+     * 「挂起未批 + 用户直接开新对话」时补的那条占位回答。
+     *
+     * <p>语义是"用户拒绝了那次审批"。补一条回答是为了让挂起的那一轮成为<b>完整轮次</b>——
+     * 否则记忆里会留下一条永远没人回答的提问，下一轮模型会看到"用户问过、却没人答"。</p>
+     */
+    private static final String APPROVAL_REJECTED_PLACEHOLDER = "（用户未确认，该次需要审批的操作已取消）";
+
     private final CompiledGraph<MessagesState<ChatMessage>> compiledGraph;
     private final ChatMemoryProvider chatMemoryProvider;
     private final StreamingChatModel streamingChatModel;
@@ -576,8 +584,26 @@ public class AgentOrchestrationService implements AgentService {
         // 空列表 = "快照就是空的"（记忆本来就空）。两者混用会让"异常早于快照"被误判成"清空记忆"。
         List<ChatMessage> memoryBefore = null;
         try {
-            // 上一轮若停在审批点，那个断点就是"待授权动作"的唯一载体：清掉它等于让用户点了同意也执行不了，
-            // 而用户看到的是"会话不存在"。这里明确拒绝新一轮，让调用方先去处理审批。
+            ChatMemory memory = chatMemoryProvider.get(key);
+
+            // ① 封顶判定（入口最优先）：记忆只增不淘汰，到上限后这一轮直接拒绝，且刻意做成**零副作用** ——
+            //    不写记忆、不清断点、不调模型（用户不会白烧一次调用），换 sessionId 才有出路。
+            //    判定是粘性的：只要记忆还满着，之后每次都用同一个码拒绝，不需要"已封顶"标记位。
+            if (memory instanceof DualConstraintChatMemory dual) {
+                DualConstraintChatMemory.Capacity capacity = dual.capacityFor(message);
+                if (!capacity.canAccept()) {
+                    log.warn("[Agent编排] 会话[{}] 已达记忆上限，拒绝新一轮：{}", sessionId, capacity.detail());
+                    context.emit(AgentEvent.error(sessionId, capacity.detail(),
+                            ErrorCode.SESSION_MEMORY_FULL, TraceId.currentOrNew()));
+                    context.complete();
+                    return;
+                }
+            }
+
+            // ② 上一轮停在审批点、用户没回复审批而是直接开了新对话 → **视为用户拒绝了那次审批**。
+            //    既不能把新对话挡回去（那会让会话在断点 TTL 到期前整个不可用），
+            //    也不能把断点留着（否则事后任何一次 resume 都能把那个待授权动作执行掉）。
+            //    所以：补一条占位回答让那一轮成为完整轮次（不留"有问无答"），再取消断点。
             boolean pending;
             try {
                 pending = pendingApproval(key);
@@ -591,19 +617,16 @@ public class AgentOrchestrationService implements AgentService {
                 return;
             }
             if (pending) {
-                log.warn("[Agent编排] 会话[{}] 存在待审批的中断点，拒绝新一轮对话", sessionId);
-                context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_STATE_INVALID,
-                        TraceId.currentOrNew()));
-                context.complete();
-                return;
+                log.info("[Agent编排] 会话[{}] 存在待审批断点且用户发起了新一轮对话 → 视为拒绝：取消该动作",
+                        sessionId);
+                memory.add(AiMessage.from(APPROVAL_REJECTED_PLACEHOLDER));
             }
-            releaseCheckpointQuietly(key, "入口清理");
+            releaseCheckpointQuietly(key, pending ? "视为拒绝" : "入口清理");
 
             TokenUsageRecorder.begin();
 
-            ChatMemory memory = chatMemoryProvider.get(key);
-            // 先拍快照再写提问：停止时要把记忆恢复到这一刻。只删"最后一条"是不够的——
-            // 若这次写入触发了窗口淘汰，被挤掉的旧消息不会回来，历史从此对不上。
+            // 先拍快照再写提问：停止时要把记忆恢复到这一刻（快照一定在写入之前拍，
+            // 所以"没有快照"= 本轮没往记忆里写过东西 = 无需回滚）。
             memoryBefore = List.copyOf(memory.messages());
             memory.add(UserMessage.from(message));
 

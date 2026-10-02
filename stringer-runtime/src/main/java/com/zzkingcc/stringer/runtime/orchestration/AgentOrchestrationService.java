@@ -571,8 +571,10 @@ public class AgentOrchestrationService implements AgentService {
 
         // 本轮排障标识：贯穿日志与 ERROR 事件，便于用 traceId 串起一次完整调用
         TraceId.begin(context == null ? null : context.traceId());
-        // 提问前的记忆快照（停止时回滚用）；声明在 try 之外，停止分支也要用
-        List<ChatMessage> memoryBefore = List.of();
+        // 提问前的记忆快照（停止时回滚用）；声明在 try 之外，停止分支也要用。
+        // 哨兵必须是 null 而不是空列表：null = "还没拍过快照"（本轮还没往记忆里写过东西），
+        // 空列表 = "快照就是空的"（记忆本来就空）。两者混用会让"异常早于快照"被误判成"清空记忆"。
+        List<ChatMessage> memoryBefore = null;
         try {
             // 上一轮若停在审批点，那个断点就是"待授权动作"的唯一载体：清掉它等于让用户点了同意也执行不了，
             // 而用户看到的是"会话不存在"。这里明确拒绝新一轮，让调用方先去处理审批。
@@ -1016,8 +1018,9 @@ public class AgentOrchestrationService implements AgentService {
                 return;
             }
             if (memoryBefore == null) {
-                // 没有快照：退回"删最后一条"，至少不把本轮提问留在记忆里
-                dual.removeLastMessage();
+                // 快照是在写提问之前拍的，所以"没有快照"= 本轮还没往记忆里写过任何东西 = 无需回滚。
+                // 这里绝不能"删最后一条"或"清空"：那会把上一轮的对话内容一起抹掉。
+                log.info("[Agent编排] 会话[{}] 无提问前快照（本轮未写入记忆），跳过记忆回滚", sessionId);
                 return;
             }
             dual.restore(memoryBefore);

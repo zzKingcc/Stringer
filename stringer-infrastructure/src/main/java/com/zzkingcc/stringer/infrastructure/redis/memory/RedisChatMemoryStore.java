@@ -25,19 +25,12 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
     /** Key 前缀 */
     private static final String KEY_PREFIX = "stringer:chat:memory:";
 
-    /** 会话记忆过期时间：null 表示永久不过期 */
-    private static final Duration DEFAULT_TTL = null;
-
     private final StringRedisTemplate redisTemplate;
     private final Duration ttl;
 
-    public RedisChatMemoryStore(StringRedisTemplate redisTemplate) {
-        this(redisTemplate, DEFAULT_TTL);
-    }
-
     /**
      * @param redisTemplate Redis 模板
-     * @param ttl           会话记忆过期时间，null 表示不过期
+     * @param ttl           记忆保留期；{@code null} = <b>永久不过期</b>（一期默认：记忆是长期存储，不是缓存）
      */
     public RedisChatMemoryStore(StringRedisTemplate redisTemplate, Duration ttl) {
         this.redisTemplate = redisTemplate;

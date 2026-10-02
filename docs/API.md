@@ -18,9 +18,18 @@
 | `/api/agent/**` | 请求头 `X-Stringer-Credential` | 凭证由 `POST /api/agent/login` 获取 |
 | `/admin/**` | Cookie `stringer_admin` | 无 Cookie 时回退读 `X-Stringer-Credential` 请求头，供程序化调用 |
 
-免鉴权路径：`/api/agent/login`、`/admin/login`、`/admin/init`、`/admin/session`、登录页与静态资源、`/error`、`/favicon.ico`。`OPTIONS` 请求一律放行。
+免鉴权路径：`/api/agent/login`、`/admin/login`、`/admin/init`、`/admin/session`、登录页与静态资源（`/admin.html`、`/login.html`、`/console/**`）、`/error`、`/favicon.ico`。`OPTIONS` 请求一律放行。
 
 此外 `GET /health`（存活探测）不属于上面任何一组接口——它不在被拦截的两个前缀之下，拦截器不会匹配到它，因此**天然免鉴权**。
+
+拦截器另有两条**全局前置规则**，先于上面的免鉴权清单判定：
+
+| 状态 | 行为 | 依据 |
+| --- | --- | --- |
+| 账号文件存在但无法解析 | **拒绝一切受保护请求**，返回 `10007 AUTH_STORE_CORRUPTED`（HTTP 503） | `CredentialAuthInterceptor:58-63` |
+| 服务端尚无账号（未初始化） | **放行且不校验凭证**，首次 `POST /admin/init` 因此可达 | `CredentialAuthInterceptor:65-71` |
+
+即"免鉴权"只在账号已初始化之后才是真正的鉴权边界。凭证无效时统一返回 `10002 AUTH_REQUIRED`（HTTP 401），`detail` 按"未携带凭证"与"凭证已失效"两种情形区分。
 
 凭证格式：`base64url(payload) + "." + base64url(HMAC(派生密钥, payload))`；派生密钥由主密钥与当前密码哈希导出，**改密码后全部旧凭证立即失效**。凭证无有效期。
 
@@ -40,6 +49,8 @@
 | `timestamp` | long | 毫秒时间戳 |
 
 成功响应的结构不统一：`/admin/**` 多数返回自定义字段并带 `code=0`；表结构、文档列表等接口返回业务字段本身。前端不应假设统一的 `{code,message,data}` 包装。
+
+唯一例外是 `40004 CLIENT_CANCELLED`（用户中断请求）：该分支不走统一构造，`retryable` 硬编码为 `false` 且**不带 `action` 字段**（`ServerGlobalExceptionHandler:207-222`）。
 
 ### 1.4 编码与状态码
 
@@ -137,7 +148,7 @@
       "description": "查询订单",
       "category": "default",
       "version": "1.0.0",
-      "prompts": ["after-sale"],
+      "domains": ["default.sales"],
       "sideEffect": "READ",
       "idempotent": true,
       "toModel": true,
@@ -150,11 +161,40 @@
 }
 ```
 
+| 顶层字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `instanceId` | 是 | 实例标识，缺失报 400 |
+| `endpoint` | 是 | 工具调用回流地址（`POST /stringer/invoke` 的完整 URL） |
+| `manifest` | 是 | **必须是数组**，承载本次声明的全量工具；不是数组直接报 400 |
+
+`manifest[]` 单项被服务端读取的字段（`ToolManifest:102-149`）：
+
+| 字段 | 缺省 | 说明 |
+| --- | --- | --- |
+| `name` | — | 必填；缺失的条目跳过，同名重复按首条处理 |
+| `description` | `""` | |
+| `category` | `default` | |
+| `version` | `1.0.0` | |
+| `domains` | 根域 | **授权边界**，完整路径；留空＝挂根域＝全树可见 |
+| `sideEffect` | `READ` | 接受 `READ`/`WRITE`/`DESTRUCTIVE` 枚举名，也接受布尔（false=READ、true=WRITE） |
+| `idempotent` | `true` | |
+| `toModel` | `true` | |
+| `requiresApproval` | `false` | 为 `false` 时审批字段全部忽略 |
+| `approvalMode` | — | 留空或 `NONE` 且 `requiresApproval=true` 时按 `ALWAYS` 处理 |
+| `approvalCondition` | `""` | |
+| `approvalReason` | `""` | |
+| `approverRoles` | 空 | 数组 |
+| `approvalTimeoutSeconds` | `300` | |
+| `parameters` | 空 | JSON Schema，对应 SDK 的 `ToolSpec.parameters` |
+
 | 响应 | HTTP | 体 |
 | --- | --- | --- |
 | 受理 | 200 | `{"accepted":true, "toolNames":["..."]}` |
 | 被强制下线 | 410 | `{"accepted":false, "reason":"force_offline"}` |
-| 报文不合法 | 400 | 标准错误响应体 |
+| 报文不合法 | 400 | `{"accepted":false, "reason":"...", "hint":"see docs/API.md §2.6"}` |
+| 工具名与本地冲突 | 400 | `{"accepted":false, "reason":"...", "hint":"工具名与服务端本地工具冲突，请改名后重新心跳"}` |
+
+400 分支**不走统一错误响应体**（无 `code`/`codeName`），判定依据是 `accepted=false`。
 
 语义：本次上报即该实例的完整声明；未出现在本次 `manifest` 中的工具视为该实例已撤下。
 
@@ -205,12 +245,30 @@
 
 | 方法 | 路径 | 入参 | 响应要点 |
 | --- | --- | --- | --- |
-| GET | `/admin/settings` | — | `chatBaseUrl`、`chatApiKeyMasked`、`chatApiKeySet`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKeyMasked`、`embeddingModelName`、`embeddingDimensions`、`chatConfigured`、`embeddingConfigured`、`settingsFile` |
-| POST | `/admin/settings` | body `LlmSettings`；query `rebuildIndex`（默认 false） | `success`、`chatConfigured`、`embeddingConfigured`、`rebuilt`、`message`；维度变化未确认重建时返回 `success`、`requiresRebuild` |
-| POST | `/admin/settings/test` | body `LlmSettings`（可空）；query `type`（`chat`/`embedding`，默认 `chat`） | 成功：`success`、`type`、`reply`、`message`、`dimension`、`declaredDimension`、`indexDimension`；失败：`success`、`type`、`message`、`error`、`detail` |
-| POST | `/admin/models` | body `LlmSettings`（可空）；query `type` | 成功：`success`、`models`；失败同上 |
+| GET | `/admin/settings` | — | `chatBaseUrl`、`chatApiKeyMasked`、`chatApiKeySet`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`chatCapabilities`、`embeddingBaseUrl`、`embeddingApiKeyMasked`、`embeddingModelName`、`embeddingDimensions`、`embeddingCapabilities`、`chatConfigured`、`embeddingConfigured`、`settingsFile` |
+| POST | `/admin/settings` | body `LlmSettings`；query `rebuildIndex`（默认 false） | 成功：`success`、`chatConfigured`、`embeddingConfigured`、`chatApiKeyMasked`、`chatApiKeySet`、`embeddingApiKeyMasked`、`rebuilt`、`message`；失败分支见下表 |
+| DELETE | `/admin/settings/{kind}` | path `kind`（`chat` / `embedding`，大小写不敏感） | 成功：`success`、`chatConfigured`、`embeddingConfigured`、`chatApiKeyMasked`、`chatApiKeySet`、`embeddingApiKeyMasked`、`message`；`kind` 非法 → `40000 INVALID_PARAMETER`；持有者拒绝清空 → `success:false` + `error` |
+| POST | `/admin/settings/test` | body `LlmSettings`（可空）；query `type`（`chat`/`embedding`，默认 `chat`） | 见下 |
+| POST | `/admin/models` | body `LlmSettings`（可空）；query `type`（默认 `chat`） | 成功：`success`、`models`；失败：`success`、`message`、`error`、`detail` |
 
 约定：`apiKey` 不回显，留空表示保持原值；向量模型的地址与 Key 留空时回落文本模型配置。
+
+`POST /admin/settings` 的失败分支（`success:false`，均带 `error`，无 `code`）：
+
+| 情形 | 追加字段 | 语义 |
+| --- | --- | --- |
+| 声明维度与实测不符 | `declaredDimension`、`newDimension` | 模型不支持该维度，直接拒绝保存，不受 `rebuildIndex` 影响 |
+| 维度变化但未确认重建 | `requiresRebuild: true`、`indexDimension`、`newDimension` | 本次保存不生效，配置保持原样 |
+| 索引重建失败 | `saved: true`、`rebuilt: false` + 三个 Key 状态字段 | **配置已落盘并生效**，仅索引重建失败，需另行重试 |
+
+`POST /admin/settings/test` 的响应：
+
+| `type` | 成功 | 失败 |
+| --- | --- | --- |
+| `chat` | `success`、`type`、`reply`、`message` | `success`、`type`、`message`、`error`、`detail` |
+| `embedding` | `success`、`type`、`dimension`、`declaredDimension`、`indexDimension`、`message` | 同上（`dimension` / `declaredDimension` / `indexDimension` 仍会先写入） |
+
+`POST /admin/models` 在地址或 Key 缺失时**不发起请求**，直接返回失败分支。
 
 ### 4.2.1 模型档案与域绑定（多 LLM）
 
@@ -223,8 +281,8 @@
 | POST | `/admin/model-profiles/probe` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：实测一个模型的端点族 / 模态 / 能力 / 维度 |
 | POST | `/admin/model-profiles/{alias}/probe` | path `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
 | POST | `/admin/model-profiles/{alias}/test` | path `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
-| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target` |
-| PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`、`target`、`aliases`（解绑后该域当前列表）、`domainBindings`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定 |
+| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`、`settingsFile` |
+| PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`（`bound` / `unbound`）、`target`、`aliases`（解绑后该域当前生效列表）、`sourceDomain`（生效来源：本域自绑还是从哪个祖先继承）、`domainBindings`、`settingsFile`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定；域未登记 → `40000 INVALID_PARAMETER` |
 
 约定：
 - 档案的 `endpoints` 可多选（空＝`["chat"]`）；是否对话模型看 `endpoints` 是否含 `chat`（`isChat()`），向量看 `embedding`。**落盘结构无 `type` 字段**。
@@ -237,13 +295,43 @@
 | 方法 | 路径 | 入参 | 响应要点 |
 | --- | --- | --- | --- |
 | GET | `/admin/tools` | — | 工具描述符列表 `ToolDescriptor` |
-| GET | `/admin/domains` | — | `stats{domainCount, toolCount, globalToolCount, approvalToolCount, missingPromptCount}`、`domains`、`globalTools`、`orphanPrompts`、`settingsFile` |
-| POST | `/admin/domains` | body `{id, callable?}` | 建域；`callable` 省略＝可调用单元。沿链补齐的**祖先一律是装配节点** |
-| PUT | `/admin/domains/{id}/callable` | body `{callable}` | 切换该域的角色（只影响这一个域，不向下传播） |
-| DELETE | `/admin/domains/{id}` | — | 递归删域：先删索引与切片预览文件，再清提示词 / 模型绑定 / 工具声明记录 / 检索器缓存，最后删域 |
-| GET | `/admin/prompts` | — | `base`、`prompts`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile`（编辑框里**只含已登记的域**） |
+| GET | `/admin/domains` | — | `stats`、`domains[]`、`globalTools`、`orphanPrompts`、`settingsFile`，见下 |
+| POST | `/admin/domains` | body `{id, callable?}` | `code`、`action`（`created`）、`domain`、`removed`、`removedIndices`、`manualDomains`、`callableDomains`、`settingsFile`；`id` 缺失或建域被拒 → `40000 INVALID_PARAMETER` |
+| PUT | `/admin/domains/{id}/callable` | body `{callable}` | `code`、`action`（`callable`）、`domain`、`removed`、`removedIndices`、`manualDomains`、`callableDomains`、`settingsFile`；根域不可置 `false`，域不存在或缺 `callable` → `40000 INVALID_PARAMETER` |
+| DELETE | `/admin/domains/{id}` | — | `code`、`action`（`deleted`）、`domain`、`removed`（被一并删掉的子孙）、`removedIndices`、`manualDomains`、`callableDomains`、`settingsFile`；见下方清理语义 |
+| GET | `/admin/prompts` | — | `prompts`、`domains[]`、`orphanPrompts`、`settingsFile`；`domains[]` 单项见下（编辑框里**只含已登记的域**） |
 | POST | `/admin/prompts` | body `DomainSettings`（可空） | `success`、`message`、`settingsFile`；含**未登记**的域键直接 400 |
-| GET | `/api/agent/domains` | — | **只返回可调用单元**：`domains`、`details[{id, source, toolCount, callable}]`、`fallback` |
+| GET | `/api/agent/domains` | — | `code`、`domains`、`details[{id, source, toolCount, callable}]`、`fallback`（根域标识）。**只返回可调用单元**；路径在 `/api/agent/**` 下，走请求头凭证 |
+
+`GET /admin/domains` 的 `stats`：`domainCount`、`builtinCount`、`manualCount`、`derivedCount`、`toolCount`、`globalToolCount`、`approvalToolCount`、`missingPromptCount`。
+
+`GET /admin/domains` 的 `domains[]` 单项：`name`、`source`、`sourceLabel`、`deletable`、`parentId`、`childrenCount`（全部后代）、`directChildCount`、`hasChildren`、`callable`、`toolCount`、`exclusiveToolCount`、`providerCount`、`approvalCount`、`sideEffects{READ,WRITE,DESTRUCTIVE}`、`hasPrompt`、`promptLength`、`promptPreview`、`tools[]`（单项含 `name`、`description`、`category`、`version`、`sideEffect`、`idempotent`、`toModel`、`requiresApproval`、`approvalMode`、`approvalReason`、`paramCount`、`provider`、`source`、`exclusive`）。
+
+`GET /admin/prompts` 的 `domains[]` 单项：`name`、`chain`、`ancestors`、`tools[{name, source}]`、`providerCount`、`prompt`（本域片段）、`hasPrompt`、`promptLength`、`preview`（沿链拼接后的生效全文）。
+
+域是一棵树，标识是**从根域 `default` 出发的完整路径**。域有三个**来源**（`BUILTIN` 根域 / `MANUAL` 人工创建 / `DERIVED` 工具声明派生），**同级、不构成等级**；差异只在生命周期——`MANUAL` 落盘重启仍在，`DERIVED` 重启随声明重建。登记时沿链补齐缺失祖先，不留悬空节点；删除**递归**带走全部子孙，不向上提升，**只有根域不可删**。
+
+域有两种**角色**，显式声明、互不传播：
+
+- **可调用单元**（`callable=true`）：能作为入口被调用，是"这一个 AI 切片"的入口；
+- **装配节点**（`callable=false`）：只把工具 / 提示词 / 模型绑定 / 知识传给后代，不能直接当入口。
+
+默认规则：被显式声明的那个域可调用，**沿链补齐出来的祖先一律不可调用**，根域恒可调用（空域会被归一化到它）；标记不沿链补齐。
+
+`10004`（域不存在）与 `10010`（域存在但不是可调用单元）**分开**：前者说明名字写错或没建域，后者说明把装配节点（父域）当成了入口。
+
+写入口对域的要求：**工具 manifest / 本地 `@Tool(domains=...)` 校验格式**（非法整包拒绝或启动失败）；**知识库归属域 / 提示词 / 模型绑定必须已登记**（否则会为不存在的域建索引、落盘孤儿配置并被后代继承）。
+
+`DELETE /admin/domains/{id}` 的清理顺序是硬要求（`AdminDomainController:144-200`），除第 5 步外任一步失败都会中止且**域一个没动**：
+
+1. 校验域存在、且不是根域（根域不可删）；牵连范围＝自身＋全部子孙；
+2. 删该范围内各域的知识库索引（含切片预览文件），失败 → `60000 KNOWLEDGE_BASE_ERROR`，域未删除；
+3. 失效对应索引的**检索器缓存**（被删索引留在缓存里会被旧检索器继续命中）；
+4. 清**提示词**、**模型绑定**、**工具声明派生记录**（不清则同路径域将来重建会静默复活旧配置）；
+5. 清 **Redis 会话记忆**与**图检查点**：对范围内每个域按 `{域}|` 前缀 `SCAN` 后删除（`RedisChatMemoryStore:122-124`、`RedisCheckpointSaver:156-178`）。会话记忆保留期默认永久，不清则重建域后旧对话历史原样复活；断点里存着"已授权待执行"的工具调用，不清则 24 小时内重建域可 `resume(approved=true)` 补执行掉当初被拦下的破坏性动作。此步失败只告警、**不阻断删域**；
+6. 删域并落盘人工声明。
+
+返回的 `removedIndices` 是第 2 步实际删掉的索引名列表。
 
 域是一棵树，标识是**从根域 `default` 出发的完整路径**。域有三个**来源**（`BUILTIN` 根域 / `MANUAL` 人工创建 / `DERIVED` 工具声明派生），**同级、不构成等级**；差异只在生命周期——`MANUAL` 落盘重启仍在，`DERIVED` 重启随声明重建。登记时沿链补齐缺失祖先，不留悬空节点；删除**递归**带走全部子孙，不向上提升，**只有根域不可删**。
 
@@ -328,14 +416,14 @@
 | 10004 | `PROFILE_NOT_FOUND` | 指定的域不存在 | 否 | 400 |
 | 10005 | `AUTH_NOT_INITIALIZED` | 服务端账号尚未初始化 | 否 | 409 |
 | 10006 | `AUTH_ALREADY_INITIALIZED` | 账号已存在，初始化入口已关闭 | 否 | 409 |
-| 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取 | 否 | 503 |
-| 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份 | 否 | 400 |
-| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域。**当前实现中域为空会归一化为根域 `default`**，该码仅在根域缺失时出现（根域不可删除，故实际不触发；保留为理论码） | 否 | 400 |
+| 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取。**此时服务端拒绝一切受保护请求**，直到文件被修复或删除后重启 | 否 | 503 |
+| 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份（保留为理论码：`CallerContext.from` 与 `resume` 的必填 body 都不会产生 null） | 否 | 400 |
+| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域（保留为理论码：域为空会归一化为根域 `default`，而根域不可删除） | 否 | 400 |
 | 10010 | `DOMAIN_NOT_CALLABLE` | 该域不是可调用单元（装配节点不能当入口）。文案带出当前可调用集合与修法 | 否 | 400 |
-| 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | 是 | 429 |
-| 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试 | 是 | 429 |
-| 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试 | 是 | 503 |
-| 20003 | `CONCURRENT_LIMIT` | 并发会话数已达上限 | 是 | 503 |
+| 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试（**保留未实现**：入口限流尚未落地，服务端不会发出此码） | 是 | 429 |
+| 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试（**保留未实现**：大模型侧限流映射尚未落地，服务端不会发出此码） | 是 | 429 |
+| 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试。编排线程池满或提交被拒时发出 | 是 | 503 |
+| 20003 | `CONCURRENT_LIMIT` | 并发会话数已达上限（**保留未实现**：按调用方维度的并发闸门尚未落地，服务端不会发出此码） | 是 | 503 |
 | 30000 | `ORCHESTRATION_FAILED` | 任务执行失败，请重试 | 是 | 500 |
 | 30001 | `SESSION_NOT_FOUND` | 会话不存在或已过期 | 否 | 404 |
 | 30002 | `SESSION_STATE_INVALID` | 会话状态异常，无法继续（**仅用于 `resume` 时断点不在待审批点**；挂起未批就开新对话视为用户拒绝，不走此码） | 否 | 409 |

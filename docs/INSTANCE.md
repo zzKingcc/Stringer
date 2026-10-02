@@ -162,7 +162,13 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 
 检索域 D 时只查「D + 全部祖先」链上的索引（与工具可见性同一套累加语义）——
 域边界由"查哪些索引"保证，不再做元数据过滤。链上某个祖先域还没有索引时那条通道安静返回空。
-删域会先删掉该域及全部子孙的索引。
+删域会连带清掉该域及全部子孙的：知识库索引与切片预览文件、检索器缓存、提示词、模型绑定、工具声明记录，
+以及 **Redis 里的会话记忆与图检查点**（按 `{域}|` 前缀扫描删除）。
+
+最后一项不是顺手清理而是必需的：会话记忆默认**永不过期**，不清掉的话同路径域将来重建，
+这段对话历史会原样复活；图检查点里存着"已挂起、等待人工授权"的工具调用，
+不清掉的话删域后 24 小时内同路径域重建并 `resume(approved=true)`，那个当初被拦下的破坏性动作会被补执行掉。
+删域因此意味着**该域的对话历史一并消失**。
 
 一域一索引还有个副作用上的好处：域之间的知识物理隔离，删域＝删索引，干净利落。
 
@@ -182,8 +188,15 @@ ES 与 Redis **均可不填**——未配置时服务端照常启动（知识库
 | `stringer.instance.invoke-timeout-ms` | `30000` | 单次远程工具调用超时 |
 | `stringer.instance.invoke-max-attempts` | `2` | 单次调用最多试几个副本（仅传输层失败时换副本） |
 | `stringer.retrieval.*` | — | 混合检索（每索引召回条数、权重、`rrf-k`、TopN 等） |
-| `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | `2` / `16` | 知识库导入线程池与队列 |
-| `stringer.rag.max-file-size` / `allowed-extensions` | `5MB` / `txt,md,markdown,docx,doc,pdf,xls,xlsx` | 单文件大小上限与扩展名白名单。上限与 `spring.servlet.multipart.max-file-size` 必须一致（容器先拦，业务层后校验） |
+| `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | `2` / `16` | 知识库导入线程池与队列。队列满时上传被拒（并入 `60006`） |
+| `stringer.rag.ingest-lock-wait-seconds` | `60` | 等待"同域导入串行锁"的时长，超时即拒（一个域同时只导入一份，避免同名文档并发写入） |
+| `stringer.rag.max-file-size` / `allowed-extensions` | `5MB` / `txt,md,markdown,docx,doc,pdf,xls,xlsx` | 单文件大小上限与扩展名白名单 |
+| `stringer.rag.max-chunks-per-document` | `2000` | 单文件切片数上限，超限**直接拒绝并提示拆分**（不切一半留下） |
+| `stringer.rag.chunking.max-chars` / `overlap-sentences` / `min-chars` | `400` / `1` / `60` | 切片长度上限（撞标题就提前断，是上限不是固定长度）、重叠句数、过短片的丢弃阈值 |
+| `spring.servlet.multipart.max-file-size` | `5MB` | **容器侧**上传上限，`stringer.rag.max-file-size` 必须与它一致 |
+| `spring.servlet.multipart.max-request-size` | `6MB` | 整个 multipart 请求体上限（含 boundary 与 part 头），须**大于** `max-file-size` |
+| `spring.mvc.async.request-timeout` | `-1`（不限） | SSE 异步请求超时。不设时容器默认 30s，且那是**整轮总时限**，慢回答会被拦腰掐断 |
+| `stringer.single-instance-guard` | `true` | 单实例守卫：启动时在 Redis 上抢运行权租约，抢不到即拒绝启动（详见 `DEPLOYMENT.md` §6） |
 | `stringer.logging.path` / `stringer.logging.level` | `/var/log/stringer` / `INFO` | 文件日志目录与级别（默认只输出控制台） |
 | `redis.timeout` / `redis.pool.*` | — | Redis 连接池与命令超时（调优用，不在管控台） |
 

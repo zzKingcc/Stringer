@@ -65,8 +65,10 @@ public class ServerAgentController {
         AgentRequest safeRequest = AgentRequest.builder()
                 .sessionId(request.getSessionId())
                 .message(InputSanitizer.validate(request.getMessage()))
-                // 域必须原样透传：漏传会被编排层判为"未携带 profile"，直接拒绝本轮调用。
-                // 这与"漏传 permissions 静默降级 public"是同一类错误形态，且后果更直接。
+                // 域必须原样透传：Builder.build() 对空 profile 直接抛异常（→ 400），
+                // 不会把它归一化成根域。这与"漏传 permissions 静默降级 public"是同一类错误形态，
+                // 且后果更直接。注意"空域归一化为根域"只发生在编排层收到非空 CallerContext 之后，
+                // 走 HTTP 时根本到不了那一步。
                 .profile(request.getProfile())
                 .tenantId(request.getTenantId())
                 .userId(request.getUserId())

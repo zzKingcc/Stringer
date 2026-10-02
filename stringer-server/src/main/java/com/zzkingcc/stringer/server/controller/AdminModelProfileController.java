@@ -71,7 +71,7 @@ public class AdminModelProfileController {
     }
 
     /**
-     * 档案全貌：档案列表（Key 脱敏）+ 域绑定 + 默认别名 + 落盘位置。
+     * 档案全貌：档案列表（Key 脱敏）+ 域绑定 + 落盘位置。
      */
     @GetMapping("/model-profiles")
     public Map<String, Object> list() {
@@ -180,7 +180,10 @@ public class AdminModelProfileController {
     }
 
     /**
-     * 删除档案。仍被域绑定时拒绝，并列出是哪些域 —— 否则那些域下次调用会直接失败。
+     * 删除档案，并<b>级联清理所有域对该别名的绑定</b>。
+     *
+     * <p>被清掉绑定的域立即进入"无可调用"状态，由管控台「域空间」页提示 ——
+     * 删除不会被"仍被引用"拦在半路。</p>
      */
     @DeleteMapping("/model-profiles/{alias}")
     public Map<String, Object> delete(@PathVariable("alias") String alias) {

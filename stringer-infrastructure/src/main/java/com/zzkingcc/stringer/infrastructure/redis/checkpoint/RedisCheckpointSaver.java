@@ -122,8 +122,17 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
     @Override
     public Tag release(RunnableConfig config) throws Exception {
         String key = buildKey(config);
+        // release 的语义是"把这个 threadId 的断点整个删掉"，它只需要读出一份 tag 作为返回值，
+        // 并不依赖读到的内容是否可用 —— 因此这里不能因为数据损坏就放弃删除：
+        // 否则一个损坏的键会永远卡在那里，既读不出、也清不掉（而 deleteByDomain 也只能删整个域）。
+        LinkedList<Checkpoint> all;
         try {
-            LinkedList<Checkpoint> all = readAll(key);
+            all = readAll(key);
+        } catch (ChatMemoryException e) {
+            log.warn("[检查点] release 会话[{}]：数据损坏，仍按语义强制删除该键", threadId(config));
+            all = new LinkedList<>();
+        }
+        try {
             Tag tag = new Tag(threadId(config), all);
             redisTemplate.delete(key);
             log.info("[检查点] release 会话[{}]: 释放 {} 个检查点", threadId(config), all.size());
@@ -180,13 +189,34 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         if (base64 == null || base64.isBlank()) {
             return new LinkedList<>();
         }
-        byte[] bytes = Base64.getDecoder().decode(base64);
+        byte[] bytes;
+        try {
+            bytes = Base64.getDecoder().decode(base64);
+        } catch (IllegalArgumentException e) {
+            throw corrupt(key, e);
+        }
         try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
             return checkpointListSerializer.read(ois);
         } catch (Exception e) {
-            log.warn("[检查点] 反序列化失败,当作空列表处理: {}", e.getMessage());
-            return new LinkedList<>();
+            throw corrupt(key, e);
         }
+    }
+
+    /**
+     * 断点读不出来时<b>必须报错，不能当空列表</b>。
+     *
+     * <p>当成空的代价是灾难性的且不可逆：{@link #put} 走的是"读全部 → 加一条 → 写回整份"，
+     * 它读到一个空列表就会把<b>原有整段会话历史覆盖成一条</b>，且全程无任何异常。
+     * 紧接着 {@code get/list} 会报"无检查点"，用户收到的是"会话不存在，请新建会话"——
+     * 一个与真实原因（数据损坏）毫无关系的错误信息。</p>
+     *
+     * <p>fail-closed 与记忆侧一致：{@code RedisChatMemoryStore.getMessages} 读失败同样抛异常。
+     * 数据存疑时宁可不提供，也不能提供一份被清空过的"正确答案"。</p>
+     */
+    private ChatMemoryException corrupt(String key, Exception cause) {
+        log.error("[检查点] 反序列化失败（键 {}），按损坏处理并中止本轮读写：{}", key, cause.getMessage(), cause);
+        return new ChatMemoryException(ErrorCode.CHECKPOINT_ERROR,
+                "检查点数据损坏，已中止本轮读写以免覆盖历史数据: " + cause.getMessage(), cause);
     }
 
     /**

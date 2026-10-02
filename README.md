@@ -124,20 +124,24 @@ flowchart TB
 ```mermaid
 flowchart TB
     D["default<br/>装配节点（有子域）"]
-    C["default.common<br/>装配节点"]
-    S["default.sales<br/>装配节点"]
-    O["default.sales.order<br/>可调用单元 ← 叶子"]
-    R["default.sales.order.refund<br/>可调用单元 ← 叶子"]
-    H["default.hr<br/>可调用单元 ← 叶子"]
+    C["default.common<br/>装配节点（有子域）"]
+    F["default.common.faq<br/>可调用单元（叶子）"]
+    S["default.sales<br/>装配节点（有子域）"]
+    O["default.sales.order<br/>可调用单元（叶子）"]
+    H["default.hr<br/>可调用单元（叶子）"]
 
     D --> C
-    C --> S
+    C --> F
+    D --> S
     S --> O
-    O --> R
-    C --> H
+    D --> H
 ```
 
+注意每个节点的标识都是**父路径再加一段**：`default.common.faq` 挂在 `default.common` 下，而 `default.sales` 挂在 `default` 下（不是挂在 `default.common` 下）—— 标识本身就是路径，不存在"同名不同父"。
+
 **只有叶子域可以作为可调用单元** —— 一个域一旦有了子域，就降级为装配节点。根域也不例外：整棵树只有根域时它可调用，一旦往下建了子域，它同样只是装配节点。
+
+上图中 `default`、`default.common`、`default.sales` 都有子域，所以三者都是装配节点、都不能当入口；能作为入口的只有三个叶子：`default.common.faq`、`default.sales.order`、`default.hr`。
 
 - **可调用单元**（叶子）：能作为入口，`chat` 时传的就是它。
 - **装配节点**（有子域）：**不能当入口**，只把工具 / 提示词 / 模型 / 知识传给后代。传它做入口会返回 `10010`（"该域不是可调用单元"），而不是悄悄降级。
@@ -158,6 +162,8 @@ flowchart LR
     S --> M
     O --> M
 ```
+
+（`default.sales.order` 在这棵树里是叶子，所以它能作为入口；`default` 与 `default.sales` 有子域，只参与装配。）
 
 四个维度用的是**同一套沿链累加语义**：
 

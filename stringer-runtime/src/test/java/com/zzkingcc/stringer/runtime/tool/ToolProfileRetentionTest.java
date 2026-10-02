@@ -81,4 +81,30 @@ class ToolProfileRetentionTest {
         assertFalse(registry.knownProfiles().contains("default.finance"), "被删的域不该再出现在域全集里");
         assertTrue(registry.knownProfiles().contains("default.ops"), "其它域不受影响");
     }
+
+    /**
+     * 生产路径：<b>工具还活着</b>时删域。
+     *
+     * <p>{@code knownProfiles()} 会从活着的工具声明里把域捞回来，所以只清 declaredProfiles 是不够的 ——
+     * 那会让被删的域继续留在「域空间」列表里，再点删除报"域不存在"，看着像没删干净。
+     * 上一版只覆盖了"工具已下线"的路径，生产路径没测到。</p>
+     */
+    @Test
+    void forgetProfilesDetachesDomainsFromLiveTools() {
+        registry.register(tool("local_tool", "stringer", List.of("default.ops")));
+        registry.replaceInstanceTools("i1", "http://10.0.0.5:8081/invoke",
+                List.of(tool("remote_tool", "remote://i1", List.of("default.finance", "default.ops"))));
+
+        assertTrue(registry.knownProfiles().contains("default.finance"), "前提：域当前可见");
+
+        registry.forgetProfiles(List.of("default.finance"));
+
+        assertFalse(registry.knownProfiles().contains("default.finance"),
+                "工具还活着也不能把被删的域捞回来");
+        assertTrue(registry.find("remote_tool").isPresent(), "工具本身不受影响");
+        assertTrue(registry.find("remote_tool").get().descriptor().visibleIn("default.ops"),
+                "工具的其他域声明不受影响");
+        assertFalse(registry.find("remote_tool").get().descriptor().visibleIn("default.finance"),
+                "删域等于撤销该域的授权边界");
+    }
 }

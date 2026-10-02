@@ -404,17 +404,40 @@ public class ToolRegistry {
     }
 
     /**
-     * 删域时清理：把这些域从"本进程出现过的域"里摘掉。
+     * 删域时清理：把这些域从"本进程出现过的域"里摘掉，<b>并从仍活着的工具声明里剥离</b>。
      *
-     * <p>域全集（knownProfiles）是<b>展示 / 排障</b>口径，原本只增不减 —— 删掉的域不摘，
-     * 它会一直出现在两个清单端点里，且 DELETE 会报"域不存在"却删不掉。</p>
+     * <p>为什么必须剥离而不能只清 {@code declaredProfiles}：{@link #knownProfiles()} 会
+     * {@link #addDomains 从活着的工具条目} 把域重新捞回来。只清 declaredProfiles 的话，
+     * 被删的域仍留在「域空间」列表里（来源显示"工具派生"），再点删除还会报"域不存在"——
+     * 看着像没删干净，实际是"已删但仍被工具声明复活"。</p>
+     *
+     * <p>剥离还有一个安全含义：工具可见性完全由 descriptor 的域列表决定
+     * （见 {@code ToolDescriptor.visibleIn}），不清掉的话，删域对该域的授权边界<b>不撤销</b> ——
+     * 正在飞行的破坏性工具调用照常通过复核。</p>
      */
     public void forgetProfiles(Collection<String> domains) {
         if (domains == null || domains.isEmpty()) {
             return;
         }
         declaredProfiles.removeAll(domains);
-        log.info("[工具注册] 已从域全集摘掉被删的域：{}", domains);
+        for (Map.Entry<String, Registered> entry : tools.entrySet()) {
+            Registered registered = entry.getValue();
+            ToolDescriptor descriptor = registered.descriptor();
+            List<String> kept = descriptor.domains().stream()
+                    .filter(domain -> !domains.contains(domain))
+                    .toList();
+            if (kept.size() == descriptor.domains().size()) {
+                continue;
+            }
+            // 副本列表与执行体原样保留：这里只改"这个工具对哪些域可见"，不碰它还能不能被调用
+            tools.computeIfPresent(entry.getKey(), (name, old) -> new Registered(
+                    new ToolDescriptor(descriptor.name(), descriptor.description(), descriptor.category(),
+                            descriptor.version(), descriptor.sideEffect(), descriptor.idempotent(),
+                            descriptor.toModel(), descriptor.params(), kept, descriptor.approval(),
+                            descriptor.source()),
+                    old.specification(), old.executor(), old.endpoints()));
+        }
+        log.info("[工具注册] 已从域全集摘掉被删的域：{}，并剥离了相关工具的域声明", domains);
     }
 
     /**

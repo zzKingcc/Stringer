@@ -5,6 +5,8 @@ import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.support.KbIndexes;
 import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
+import com.zzkingcc.stringer.infrastructure.redis.checkpoint.RedisCheckpointSaver;
+import com.zzkingcc.stringer.infrastructure.redis.memory.RedisChatMemoryStore;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import com.zzkingcc.stringer.server.knowledge.DomainChannelProvider;
@@ -58,6 +60,8 @@ public class AdminDomainController {
     private final ModelProfileRegistry modelProfileRegistry;
     private final ToolRegistry toolRegistry;
     private final DomainChannelProvider domainChannelProvider;
+    private final RedisChatMemoryStore chatMemoryStore;
+    private final RedisCheckpointSaver checkpointSaver;
 
     public AdminDomainController(DomainRegistry domainRegistry,
                                  DomainStore domainStore,
@@ -65,7 +69,9 @@ public class AdminDomainController {
                                  DomainSettingsStore domainSettingsStore,
                                  ModelProfileRegistry modelProfileRegistry,
                                  ToolRegistry toolRegistry,
-                                 DomainChannelProvider domainChannelProvider) {
+                                 DomainChannelProvider domainChannelProvider,
+                                 RedisChatMemoryStore chatMemoryStore,
+                                 RedisCheckpointSaver checkpointSaver) {
         this.domainRegistry = domainRegistry;
         this.domainStore = domainStore;
         this.knowledgeBase = knowledgeBase;
@@ -73,6 +79,8 @@ public class AdminDomainController {
         this.modelProfileRegistry = modelProfileRegistry;
         this.toolRegistry = toolRegistry;
         this.domainChannelProvider = domainChannelProvider;
+        this.chatMemoryStore = chatMemoryStore;
+        this.checkpointSaver = checkpointSaver;
     }
 
     /**
@@ -111,6 +119,11 @@ public class AdminDomainController {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "缺少 callable（true=可调用单元，false=装配节点）");
         }
         String normalized = Domains.normalize(id);
+        // 根域必须恒可调用：域为空会归一化到它，一旦关掉，**所有**未指定域的调用都会 10010 锁死。
+        if (Domains.DEFAULT.equals(normalized) && !body.getCallable()) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER,
+                    "根域 default 必须保持可调用：未指定域的调用会归一化到它，关掉等于让全部调用不可用");
+        }
         if (!domainRegistry.setCallable(normalized, body.getCallable())) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "域不存在：" + normalized);
         }
@@ -162,14 +175,27 @@ public class AdminDomainController {
         modelProfileRegistry.unbindDomains(affected);
         toolRegistry.forgetProfiles(affected);
 
+        // 3.1) Redis 里的会话记忆与图检查点也必须清：
+        //     · 记忆保留期默认永久 —— 不清的话同路径域重建，这段对话历史原样复活；
+        //     · 断点里存着"即将执行、尚未执行"的工具调用 —— 不清的话，24 小时内重建域
+        //       就能 resume(approved=true) 把当初被拦下的破坏性动作补执行掉。
+        int purgedMemories = 0;
+        int purgedCheckpoints = 0;
+        for (String domain : affected) {
+            purgedMemories += chatMemoryStore.deleteByDomain(domain);
+            purgedCheckpoints += checkpointSaver.deleteByDomain(domain);
+        }
+
         // 4) 以上都成功才动域
         DomainRegistry.DeleteResult deleted = domainRegistry.delete(normalized);
         if (!deleted.deleted()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, deleted.reason());
         }
         domainStore.saveDeclarations(domainRegistry.manualConfig());
-        log.info("[域管理] 已删除域 {} 及其子孙 {}；连带删除知识库索引 {} 个（域 {}）",
-                normalized, deleted.removed(), removedIndices.size(), removedIndices);
+        log.info("[域管理] 已删除域 {} 及其子孙 {}；连带删除知识库索引 {} 个（域 {}），"
+                        + "会话记忆 {} 条、断点 {} 条",
+                normalized, deleted.removed(), removedIndices.size(), removedIndices,
+                purgedMemories, purgedCheckpoints);
         return view("deleted", normalized, deleted.removed(), removedIndices);
     }
 

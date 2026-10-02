@@ -2,6 +2,7 @@ package com.zzkingcc.stringer.infrastructure.redis.checkpoint;
 
 import com.zzkingcc.stringer.common.exception.ChatMemoryException;
 import com.zzkingcc.stringer.api.code.ErrorCode;
+import com.zzkingcc.stringer.api.support.SessionKeys;
 import org.bsc.langgraph4j.RunnableConfig;
 import org.bsc.langgraph4j.checkpoint.BaseCheckpointSaver;
 import org.bsc.langgraph4j.checkpoint.Checkpoint;
@@ -9,6 +10,8 @@ import org.bsc.langgraph4j.serializer.StateSerializer;
 import org.bsc.langgraph4j.serializer.std.CheckpointListSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.io.*;
@@ -25,6 +28,9 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
 
     /** Key 前缀 */
     private static final String KEY_PREFIX = "stringer:graph:checkpoint:";
+
+    /** SCAN 每批拉取的键数（大批量扫描时的单次往返规模） */
+    private static final int SCAN_BATCH = 500;
 
     /** 检查点默认保留时长:中断后未 resume 的会话不会主动清理,靠 TTL 兜底 */
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
@@ -127,6 +133,38 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         } catch (Exception e) {
             log.error("[检查点] release 会话[{}]失败: {}", threadId(config), e.getMessage(), e);
             throw new ChatMemoryException(ErrorCode.CHECKPOINT_ERROR, "释放检查点失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 删除某个<b>域</b>下的全部检查点（删域级联清理用）。
+     *
+     * <p>断点里存着"即将执行但还没执行"的工具调用。域被删后若不清，24 小时内同路径域重建
+     * 就能 {@code resume(approved=true)} 把当初那个破坏性动作补执行掉 —— 域的删除没有撤销授权。</p>
+     *
+     * @return 删除的键数
+     */
+    public int deleteByDomain(String domain) {
+        String normalized = domain == null ? "" : domain.trim();
+        String pattern = KEY_PREFIX + normalized + SessionKeys.SEPARATOR + "*";
+        if (normalized.isEmpty()) {
+            return 0;
+        }
+        try {
+            List<String> keys = new ArrayList<>();
+            try (Cursor<String> cursor = redisTemplate.scan(
+                    ScanOptions.scanOptions().match(pattern).count(SCAN_BATCH).build())) {
+                cursor.forEachRemaining(keys::add);
+            }
+            if (keys.isEmpty()) {
+                return 0;
+            }
+            Long deleted = redisTemplate.delete(keys);
+            log.info("[检查点] 已按域清理 {} 个键（模式 {}）", deleted, pattern);
+            return deleted == null ? 0 : deleted.intValue();
+        } catch (Exception e) {
+            log.warn("[检查点] 按模式清理失败（不阻断删域流程）: {}：{}", pattern, e.getMessage(), e);
+            return 0;
         }
     }
 

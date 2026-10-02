@@ -70,10 +70,23 @@
                 <version>${elasticsearch.version}</version>
             </dependency>
 
-            <!-- 文档解析：docx 直读（title 层级只有 POI 能拿到） -->
+            <!--
+              文档解析：docx 直读（title 层级只有 POI 能拿到）+ Excel（.xls 的 HSSF 在 poi、.xlsx 的 XSSF 在 poi-ooxml）。
+              所以表格格式不需要额外构件，poi-ooxml 一条覆盖 docx / xls / xlsx。
+            -->
             <dependency>
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi-ooxml</artifactId>
+                <version>${poi.version}</version>
+            </dependency>
+            <!--
+              文档解析：旧版 .doc（OLE2 二进制，HWPF）只存在于 poi-scratchpad，poi-ooxml 里没有。
+              这是这一轮唯一新增的构件；它的传递依赖（poi / commons-io / commons-codec /
+              commons-collections4 / log4j-api）已经都在依赖树里，没有额外体积。
+            -->
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-scratchpad</artifactId>
                 <version>${poi.version}</version>
             </dependency>
             <!--

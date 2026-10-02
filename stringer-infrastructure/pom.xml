@@ -49,10 +49,16 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
-        <!-- docx 解析：段落样式（Heading N）只有 POI 直读拿得到 -->
+        <!-- docx 解析：段落样式（Heading N）只有 POI 直读拿得到；Excel（.xls/.xlsx）也走这一条 -->
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
+        </dependency>
+
+        <!-- 旧版 .doc 解析：HWPF 只在 poi-scratchpad 里，poi-ooxml 不含 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-scratchpad</artifactId>
         </dependency>
 
         <!-- pdf 解析：字号 / 坐标 / 页码只有 PDFBox 拿得到（Tika 的输出里这些全丢） -->

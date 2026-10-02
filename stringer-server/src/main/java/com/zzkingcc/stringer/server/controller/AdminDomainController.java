@@ -119,13 +119,11 @@ public class AdminDomainController {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "缺少 callable（true=可调用单元，false=装配节点）");
         }
         String normalized = Domains.normalize(id);
-        // 根域必须恒可调用：域为空会归一化到它，一旦关掉，**所有**未指定域的调用都会 10010 锁死。
-        if (Domains.DEFAULT.equals(normalized) && !body.getCallable()) {
-            throw new BaseException(ErrorCode.INVALID_PARAMETER,
-                    "根域 default 必须保持可调用：未指定域的调用会归一化到它，关掉等于让全部调用不可用");
-        }
-        if (!domainRegistry.setCallable(normalized, body.getCallable())) {
-            throw new BaseException(ErrorCode.INVALID_PARAMETER, "域不存在：" + normalized);
+        // 根域同样服从叶子规则（有子域时它也只是装配节点），因此这里不需要根域特例 ——
+        // 唯一的硬约束是"只有叶子域可以作为可调用单元"。
+        DomainRegistry.CallableResult result = domainRegistry.setCallable(normalized, body.getCallable());
+        if (!result.changed()) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, result.reason());
         }
         domainStore.saveDeclarations(domainRegistry.manualConfig());
         return view("callable", normalized, List.of());

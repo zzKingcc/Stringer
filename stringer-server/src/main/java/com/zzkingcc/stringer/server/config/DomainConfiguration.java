@@ -47,15 +47,13 @@ public class DomainConfiguration {
     }
 
     /**
-     * 一次性迁移：把"当前已经有子域"的域改成<b>装配节点</b>（不可直接调用），根域豁免。
+     * 一次性归一：把"当前已经有子域"的域的落盘标记改成装配节点。
      *
-     * <p>为什么需要它：可调用性是<b>显式声明</b>的，存量配置里"有子域却仍被登记为可调用"的父域
-     * 若直接按显式语义生效，会让该能调的入口变成"不能调"。这里在首次启动做一次快照，
-     * 让该能调的照旧能调，同时把父域收成装配节点。</p>
+     * <p><b>叶子规则本身不靠这里保证</b> —— 它由 {@link DomainRegistry#isCallable} 在读取时派生
+     * （显式标记 ∧ 无子域），无论标记从哪来都越不过去。本迁移只是把<b>历史落盘值</b>
+     * 一次性对齐成生效值，免得文件里留着一堆与实际角色不符的 {@code true}。</p>
      *
-     * <p>迁移结果<b>落盘</b>（含派生域）：否则重启后派生域会按"被声明的域可调用"重新变回可调用。</p>
-     *
-     * <p>只跑一次（落盘的 {@code callableMigrated} 为真即跳过）；结果可在管控台「域空间」逐个改回。</p>
+     * <p>只跑一次（落盘的 {@code callableMigrated} 为真即跳过）。</p>
      */
     @Bean
     public SmartInitializingSingleton domainCallableMigration(DomainRegistry domainRegistry,
@@ -87,7 +85,9 @@ public class DomainConfiguration {
         }
         List<String> changed = new ArrayList<>();
         for (DomainRegistry.Domain domain : domainRegistry.all()) {
-            if (Domains.DEFAULT.equals(domain.id()) || !domain.callable()) {
+            // 不再对根域豁免：根域也服从叶子规则 —— 它有了子域就同样只是装配节点，
+            // "整棵树只有根域"时它才是叶子、才可调用。
+            if (!domain.callable()) {
                 continue;
             }
             if (domainRegistry.hasChildren(domain.id())) {
@@ -97,11 +97,12 @@ public class DomainConfiguration {
         }
         domainStore.save(domainRegistry.manualConfig(), true);
         if (changed.isEmpty()) {
-            log.info("[域] 可调用性迁移完成：没有需要改为装配节点的域（可调用集合 {} 个）",
+            log.info("[域] 落盘可调用性归一完成：没有需要改为装配节点的域（可调用集合 {} 个）",
                     domainRegistry.callableIds().size());
         } else {
-            log.warn("[域] 可调用性迁移：已把 {} 个「有子域」的域改为装配节点（不可直接调用，根域豁免）：{}；"
-                            + "如需其中一个照旧能被调用，请在管控台「域空间」把它切回可调用",
+            log.warn("[域] 落盘可调用性归一：已把 {} 个「有子域」的域落盘为装配节点：{}。"
+                            + "按「只有叶子域可以作为可调用单元」的规则，有子域的域不再能作为入口；"
+                            + "若需要该层能力的入口，请在管控台「域空间」另建一个没有子域的域",
                     changed.size(), changed);
         }
     }

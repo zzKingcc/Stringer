@@ -220,18 +220,21 @@
                 +   '<span class="spacer"></span>'
                 +   '<span class="card-note">工具 ' + num(d.toolCount) + ' · 需确认 '
                 +     num(d.approvalCount) + '</span>'
-                +   '<button class="ghost" data-callable="' + esc(d.name) + '" data-to="'
-                +     (d.callable ? 'false' : 'true') + '">'
-                +     (d.callable ? '设为装配节点' : '设为可调用') + '</button>'
+                +   (d.hasChildren
+                        ? ''
+                        : '<button class="ghost" data-callable="' + esc(d.name) + '" data-to="'
+                          + (d.callable ? 'false' : 'true') + '">'
+                          + (d.callable ? '设为装配节点' : '设为可调用') + '</button>')
                 +   '<button class="ghost" data-cfg="' + esc(d.name) + '">配置模型</button>'
                 +   (d.deletable
                         ? '<button class="ghost" data-del="' + esc(d.name) + '">删除</button>'
                         : '')
                 + '</header>'
-                + (d.callable && d.hasChildren
+                + (d.hasChildren
                         ? '<div class="card-note" style="margin-top:6px;">'
-                          + '提示：该域已经有子域。若它只负责给后代配工具 / 提示词 / 模型，'
-                          + '建议设为<b>装配节点</b>，避免调用方误把它当入口。</div>'
+                          + '该域有子域，按<b>只有叶子域可以作为可调用单元</b>的规则，它只能作为装配节点'
+                          + '（把工具 / 提示词 / 模型 / 知识传给后代），不能当入口。'
+                          + '需要这一层的入口，请另建一个没有子域的域。</div>'
                         : '')
                 + '<div class="model-meta">'
                 +   '<div><span class="k">可调用模型</span>' + boundTags + '</div>'

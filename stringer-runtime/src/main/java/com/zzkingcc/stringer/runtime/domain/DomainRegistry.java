@@ -173,9 +173,17 @@ public class DomainRegistry {
             return CreateResult.fail("域已存在：" + domainId.trim()
                     + "（来源 " + sourceOf(domainId) + "）");
         }
+        // 落盘的必须是"生效值"：请求可调用但已有子域时，它按叶子规则只能是装配节点。
+        // 不这么写的话，文件会留下一个与实际角色不符的 true，运维对着文件会看错。
+        String id = Domains.normalize(domainId);
+        boolean effective = callable && !hasChildren(id);
+        explicitCallable.put(id, effective);
+        if (callable && !effective) {
+            log.warn("[域注册表] 域 {} 已有子域 {}，按「只有叶子域可调用」的规则建为装配节点",
+                    id, childrenOf(id));
+        }
         log.info("[域注册表] 已创建域 {}（新建节点 {}，来源 MANUAL，可调用={}）",
-                linked.domain(), linked.created(), callable);
-        explicitCallable.put(Domains.normalize(domainId), callable);
+                linked.domain(), linked.created(), effective);
         return CreateResult.ok();
     }
 
@@ -227,8 +235,10 @@ public class DomainRegistry {
             if (domains.containsKey(step)) {
                 continue;
             }
-            // 祖先只负责装配（供后代继承），只有链尾那个被显式声明的域才可能是可调用单元
-            boolean callable = targetCallable && i == chain.size() - 1;
+            // 祖先只负责装配（供后代继承）；链尾那个被显式声明的域才可能是可调用单元，
+            // 且它必须"出生时就是叶子"——若它已有子域（子域先于父域创建），
+            // 按叶子规则它只能是装配节点。
+            boolean callable = targetCallable && i == chain.size() - 1 && !hasChildren(step);
             domains.put(step, new Domain(step, Domains.parentOf(step), source, callable,
                     System.currentTimeMillis()));
             created.add(step);
@@ -239,25 +249,45 @@ public class DomainRegistry {
     /**
      * 切换某个域的可调用性（管控台「域空间」页）。
      *
-     * <p>只影响这一个域，<b>不向下传播</b>：后代各自有自己的开关。</p>
-     *
-     * @return {@code false} = 域不存在
+     * <p>只影响这一个域，不向下传播。但<b>向上受叶子规则约束</b>：
+     * 有子域的域只能作为装配节点，设成可调用会被拒绝并给出原因
+     * （要"父域整体"的入口，请另建一个叶子域）。</p>
      */
-    public synchronized boolean setCallable(String domainId, boolean callable) {
+    public synchronized CallableResult setCallable(String domainId, boolean callable) {
         String id = Domains.normalize(domainId);
         Domain current = domains.get(id);
         if (current == null) {
-            return false;
+            return CallableResult.fail("域不存在：" + id);
         }
-        if (current.callable() == callable) {
-            explicitCallable.put(id, callable);
-            return true;
+        if (callable && hasChildren(id)) {
+            return CallableResult.fail("域 " + id + " 已有子域（" + childrenOf(id)
+                    + "），只能作为装配节点：本平台只有叶子域可以作为可调用单元。"
+                    + "若需要一个覆盖该层能力的入口，请另建一个没有子域的域");
         }
-        domains.put(id, new Domain(current.id(), current.parentId(), current.source(), callable,
-                current.createdAt()));
+        if (current.callable() != callable) {
+            domains.put(id, new Domain(current.id(), current.parentId(), current.source(), callable,
+                    current.createdAt()));
+            log.info("[域注册表] 域 {} 的可调用性改为 {}", id, callable);
+        }
         explicitCallable.put(id, callable);
-        log.info("[域注册表] 域 {} 的可调用性改为 {}", id, callable);
-        return true;
+        return CallableResult.ok();
+    }
+
+    /**
+     * 切换可调用性的结果。
+     *
+     * @param changed 是否已按请求生效
+     * @param reason  未生效时的原因（可直接展示给用户）
+     */
+    public record CallableResult(boolean changed, String reason) {
+
+        public static CallableResult ok() {
+            return new CallableResult(true, null);
+        }
+
+        public static CallableResult fail(String reason) {
+            return new CallableResult(false, reason);
+        }
     }
 
     // ==================== 删除 ====================
@@ -302,19 +332,35 @@ public class DomainRegistry {
     }
 
     /**
-     * 该域是否为<b>可调用单元</b>（入口唯一判据：既已登记、又被标为可调用）。
+     * 该域是否为<b>可调用单元</b>（入口唯一判据）。
      *
-     * <p>未登记的域一律 {@code false} —— 判据只认注册表，不看"是否被工具声明过"。</p>
+     * <p>判据 = 已登记 ∧ 显式标记可调用 ∧ <b>是叶子域</b>（无子域）。</p>
+     *
+     * <p><b>叶子约束是本域树的硬性规则</b>：一个域只要有子域，就必须作为装配节点存在、
+     * 不能当入口；根域也服从这条规则 —— 只要它有了子域，它同样只是装配节点。
+     * 于是"整棵树只有一个根域"时根域可调用，一旦往下建了子域，入口就必须落到叶子。
+     * 需要"父域整体"的入口时，请另建一个叶子域，而不是把父域本身变成入口。</p>
+     *
+     * <p>为什么在<b>读取时派生</b>而不是在写入路径上维护标记：标记有多个来源
+     * （管控台显式声明、工具声明派生、落盘文件里的历史值），任何一处漏改都会破掉规则。
+     * 派生则只有这一个判据实现，绕不过去 —— 写入侧存的是"意图"，这里算的是"生效"。</p>
      */
     public boolean isCallable(String domainId) {
         Domain domain = domains.get(Domains.normalize(domainId));
-        return domain != null && domain.callable();
+        return domain != null && isEffectiveCallable(domain);
     }
 
-    /** 全部可调用单元（供客户端清单与入口提示） */
+    /**
+     * 生效的可调用性 = 显式标记 ∧ 无子域。读取侧一律走这里，不要再各自判断。
+     */
+    private boolean isEffectiveCallable(Domain domain) {
+        return domain.callable() && !hasChildren(domain.id());
+    }
+
+    /** 全部可调用单元（供客户端清单与入口提示）—— 只含叶子域 */
     public Set<String> callableIds() {
         return domains.values().stream()
-                .filter(Domain::callable)
+                .filter(this::isEffectiveCallable)
                 .map(Domain::id)
                 .collect(Collectors.toUnmodifiableSet());
     }
@@ -384,12 +430,19 @@ public class DomainRegistry {
      * 需要落盘的域与其可调用性（只含<b>被显式声明过</b>的域），按标识排序。
      *
      * <p>派生域与沿链补齐的祖先不进这里 —— 它们的可调用性能按创建规则重建。</p>
+     *
+     * <p>写出去的是<b>生效值</b>（显式标记 ∧ 无子域），不是原始意图：一个有子域的域
+     * 无论曾被声明成什么，落盘都记装配节点。这样文件与管控台展示、与入口判据三者一致，
+     * 不会出现"文件说可调用、实际却是装配节点"的错位。</p>
      */
     public Map<String, Boolean> manualConfig() {
         Map<String, Boolean> config = new java.util.LinkedHashMap<>();
         explicitCallable.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
-                .forEach(e -> config.put(e.getKey(), e.getValue()));
+                .forEach(e -> {
+                    Domain domain = domains.get(e.getKey());
+                    config.put(e.getKey(), domain != null && isEffectiveCallable(domain));
+                });
         return config;
     }
 

@@ -266,22 +266,63 @@ class DomainSemanticsTest {
         DomainRegistry registry = new DomainRegistry();
         registry.create("default.sales.order");
 
-        assertTrue(registry.setCallable("default.sales.order", false));
+        assertTrue(registry.setCallable("default.sales.order", false).changed());
         assertFalse(registry.isCallable("default.sales.order"));
-        assertFalse(registry.setCallable("default.ghost", false), "域不存在时切换失败");
+        assertFalse(registry.setCallable("default.ghost", false).changed(), "域不存在时切换失败");
     }
 
     @Test
-    void callableIsNotInheritedFromAncestors() {
+    void 有子域的域降级为装配节点() {
         DomainRegistry registry = new DomainRegistry();
         registry.create("default.sales");
 
+        assertTrue(registry.isCallable("default.sales"), "建它时它还是叶子，可调用");
+
+        // 给它加一个子域 —— 它立刻不再是叶子，必须降级为装配节点
         registry.ensureChain("default.sales.order");
 
+        assertFalse(registry.isCallable("default.sales"),
+                "有了子域就不再是叶子，不能再当入口");
+        assertTrue(registry.isCallable("default.sales.order"), "新叶子可调用");
+        assertEquals(Set.of("default.sales.order"), registry.callableIds(),
+                "可调用集只含叶子域 —— 根域此刻也有了子域，同样不在其中");
+    }
+
+    @Test
+    void 根域只在它是叶子时可调用() {
+        DomainRegistry registry = new DomainRegistry();
+
+        assertTrue(registry.isCallable(Domains.DEFAULT), "整棵树只有根域时，它就是叶子，可调用");
+
+        registry.create("default.sales");
+
+        assertFalse(registry.isCallable(Domains.DEFAULT),
+                "根域一旦有了子域，同样降级为装配节点：叶子规则对它没有豁免");
         assertTrue(registry.isCallable("default.sales"));
-        assertTrue(registry.isCallable("default.sales.order"));
-        assertEquals(Set.of(Domains.DEFAULT, "default.sales", "default.sales.order"),
-                registry.callableIds(), "可调用集是逐域显式声明的集合");
+    }
+
+    @Test
+    void 已有子域的域不能再被设为可调用() {
+        DomainRegistry registry = new DomainRegistry();
+        registry.create("default.sales.order");
+
+        DomainRegistry.CallableResult result = registry.setCallable("default.sales", true);
+
+        assertFalse(result.changed(), "有子域的域不能作为可调用单元");
+        assertTrue(result.reason().contains("只有叶子域"),
+                "拒绝理由要说清规则，实际: " + result.reason());
+        assertFalse(registry.isCallable("default.sales"));
+    }
+
+    @Test
+    void 标记是真的也拦不住派生判据() {
+        // 即使底层标记被设成 true（历史落盘值 / 工具声明派生），
+        // 只要它已有子域，生效判据就必须是"不可调用"
+        DomainRegistry registry = new DomainRegistry();
+        registry.ensureChain("default.a.b");
+
+        assertEquals(Set.of("default.a.b"), registry.callableIds(),
+                "沿链补齐的祖先即使标记为真也不得出现在可调用集里");
     }
 
     @Test

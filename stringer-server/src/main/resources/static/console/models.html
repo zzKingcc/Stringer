@@ -145,7 +145,10 @@
 Console.renderSidebar('models');
 
     var PROFILES = [];
-    var EMBEDDING = null;              /* 向量模型单选状态（来自 /admin/model-profiles） */
+    /* 预置成"未配置"而不是 null：loadSettings 与 loadProfiles 是并发发出的，谁先回来都会
+       调 renderProfiles，而它会读 EMBEDDING.alias。置 null 时先到的那个请求会抛 TypeError，
+       又因 loadSettings 的 catch 只打 console.debug 而被静默吞掉，表现为整段渲染不出来。 */
+    var EMBEDDING = { alias: null, configured: false, modelName: null, dimensions: null, source: null };
     var CANDIDATES = [];/* 可选作向量模型的档案 */
     var SETTINGS = null;               /* /admin/settings：对话 / 向量 两组部署配置（yaml 兜底） */
 
@@ -345,9 +348,17 @@ Console.renderSidebar('models');
         }
     }
 
-    /* 切换向量模型：有已灌库内容时先要用户表态（重灌 / 丢弃），服务端会再校验一次 */
-    function applyEmbedding() {
-        var alias = pfEl('embSelect').value;
+    /* 切换向量模型：有已灌库内容时先要用户表态（重灌 / 丢弃），服务端会再校验一次。
+
+       alias 允许由调用方直接给出：保存新向量档案后的「是否现在启用」走的就是这条路。
+       那一刻向量段仍处于空状态，页面上根本没有 #embSelect（它只在 embeddingCard 里），
+       所以不能去读那个下拉，否则读到 null 直接抛错、启用动作被吞掉。 */
+    function applyEmbedding(alias) {
+        if (alias == null) {
+            var select = pfEl('embSelect');
+            if (!select) { return; }      /* 空状态没有可选项，本就不该从这里触发 */
+            alias = select.value;
+        }
         var applyBtn = pfEl('embApplyBtn');
         if (applyBtn) { applyBtn.disabled = true; }
         Console.jsonRequest('/admin/embedding-model', 'PUT', { alias: alias })
@@ -693,6 +704,14 @@ Console.renderSidebar('models');
         if (!val('pfApiKey')) { showResult(false, '请填写 API Key'); return; }
         var modelName = pfEl('pfModelName').value.trim();
         if (!modelName) { showResult(false, '请先填写模型名'); return; }
+        /* 没探测就保存 = 端点族为空，而 ModelProfile 把「空端点族」按 chat 兜底 ——
+           于是向量模型会被静默存成对话模型：它不进向量段、也不能被选为向量模型，
+           而且全程没有任何报错。归类只能来自实测，所以在这里就拦住。 */
+        if (!PFKNOWN) {
+            showResult(false, '请先点「探测」：档案的端点族（对话 / 向量）由实测结果决定，'
+                + '不探测会把向量模型错存成对话模型。');
+            return;
+        }
         /* 别名已从表单移除：编辑沿用原别名，新建按模型名派生 */
         var alias = EDIT_ALIAS || deriveAlias(modelName);
         var body = {
@@ -719,8 +738,9 @@ Console.renderSidebar('models');
                     if (isEmb && !EMBEDDING.alias && EDIT_ALIAS === null) {
                         if (window.confirm('已保存向量模型「' + modelName + '」。\n\n'
                                 + '向量模型全局只能选一个，是否现在就启用它？')) {
-                            pfEl('embSelect').value = alias;
-                            applyEmbedding();
+                            /* 此刻向量段还是空状态，没有 #embSelect 可以写；
+                               把别名直接交给 applyEmbedding 才会真的发出启用请求 */
+                            applyEmbedding(alias);
                         }
                     }
                 });

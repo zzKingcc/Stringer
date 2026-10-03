@@ -268,9 +268,9 @@ Console.renderSidebar('models');
         return (p.endpoints || []).indexOf('chat') >= 0;
     }
 
-    /* 没配置时的空状态：一个虚线框 + 一句说明 + 一个添加按钮。
-       刻意不摆可编辑表单框 —— 没有配置时最该做的是说清"还没有"，而不是给一个
-       不知道该填什么的空输入框在那里等着被填错。 */
+    /* 真正的空状态：档案库里一个向量档案都没有，此时除了添加没有别的可做。
+       注意「没选中」和「没有档案」是两件事 —— 后者才走这里，前者仍要出卡片让你选用
+       （见 embeddingCard 对 alias 为空的处理）。 */
     function embeddingEmptyBox() {
         return '<div class="empty-box">'
             + '<div class="empty-title">尚未配置向量模型</div>'
@@ -283,7 +283,7 @@ Console.renderSidebar('models');
     function embeddingCard() {
         var alias = EMBEDDING.alias;
         var profile = alias ? PROFILES.filter(function (p) { return p.alias === alias; })[0] : null;
-        var ready = EMBEDDING.configured;
+        var ready = !!alias && EMBEDDING.configured;
         var options = CANDIDATES.map(function (p) {
             return '<option value="' + Console.escapeHtml(p.alias) + '"'
                 + (p.alias === alias ? ' selected' : '') + '>'
@@ -292,27 +292,40 @@ Console.renderSidebar('models');
                 + '</option>';
         }).join('');
 
+        /* 没选中（alias 为空）时不摆「测试 / 删除」：它们必须指向一个具体档案，此刻无从指向 */
+        var badge = !alias
+            ? '<span class="mbadge off">未选用</span>'
+            : '<span class="mbadge ' + (ready ? 'ok' : 'off') + '">'
+                + (ready ? '已就绪' : '不可用') + '</span>';
+        var actions = alias
+            ? '<button class="ghost" data-test="' + Console.escapeHtml(alias) + '">测试</button>'
+                + '<button class="ghost" data-del="' + Console.escapeHtml(alias) + '">删除</button>'
+            : '';
+
         return '<section class="card model-card emb">'
             + '<header class="card-head">'
             +   '<span class="model-dot"></span>'
-            +   '<h2>' + modelTitle(EMBEDDING.modelName) + '</h2>'
-            +   '<span class="mbadge ' + (ready ? 'ok' : 'off') + '">'
-            +      (ready ? '已就绪' : '不可用') + '</span>'
+            +   '<h2>' + (alias ? modelTitle(EMBEDDING.modelName) : '未选用向量模型') + '</h2>'
+            +   badge
             +   '<span class="spacer"></span>'
-            +   '<button class="ghost" data-test="' + Console.escapeHtml(alias) + '">测试</button>'
-            +   '<button class="ghost" data-del="' + Console.escapeHtml(alias) + '">删除</button>'
+            +   actions
             + '</header>'
             + '<div class="model-meta">'
-            +   kv('向量维度', EMBEDDING.dimensions == null
-                    ? '<span class="perm-none">按模型默认</span>' : EMBEDDING.dimensions + '')
+            +   kv('向量维度', !alias
+                    ? '<span class="perm-none">—</span>'
+                    : (EMBEDDING.dimensions == null
+                        ? '<span class="perm-none">按模型默认</span>' : EMBEDDING.dimensions + ''))
             +   kv('作用范围', '<span class="perm-none">全部域共享</span>')
             +   (profile && profile.apiKeyMasked
                 ? kv('API Key', '<span class="mono">' + Console.escapeHtml(profile.apiKeyMasked) + '</span>')
                 : '')
-            +   (ready ? '' : kv('说明', '<span style="color:var(--amber);">'
+            +   (!alias
+                ? kv('说明', '<span style="color:var(--amber);">尚未选用向量模型，知识库的灌库与'
+                    + '向量检索不可用；从右下角选一个即可启用</span>')
+                : (ready ? '' : kv('说明', '<span style="color:var(--amber);">'
                     + (profile ? '该档案已不可用（可能已删除或服务不可达）'
                                : '已选中的档案不可用')
-                    + '，知识库灌库与向量检索已停用</span>'))
+                    + '，知识库灌库与向量检索已停用</span>')))
             + '</div>'
             + '<div class="card-foot">'
             +   '<span class="hint" style="flex:1 1 320px;">切换向量模型会让已灌库的向量作废，'
@@ -322,14 +335,17 @@ Console.renderSidebar('models');
             +     '<option value="">— 选择向量模型 —</option>' + options
             +   '</select>'
             +   '<button class="sec" id="embApplyBtn"'
-            +     + (CANDIDATES.length ? '' : ' disabled') + '>应用</button>'
+            +     + (CANDIDATES.length ? '' : ' disabled') + '>'
+            +     (alias ? '更换' : '应用') + '</button>'
             + '</div>'
             + '</section>';
     }
 
     function renderEmbedding() {
         var box = pfEl('embeddingList');
-        box.innerHTML = EMBEDDING.alias ? embeddingCard() : embeddingEmptyBox();
+        /* 有选中、或库里已有可选档案 → 都要出卡片。后者的用途是「选用」：
+           否则"有档案但没选中"在页面上是个死胡同，用户只能再添加一份新档案。 */
+        box.innerHTML = (EMBEDDING.alias || CANDIDATES.length) ? embeddingCard() : embeddingEmptyBox();
 
         var add = box.querySelector('[data-add-embedding]');
         if (add) { add.addEventListener('click', function () { openAdd('embedding'); }); }
@@ -732,16 +748,12 @@ Console.renderSidebar('models');
                 if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '保存失败'); }
                 closeModal();
                 return loadProfiles().then(function () {
-                    /* 新档案若是向量模型、且当前还没有选向量模型，直接问要不要启用 ——
-                       免得用户存完才发现还要去另一个下拉里手动选一次。 */
+                    /* 向量段是单槽位：新建的向量档案直接占用该槽位，即"新的顶替旧的"。
+                       这里刻意不再问"要不要启用" —— 一旦用户点了取消，他就再也选不中
+                       刚存的那份档案（早先空状态不给下拉），只能不断添加新档案。 */
                     var isEmb = (PFEPS || []).indexOf('embedding') >= 0;
-                    if (isEmb && !EMBEDDING.alias && EDIT_ALIAS === null) {
-                        if (window.confirm('已保存向量模型「' + modelName + '」。\n\n'
-                                + '向量模型全局只能选一个，是否现在就启用它？')) {
-                            /* 此刻向量段还是空状态，没有 #embSelect 可以写；
-                               把别名直接交给 applyEmbedding 才会真的发出启用请求 */
-                            applyEmbedding(alias);
-                        }
+                    if (isEmb && EDIT_ALIAS === null) {
+                        applyEmbedding(alias);
                     }
                 });
             })

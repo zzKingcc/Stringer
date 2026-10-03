@@ -15,6 +15,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,6 +38,13 @@ public class CompositeRetriever implements ContentRetriever {
 
     /** 超时兜底（未配置时的默认值） */
     private static final long DEFAULT_TIMEOUT_MS = 5000L;
+
+    /** 串行模式的临时线程：daemon，避免检索线程拖住 JVM 退出 */
+    private static final ThreadFactory SERIAL_FACTORY = r -> {
+        Thread t = new Thread(r, "stringer-retrieve-serial");
+        t.setDaemon(true);
+        return t;
+    };
 
     /**
      * 一条召回通道：某个索引上的某一路模态。
@@ -100,25 +111,36 @@ public class CompositeRetriever implements ContentRetriever {
             return List.of();
         }
 
+        // 整轮共享一个 deadline：超时是「这次检索多久还不返回」的总预算，不是每条通道各等一次。
+        // 域链深 5 就是 10 条通道，按每通道各等 5s 算，单次检索会拖到 50s —— 而编排线程池
+        // （core 8 / max 32）扛不住几个这样的请求。串行模式同样受它约束，否则一条卡死的通道
+        // 就能无限期占住线程。
+        long deadline = start + effectiveTimeoutMs();
+
         List<RankedList> lists = new ArrayList<>(channels.size());
         int succeeded = 0;
 
         if (executor == null) {
-            for (Channel ch : channels) {
-                ChannelResult r = retrieveSafely(ch, query);
-                if (!r.failed()) {
-                    succeeded++;
+            // 串行模式也必须放进一个线程里跑，否则调用线程会被阻塞在通道上、无法被超时中断 ——
+            // 那正是「串行模式完全没有超时保护」的根因。用一个临时单线程池：
+            // 整轮通道在同一个线程上排队（仍是串行），但每条都能被 cancel(true) 打断。
+            try (ExecutorService serial = Executors.newSingleThreadExecutor(SERIAL_FACTORY)) {
+                for (Channel ch : channels) {
+                    ChannelResult r = retrieveSafely(ch, query, deadline, serial);
+                    if (!r.failed()) {
+                        succeeded++;
+                    }
+                    lists.add(new RankedList(ch.sourceId(), ch.modality(), ch.depth(), r.contents()));
                 }
-                lists.add(new RankedList(ch.sourceId(), ch.modality(), ch.depth(), r.contents()));
             }
         } else {
             List<CompletableFuture<ChannelResult>> futures = new ArrayList<>(channels.size());
             for (Channel ch : channels) {
-                futures.add(CompletableFuture.supplyAsync(() -> retrieveSafely(ch, query), executor));
+                futures.add(CompletableFuture.supplyAsync(() -> retrieveDirectly(ch, query), executor));
             }
             for (int i = 0; i < channels.size(); i++) {
                 Channel ch = channels.get(i);
-                ChannelResult r = await(futures.get(i), ch);
+                ChannelResult r = await(futures.get(i), ch, deadline);
                 if (!r.failed()) {
                     succeeded++;
                 }
@@ -134,8 +156,19 @@ public class CompositeRetriever implements ContentRetriever {
         }
 
         List<Content> result = fusionStrategy.fuse(query.text(), lists, fusion);
-        log.info("[组合检索] 通道={}，融合耗时 {}ms", channels.size(), System.currentTimeMillis() - start);
+        log.info("[组合检索] 通道={}（命中 {}），融合耗时 {}ms，预算 {}ms",
+                channels.size(), succeeded, System.currentTimeMillis() - start, effectiveTimeoutMs());
         return result;
+    }
+
+    private long effectiveTimeoutMs() {
+        return timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+    }
+
+    /** 剩余预算；已耗尽时给 1ms，让 future.get 立即返回而不是白等一个完整超时 */
+    private static long remaining(long deadline) {
+        long left = deadline - System.currentTimeMillis();
+        return left > 1 ? left : 1;
     }
 
     /**
@@ -153,9 +186,12 @@ public class CompositeRetriever implements ContentRetriever {
     }
 
     /**
-     * 串行模式下的安全召回:单通道异常不影响其它通道
+     * 在调用线程上直接召回，仅做异常隔离。
+     *
+     * <p>用于并行分支 —— 那里每条通道已经提交到 {@code executor}，超时由
+     * {@link #await} 按整轮 deadline 控制，不需要再包一层线程。</p>
      */
-    private ChannelResult retrieveSafely(Channel channel, Query query) {
+    private ChannelResult retrieveDirectly(Channel channel, Query query) {
         try {
             return ChannelResult.ok(channel.retriever().retrieve(query));
         } catch (Exception e) {
@@ -166,12 +202,35 @@ public class CompositeRetriever implements ContentRetriever {
     }
 
     /**
-     * 并行模式下等待单通道结果:超时或异常都记为"该路失败",并取消该路任务
+     * 串行模式下的安全召回：单通道异常不影响其它通道，且受整轮 deadline 约束。
+     *
+     * <p>通道提交到 {@code pool}（一个临时单线程池）而不是在调用线程上直接跑 ——
+     * 直接跑的话调用线程会被阻塞在通道上，超时无从生效，那正是串行模式此前
+     * 完全没有超时保护的根因。</p>
      */
-    private ChannelResult await(CompletableFuture<ChannelResult> future, Channel channel) {
+    private ChannelResult retrieveSafely(Channel channel, Query query, long deadline, ExecutorService pool) {
+        Future<ChannelResult> task = null;
         try {
-            long effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
-            return future.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
+            task = pool.submit(() -> ChannelResult.ok(channel.retriever().retrieve(query)));
+            return task.get(remaining(deadline), TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            if (task != null) {
+                task.cancel(true);
+            }
+            log.warn("[组合检索] 通道[{}·{}]检索异常或超时,本次降级为忽略该路: {}",
+                    channel.sourceId(), channel.modality(), e.getMessage());
+            return ChannelResult.failure();
+        }
+    }
+
+    /**
+     * 并行模式下等待单通道结果：超时或异常都记为"该路失败"，并取消该路任务。
+     *
+     * <p>传进来的是整轮 deadline 剩下的预算，不是配置的完整超时值。</p>
+     */
+    private ChannelResult await(CompletableFuture<ChannelResult> future, Channel channel, long deadline) {
+        try {
+            return future.get(remaining(deadline), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             future.cancel(true);
             log.warn("[组合检索] 通道[{}·{}]检索失败(超时或异常),本次降级为忽略该路: {}",

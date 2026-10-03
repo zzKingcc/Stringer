@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -59,13 +60,17 @@ public class DefaultFusionStrategy implements FusionStrategy {
             }
         }
 
+        // 查询候选词整轮只切一次：中文查询会展开出上千个 bigram，
+        // 放进每条 ScoreEntry 的构造里重算就是「条数 × 上千次字符串分配」。
+        Set<String> queryKeywords = FusionSupport.keywords(queryText);
+
         // 合并去重 + 记录分数来源
         Map<String, ScoreEntry> scoreMap = new LinkedHashMap<>();
 
         for (Content c : vector) {
             String hash = FusionSupport.hashContent(c);
             double score = FusionSupport.extractScore(c);
-            scoreMap.computeIfAbsent(hash, k -> new ScoreEntry(c, queryText, fusion)).vectorScore = score;
+            scoreMap.computeIfAbsent(hash, k -> new ScoreEntry(c, queryKeywords, fusion)).vectorScore = score;
         }
 
         int keywordAdded = 0;
@@ -76,7 +81,7 @@ public class DefaultFusionStrategy implements FusionStrategy {
             if (exist != null) {
                 exist.keywordScore = score;
             } else {
-                ScoreEntry entry = new ScoreEntry(c, queryText, fusion);
+                ScoreEntry entry = new ScoreEntry(c, queryKeywords, fusion);
                 entry.keywordScore = score;
                 scoreMap.put(hash, entry);
                 keywordAdded++;
@@ -155,10 +160,10 @@ public class DefaultFusionStrategy implements FusionStrategy {
             double fused = e.fusion.vectorWeight() * (e.normVectorScore != null ? e.normVectorScore : 0.0)
                     + e.fusion.keywordWeight() * (e.normKeywordScore != null ? e.normKeywordScore : 0.0);
 
-            if (FusionSupport.titleHit(e.content, e.queryText)) {
+            if (FusionSupport.titleHit(e.content, e.queryKeywords)) {
                 fused *= 1.0 + e.fusion.titleBoost();
             }
-            if (FusionSupport.fileNameHit(e.content, e.queryText)) {
+            if (FusionSupport.fileNameHit(e.content, e.queryKeywords)) {
                 fused *= 1.0 + e.fusion.fileNameBoost();
             }
 
@@ -198,7 +203,7 @@ public class DefaultFusionStrategy implements FusionStrategy {
      */
     private static class ScoreEntry {
         final Content content;
-        final String queryText;
+        final Set<String> queryKeywords;
         final FusionConfig fusion;
         Double vectorScore;
         Double keywordScore;
@@ -206,9 +211,9 @@ public class DefaultFusionStrategy implements FusionStrategy {
         Double normKeywordScore;
         double fusedScore;
 
-        ScoreEntry(Content content, String queryText, FusionConfig fusion) {
+        ScoreEntry(Content content, Set<String> queryKeywords, FusionConfig fusion) {
             this.content = content;
-            this.queryText = queryText;
+            this.queryKeywords = queryKeywords;
             this.fusion = fusion;
         }
     }

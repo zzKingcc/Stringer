@@ -182,6 +182,25 @@ class RrfFusionStrategyTest {
                 "标题命中应是 ×1.5，而不是 +0.5");
     }
 
+    /**
+     * 中文长问句也必须能触发标题增益。
+     *
+     * <p>这是 {@link #titleBoost_isMultiplicative()} 的中文版：原实现在这条上是 0 命中
+     * （整段匹配要求标题包含整句问句），{@code title-boost} 配置在中文下从未生效。</p>
+     */
+    @Test
+    void titleBoost_appliesToChineseLongQuestion() {
+        RrfFusionStrategy s = new RrfFusionStrategy();
+        FusionConfig cfg = new FusionConfig(1.0, 0.0, 0.5, 0.0, 10, 10, 1.0);
+        List<Content> result = s.fuse("会员退款的时效说明", List.of(
+                list("i1", Modality.VECTOR, content("plain", 0.9f)),
+                list("i2", Modality.VECTOR, titled("hit", "退款政策", 0.9f))
+        ), cfg);
+
+        assertEquals(score(result, "plain") * 1.5, score(result, "hit"), 1e-9,
+                "「退款政策」应被「会员退款的时效说明」命中标题并 ×1.5");
+    }
+
     /** 融合分完全相同时按 chunk_seq 稳定排序 —— 同一问题两次检索必须给同一份答案。 */
     @Test
     void tieOnFusedScore_orderedByChunkSeq() {

@@ -1,5 +1,7 @@
 package com.zzkingcc.stringer.domain.capability.knowledge;
 
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
+import com.zzkingcc.stringer.common.util.LogSanitizer;
 import com.zzkingcc.stringer.domain.rag.model.RetrievalScoreKeys;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
@@ -34,7 +36,8 @@ public class KnowledgeSearchService {
      * @return 检索到的知识库内容片段(拼接为纯文本),无结果时返回提示
      */
     public String searchKnowledgeBase(String keyword) {
-        log.info("[知识库检索] 关键词：{}", keyword);
+        // keyword 就是用户提问原文：DESIGN §13 的敏感红线禁止用户消息全文入日志，只记长度
+        log.info("[知识库检索] 收到检索请求，关键词 {}", LogSanitizer.describeUserText(keyword));
         try {
             List<Content> contents = contentRetriever.retrieve(new Query(keyword));
             if (contents == null || contents.isEmpty()) {
@@ -64,8 +67,8 @@ public class KnowledgeSearchService {
                     sb.append("｜相关度 ").append(String.format("%.2f", fused));
                 }
                 sb.append("】\n");
-                String fileName = c.textSegment().metadata().getString("file_name");
-                String sectionTitle = c.textSegment().metadata().getString("section_title");
+                String fileName = c.textSegment().metadata().getString(ChunkMetadataKeys.FILE_NAME);
+                String sectionTitle = c.textSegment().metadata().getString(ChunkMetadataKeys.SECTION_TITLE);
                 if (fileName != null) {
                     sb.append("来源：").append(fileName);
                     if (sectionTitle != null && !sectionTitle.isBlank()) {

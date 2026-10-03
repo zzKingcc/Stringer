@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.domain.memory;
 
+import com.zzkingcc.stringer.common.util.CjkWidth;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -55,6 +56,14 @@ public class DualConstraintChatMemory implements ChatMemory {
     /** 每条消息的结构开销 */
     private static final int PER_MESSAGE_OVERHEAD = 4;
 
+    /**
+     * 一条正常轮次写入记忆的消息条数：提问 + 最终回答。
+     *
+     * <p>存在待审批断点时还要多补一条占位回答，判定入口会按 3 条预留
+     * （见 {@link #capacityFor(String, boolean)}）。</p>
+     */
+    private static final int MESSAGES_PER_ROUND = 2;
+
     @Override
     public void add(ChatMessage message) {
         // 纯追加：不淘汰、不判上限。上限由入口的 capacityFor(...) 把关，
@@ -70,21 +79,46 @@ public class DualConstraintChatMemory implements ChatMemory {
      * <p>判定是<b>粘性</b>的：记忆只增不减，所以一旦满了，之后每次判定都会失败 ——
      * 不需要额外记"已封顶"标记位。（唯一能解除的是 Redis 数据丢失，所以 RDB+AOF 是这套语义的前提。）</p>
      *
-     * <p>条数按<b>整轮预留</b>（提问 + 回答）判定，让"100 条"成为真正的硬上限；Token 只按提问判定
+     * <p>条数按<b>整轮预留</b>判定，让"100 条"成为真正的硬上限；Token 只按提问判定
      * （回答长度不可预估），因此允许一轮结束后轻度超出。</p>
      */
     public Capacity capacityFor(String pendingQuestion) {
+        return capacityFor(pendingQuestion, false);
+    }
+
+    /**
+     * 入口容量判定，显式告知本轮是否还要补一条占位回答。
+     *
+     * <p>为什么必须区分：一条正常轮次写入 <b>2 条</b>（提问 + 最终回答），而"上一轮停在审批点、
+     * 用户直接开了新对话"那条路径会先补一条 {@code AiMessage} 占位回答再正常走完本轮，
+     * 实际写入 <b>3 条</b>。若一律按 2 预留，就存在这个窗口：{@code maxMessages = 100}、
+     * 当前 98 条时 {@code 98 + 2 > 100} 为假 → 放行 → 写完 101 条，
+     * <b>永久超出上限</b>（记忆只增不淘汰，之后每轮都被拒，会话就此作废）。
+     * 而"超限"是入口唯一的封顶依据，一旦破掉就再也回不来。</p>
+     *
+     * <p>占位回答不是可选的清理动作，而是把上一轮补成完整轮次的<b>必需</b>步骤
+     * （否则留下"有问无答"的孤立提问）。所以它的存在与否必须由调用方告知，
+     * 不能在这里假定。</p>
+     *
+     * @param pendingQuestion      本轮提问
+     * @param willWritePlaceholder 本轮是否还会额外补一条占位回答（存在待审批断点时为 {@code true}）
+     */
+    public Capacity capacityFor(String pendingQuestion, boolean willWritePlaceholder) {
         List<ChatMessage> messages = store.getMessages(id);
         int currentTokens = estimateTokens(messages);
-        int questionTokens = estimateTokens(pendingQuestion) + PER_MESSAGE_OVERHEAD;
+        int questionTokens = CjkWidth.estimateTokens(pendingQuestion) + PER_MESSAGE_OVERHEAD;
+        int reserved = willWritePlaceholder
+                ? MESSAGES_PER_ROUND + 1
+                : MESSAGES_PER_ROUND;
 
         if (questionTokens > maxTokens) {
             return Capacity.full("单条提问已超过会话记忆上限（约 " + questionTokens + " tokens > 上限 "
                     + maxTokens + "），请缩短内容，或更换 sessionId 开启新会话");
         }
-        if (messages.size() + 2 > maxMessages) {
-            return Capacity.full("会话记忆已达上限（当前 " + messages.size() + " 条 + 本轮 2 条 > 上限 "
-                    + maxMessages + " 条 ≈ " + (maxMessages / 2) + " 轮问答），请更换 sessionId 开启新会话");
+        if (messages.size() + reserved > maxMessages) {
+            return Capacity.full("会话记忆已达上限（当前 " + messages.size() + " 条 + 本轮 " + reserved
+                    + " 条 > 上限 " + maxMessages + " 条 ≈ " + (maxMessages / (MESSAGES_PER_ROUND + 1))
+                    + " 轮问答），请更换 sessionId 开启新会话");
         }
         if (currentTokens + questionTokens > maxTokens) {
             return Capacity.full("会话记忆已达上限（当前约 " + currentTokens + " tokens + 本轮提问约 "
@@ -132,41 +166,11 @@ public class DualConstraintChatMemory implements ChatMemory {
     private int estimateTokens(List<ChatMessage> messages) {
         int total = 0;
         for (ChatMessage msg : messages) {
-            total += estimateTokens(extractText(msg));
+            total += CjkWidth.estimateTokens(extractText(msg));
         }
         // 每条消息额外计入 PER_MESSAGE_OVERHEAD token 的结构开销（role 标记等）
         total += messages.size() * PER_MESSAGE_OVERHEAD;
         return total;
-    }
-
-    /**
-     * 估算单段文本的 Token 数（字符级启发式）
-     */
-    private int estimateTokens(String text) {
-        if (text == null || text.isEmpty()) {
-            return 0;
-        }
-        double tokens = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (isCJK(c)) {
-                tokens += 1.5;
-            } else {
-                tokens += 0.25;
-            }
-        }
-        return (int) Math.ceil(tokens);
-    }
-
-    /**
-     * 判断字符是否为 CJK 字符（中文、日文、韩文、全角符号）
-     */
-    private boolean isCJK(char c) {
-        return (c >= '\u4E00' && c <= '\u9FFF')   // CJK 统一表意文字
-                || (c >= '\u3400' && c <= '\u4DBF') // CJK 扩展 A
-                || (c >= '\u3000' && c <= '\u303F') // CJK 符号和标点
-                || (c >= '\uFF00' && c <= '\uFFEF') // 全角字符
-                || (c >= '\uAC00' && c <= '\uD7AF'); // 韩文音节
     }
 
     /**

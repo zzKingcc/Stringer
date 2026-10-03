@@ -1,5 +1,7 @@
 package com.zzkingcc.stringer.domain.rag.model;
 
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
+
 /**
  * 检索分数在 {@code TextSegment#metadata()} 中的 key 常量
  *
@@ -7,8 +9,13 @@ package com.zzkingcc.stringer.domain.rag.model;
  */
 public final class RetrievalScoreKeys {
 
-    /** ES 原始检索分数 */
-    public static final String RAW_SCORE = "_retrieval_score";
+    /**
+     * ES 原始检索分数。
+     *
+     * <p>它由 infrastructure 的检索器写入、由本模块的融合阶段读取，是跨模块契约，
+     * 所以定义在 {@link ChunkMetadataKeys}；这里保留别名是因为融合/排序相关的键都归本类管。</p>
+     */
+    public static final String RAW_SCORE = ChunkMetadataKeys.RAW_SCORE;
 
     /** 向量检索原始分 */
     public static final String VECTOR_SCORE = "_vector_score";

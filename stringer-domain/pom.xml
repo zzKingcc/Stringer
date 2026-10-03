@@ -15,6 +15,13 @@
     <description>Stringer 领域层：业务能力 + RAG 检索编排 + 记忆策略（不含技术实现，不依赖 Agent 框架）</description>
 
     <dependencies>
+        <!-- 公共支撑：记忆容量估算等工具与本层共用一份实现（CjkWidth），
+             避免领域层与编排层各写一份 CJK 宽度判断 —— 那正是 D-03 漏判假名的根因 -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-common</artifactId>
+        </dependency>
+
         <!-- LangChain4j -->
         <dependency>
             <groupId>dev.langchain4j</groupId>

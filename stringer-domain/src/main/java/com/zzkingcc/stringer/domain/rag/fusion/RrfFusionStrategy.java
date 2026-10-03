@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -65,6 +66,10 @@ public class RrfFusionStrategy implements FusionStrategy {
         double keywordScale = scaleOf(active, Modality.KEYWORD, decay);
         int k = Math.max(fusion.rrfK(), 1);
 
+        // 查询候选词整轮只切一次：中文查询会展开出上千个 bigram，
+        // 放进每条 ScoreEntry 的构造里重算就是「条数 × 上千次字符串分配」。
+        Set<String> queryKeywords = FusionSupport.keywords(queryText);
+
         Map<String, ScoreEntry> scoreMap = new LinkedHashMap<>();
         for (RankedList list : active) {
             boolean vector = list.modality() == Modality.VECTOR;
@@ -82,7 +87,7 @@ public class RrfFusionStrategy implements FusionStrategy {
                     break;
                 }
                 String hash = FusionSupport.hashContent(c);
-                ScoreEntry entry = scoreMap.computeIfAbsent(hash, x -> new ScoreEntry(c, queryText, fusion));
+                ScoreEntry entry = scoreMap.computeIfAbsent(hash, x -> new ScoreEntry(c, queryKeywords, fusion));
                 entry.rrf += perList / (k + rank);
                 double raw = FusionSupport.extractScore(c);
                 if (vector) {
@@ -101,10 +106,10 @@ public class RrfFusionStrategy implements FusionStrategy {
         List<ScoreEntry> entries = new ArrayList<>(scoreMap.values());
         for (ScoreEntry e : entries) {
             double score = e.rrf;
-            if (FusionSupport.titleHit(e.content, e.queryText)) {
+            if (FusionSupport.titleHit(e.content, e.queryKeywords)) {
                 score *= 1.0 + e.fusion.titleBoost();
             }
-            if (FusionSupport.fileNameHit(e.content, e.queryText)) {
+            if (FusionSupport.fileNameHit(e.content, e.queryKeywords)) {
                 score *= 1.0 + e.fusion.fileNameBoost();
             }
             e.fusedScore = score;
@@ -178,16 +183,16 @@ public class RrfFusionStrategy implements FusionStrategy {
     /** 单条结果的 RRF 累计分记录 */
     private static class ScoreEntry {
         final Content content;
-        final String queryText;
+        final Set<String> queryKeywords;
         final FusionConfig fusion;
         Double vectorScore;
         Double keywordScore;
         double rrf;
         double fusedScore;
 
-        ScoreEntry(Content content, String queryText, FusionConfig fusion) {
+        ScoreEntry(Content content, Set<String> queryKeywords, FusionConfig fusion) {
             this.content = content;
-            this.queryText = queryText;
+            this.queryKeywords = queryKeywords;
             this.fusion = fusion;
         }
     }

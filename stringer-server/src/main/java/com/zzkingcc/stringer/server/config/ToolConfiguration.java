@@ -5,6 +5,7 @@ import com.zzkingcc.stringer.api.annotation.Tool;
 import com.zzkingcc.stringer.api.tool.StringerToolProvider;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.runtime.tool.AnnotatedToolScanner;
+import com.zzkingcc.stringer.runtime.tool.ToolExecutorService;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import com.zzkingcc.stringer.runtime.tool.ToolRegistry.Registered;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
@@ -12,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -127,7 +129,31 @@ public class ToolConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public ToolRouter toolRouter(ToolRegistry toolRegistry, DomainRegistry domainRegistry) {
-        return new ToolRouter(toolRegistry, domainRegistry);
+    public ToolRouter toolRouter(ToolRegistry toolRegistry, DomainRegistry domainRegistry,
+                                 ToolExecutorService toolExecutorService) {
+        return new ToolRouter(toolRegistry, domainRegistry, toolExecutorService);
+    }
+
+    /**
+     * 本地工具执行隔离层：<b>有界池 + 超时上限</b>，让卡死的工具不会占住编排线程。
+     *
+     * <p>容量取编排池上限（{@code stringer.agent.max-pool-size}）的同量级而不是同一份配置：
+     * 两者服务的是不同资源（编排池是会话并发，工具池是单次调用并发），
+     * 但工具池必须至少能同时承接编排池能发出的调用数，否则正常负载下就会被自己的池拒。
+     * 队列为零：满即拒，理由见 {@link ToolExecutorService#create}。</p>
+     *
+     * <p>{@code destroyMethod = "close"}：Spring 关闭时 {@code shutdownNow}，
+     * 不留非守护线程挂着进程。</p>
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean
+    public ToolExecutorService toolExecutorService(
+            AgentProperties agentProperties,
+            @Value("${stringer.tool.invoke-timeout-ms:30000}") long timeoutMs) {
+        int threads = Math.max(8, agentProperties.getMaxPoolSize());
+        ToolExecutorService service = ToolExecutorService.create(threads, timeoutMs);
+        log.info("[工具路由] 本地工具执行隔离池 {} 线程（零队列，满即拒），单次调用上限 {}ms",
+                threads, service.timeoutMs());
+        return service;
     }
 }

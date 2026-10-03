@@ -1,6 +1,7 @@
 package com.zzkingcc.stringer.server.knowledge;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
@@ -139,7 +140,7 @@ public class ChunkExporter {
                     .index(index)
                     .size(MAX_CHUNKS)
                     .query(Query.of(q -> q.term(t -> t.field("metadata.doc_id").value(docId))))
-                    .sort(sort -> sort.field(f -> f.field("metadata.chunk_seq").order(SortOrder.Asc)))
+                    .sort(sort -> sort.field(f -> f.field("metadata." + ChunkMetadataKeys.CHUNK_SEQ).order(SortOrder.Asc)))
                     .source(src -> src.filter(f -> f.includes("text", "metadata"))), Map.class);
             for (Hit<Map> hit : resp.hits().hits()) {
                 chunks.add(toChunk(hit.source()));
@@ -173,8 +174,9 @@ public class ChunkExporter {
         String text = source.get("text") == null ? "" : source.get("text").toString();
         Object metadataObj = source.get("metadata");
         Map<String, Object> metadata = metadataObj instanceof Map ? (Map<String, Object>) metadataObj : Map.of();
-        String path = metadata.get("section_path") == null ? "" : metadata.get("section_path").toString();
-        int seq = parseInt(metadata.get("chunk_seq"));
+        String path = metadata.get(ChunkMetadataKeys.SECTION_PATH) == null
+                ? "" : metadata.get(ChunkMetadataKeys.SECTION_PATH).toString();
+        int seq = parseInt(metadata.get(ChunkMetadataKeys.CHUNK_SEQ));
         return new Chunk(seq, path, text, text.codePointCount(0, text.length()));
     }
 

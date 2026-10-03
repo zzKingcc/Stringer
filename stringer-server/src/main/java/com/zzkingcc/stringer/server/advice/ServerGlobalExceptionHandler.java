@@ -91,9 +91,18 @@ public class ServerGlobalExceptionHandler {
 
     @ExceptionHandler(BaseException.class)
     public ResponseEntity<Map<String, Object>> handleBaseException(BaseException e) {
-        log.error("[全局异常][BUSINESS] code={}({}), detail={}",
-                e.getCode(), e.getCodeName(), e.getMessage(), e);
-        return build(e.getErrorCode(), e.getMessage());
+        ErrorCode code = e.getErrorCode();
+        // 4xx 且不可重试的属于"调用方填错了"，与 NOT_CONFIGURED 同理按 WARN 记且不打堆栈：
+        // 堆栈对"输入超长"这类问题零信息量，却会淹没真正需要人介入的 ERROR。
+        boolean callerError = code.getHttpStatus() >= 400 && code.getHttpStatus() < 500 && !code.isRetryable();
+        if (callerError) {
+            log.warn("[全局异常][BUSINESS] code={}({}), detail={}",
+                    e.getCode(), e.getCodeName(), e.getMessage());
+        } else {
+            log.error("[全局异常][BUSINESS] code={}({}), detail={}",
+                    e.getCode(), e.getCodeName(), e.getMessage(), e);
+        }
+        return build(code, e.getMessage());
     }
 
     /**

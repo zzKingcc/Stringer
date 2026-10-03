@@ -7,7 +7,9 @@ import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.api.support.KbIndexes;
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
+import com.zzkingcc.stringer.infrastructure.elasticsearch.EsAccessException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
 import com.zzkingcc.stringer.infrastructure.ingestion.DocumentIngestor;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
@@ -201,7 +203,14 @@ public class KnowledgeBaseService {
     /**
      * 删除若干<b>域</b>各自的知识库索引（供删域时清理，先清索引再删域）。
      *
+     * <p><b>fail-closed</b>：任何一个域的索引删不掉（ES 不可达 / 删除失败），立即抛异常中止，
+     * <b>绝不</b>"跳过它继续删下一个"。删域的语义是"这个域的一切都清干净"，
+     * 留一个孤儿索引的后果不是"多了点垃圾"：
+     * 索引名是<b>域路径的哈希</b>，同一路径域将来重建时索引名相同，
+     * 这份本该删掉的知识内容会原样复活，且没有任何报错。</p>
+     *
      * @return 实际存在并被删除的域标识
+     * @throws KnowledgeBaseException ES 不可达或索引删除失败 —— <b>域未被删除</b>
      */
     public List<String> deleteIndices(Collection<String> domains) {
         if (domains == null || domains.isEmpty()) {
@@ -212,13 +221,25 @@ public class KnowledgeBaseService {
             if (domain == null || domain.isBlank()) {
                 continue;
             }
-            String index = KbIndexes.nameOf(domain.trim());
+            String normalized = domain.trim();
+            String index = KbIndexes.nameOf(normalized);
             // 先删切片预览文件（含文档全文）再删索引：否则 ES 一删，docId 清单就没了着落，
             // 预览目录里会留下带着完整知识内容的孤儿 txt
             deleteExportFiles(index);
-            if (EsIndexManager.deleteIndex(esClient, index)) {
+            boolean deleted;
+            try {
+                deleted = EsIndexManager.deleteIndex(esClient, index);
+            } catch (EsAccessException e) {
+                // 明确区分「索引可能还在」与「查都没问到」：前者绝不能继续删域
+                throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_BASE_ERROR,
+                        "索引[" + index + "]（域 " + normalized + "）未能删除，已中止、域未删除："
+                                + e.getMessage() + "。"
+                                + "若 ES 只是临时不可达，恢复后重新执行删除即可；"
+                                + "若确实删不掉，需先在 ES 侧处理该索引再重试", e);
+            }
+            if (deleted) {
                 storeCache.remove(index);
-                removed.add(domain.trim());
+                removed.add(normalized);
             }
         }
         if (!removed.isEmpty()) {
@@ -242,8 +263,8 @@ public class KnowledgeBaseService {
             java.util.Set<String> docIds = new java.util.LinkedHashSet<>();
             for (Hit<Map> hit : resp.hits().hits()) {
                 Object source = hit.source() == null ? null : hit.source().get("metadata");
-                if (source instanceof Map<?, ?> metadata && metadata.get("doc_id") != null) {
-                    docIds.add(String.valueOf(metadata.get("doc_id")));
+                if (source instanceof Map<?, ?> metadata && metadata.get(ChunkMetadataKeys.DOC_ID) != null) {
+                    docIds.add(String.valueOf(metadata.get(ChunkMetadataKeys.DOC_ID)));
                 }
             }
             for (String docId : docIds) {
@@ -276,6 +297,9 @@ public class KnowledgeBaseService {
         log.info("[知识库] 开始重建 {} 个索引（维度 {}）：{}", targets.size(), dimensions, targets);
         for (String index : targets) {
             EsIndexManager.diagnoseElasticsearch(esClient, index);
+            // 删不掉就必须停在这里：继续往下 createIndexWithIkMapping 只会撞上
+            // "索引已存在且维度一致 → 跳过创建"，于是用户点了"重建"却什么都没重建，
+            // 界面显示成功、维度仍是旧的 —— 又是一个"不报错但没生效"
             EsIndexManager.deleteIndex(esClient, index);
             EsIndexManager.createIndexWithIkMapping(esClient, index, dimensions);
             EsIndexManager.writeAfterVerify(esClient, index);
@@ -359,7 +383,7 @@ public class KnowledgeBaseService {
         log.info("[知识库] 收到上传请求：文件={}，大小={} 字节，类型={}，编码={}，replace={}，域={}",
                 name, content.length, route.strategyName(), encoding, replace, effective);
 
-        Metadata metadata = Metadata.from("file_name", name);
+        Metadata metadata = Metadata.from(ChunkMetadataKeys.FILE_NAME, name);
         metadata.put("file_name_lower", lower(name));
         metadata.put(EsIndexManager.DOMAIN_FIELD, effective);
         IngestDocument source = route.binary()
@@ -489,7 +513,7 @@ public class KnowledgeBaseService {
             }
 
             docId = UUID.randomUUID().toString();
-            source.metadata().put("doc_id", docId);
+            source.metadata().put(ChunkMetadataKeys.DOC_ID, docId);
             source.metadata().put("upload_time", Instant.now().toString());
             IngestReport report = DocumentIngestor.ingestExternalDocuments(
                     List.of(source), esClient, index, storeFor(index), embeddingModel);
@@ -526,9 +550,20 @@ public class KnowledgeBaseService {
 
     /**
      * 读取单个索引里的文档条目（按 doc_id 聚合切片数）。
+     *
+     * <p>这里是<b>唯一允许对 {@code exists} fail-open 的地方</b>：它是管控台文档列表的读取路径，
+     * ES 抖一下的代价只是这一页少显示几个文档，而抛异常会让整个页面报错。
+     * 与 {@link #deleteIndices} 的差别正是"破坏性操作 fail-closed、只读展示 fail-open"。</p>
      */
     private List<DocumentItem> listIndex(String index) {
-        if (!EsIndexManager.exists(esClient, index)) {
+        boolean exists;
+        try {
+            exists = EsIndexManager.exists(esClient, index);
+        } catch (EsAccessException e) {
+            log.warn("[知识库] 读取索引[{}]文档列表失败（ES 不可达，按空列表处理）: {}", index, e.getMessage());
+            return List.of();
+        }
+        if (!exists) {
             return List.of();
         }
         try {
@@ -546,11 +581,11 @@ public class KnowledgeBaseService {
                 if (md == null) {
                     continue;
                 }
-                String docId = text(md.get("doc_id"));
+                String docId = text(md.get(ChunkMetadataKeys.DOC_ID));
                 if (docId == null) {
                     continue;
                 }
-                idToName.putIfAbsent(docId, text(md.get("file_name")));
+                idToName.putIfAbsent(docId, text(md.get(ChunkMetadataKeys.FILE_NAME)));
                 idToChunks.merge(docId, 1, Integer::sum);
                 idToDomain.putIfAbsent(docId, domainOf(md));
             }

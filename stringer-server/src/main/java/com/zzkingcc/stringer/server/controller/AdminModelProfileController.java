@@ -194,7 +194,7 @@ public class AdminModelProfileController {
                 existing.baseUrl(), existing.apiKey(), existing.modelName(),
                 existing.temperature(), existing.maxTokens(),
                 read.dimension() != null ? read.dimension() : existing.dimensions(),
-                prefer(read.capabilities(), existing.capabilities()),
+                union(read.capabilities(), existing.capabilities()),
                 existing.fallbacks());
         String failure = registry.save(updated);
         if (failure != null) {
@@ -207,9 +207,32 @@ public class AdminModelProfileController {
         return out;
     }
 
-    /** 元数据读到了就用它；读不到（空）就保留档案里原有的声明 */
-    private static <T> List<T> prefer(List<T> fromMetadata, List<T> declared) {
+    /**
+     * 端点族 / 输入模态 / 输出模态：元数据读到了就用它，读不到（空）才保留原有声明。
+     *
+     * <p>这三项提供商的声明是<b>完整</b>的（{@code input_modalities} 列全了它能吃什么），
+     * 所以"读到了"就应当覆盖，否则改过的模型会留着陈旧的旧模态。</p>
+     */
+    static <T> List<T> prefer(List<T> fromMetadata, List<T> declared) {
         return fromMetadata == null || fromMetadata.isEmpty() ? declared : fromMetadata;
+    }
+
+    /**
+     * 布尔能力：并集。
+     *
+     * <p>不能用 {@link #prefer} —— {@code supported_parameters} <b>不列某项只代表提供商没声明，
+     * 不代表不支持</b>（OpenRouter 就不列 {@code stream}，因为人人都支持）。用元数据覆盖会把
+     * 用户已声明的 {@code streaming} 悄悄抹掉 —— 这是"没读到"被当成了"没有"。</p>
+     */
+    static <T> List<T> union(List<T> fromMetadata, List<T> declared) {
+        java.util.LinkedHashSet<T> out = new java.util.LinkedHashSet<>();
+        if (declared != null) {
+            out.addAll(declared);
+        }
+        if (fromMetadata != null) {
+            out.addAll(fromMetadata);
+        }
+        return List.copyOf(out);
     }
 
     private ModelCatalog.Result runInspect(String baseUrl, String apiKey, String modelName) {

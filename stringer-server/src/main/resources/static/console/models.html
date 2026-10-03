@@ -35,12 +35,16 @@
             <div class="card perm-none">加载中…</div>
         </div>
 
-        <!-- ============ 分段二：对话模型（可多个，按域绑定） ============ -->
+        <!-- ============ 分段二：模型（除当前向量模型外的全部档案） ============
+             刻意不叫「对话模型」：探测把档案分成 chat / embedding / images / tts / rerank …
+             好几类，只列 chat 会让生图、语音这类档案存进去之后在页面上彻底消失
+             （看不到、测不了、也删不掉）。这里除当前占着向量槽位的那一个之外全部列出，
+             对话模型在其中按域绑定使用。 -->
         <div class="seg">
-            <h3>对话模型</h3>
-            <span class="seg-note">可以有多个；在「域空间」页把某个模型绑给域</span>
+            <h3>模型</h3>
+            <span class="seg-note">除向量模型外的全部档案；对话模型要在「域空间」页绑给域才能被调用</span>
             <span class="spacer"></span>
-            <button class="ghost" id="addChatBtn">+ 添加对话模型</button>
+            <button class="ghost" id="addChatBtn">+ 添加模型</button>
         </div>
         <div id="modelList">
             <div class="card perm-none">加载中…</div>
@@ -139,7 +143,9 @@
     /* ============ 模型设置 ============
    分两段：
      · 向量模型 —— 全局只能选一个，所有域共用；没有配置时显示空状态，只给一个添加按钮
-     · 对话模型 —— 可以有多个，按域绑定
+     · 模型 —— 除当前向量模型外的全部档案（含对话 / 生图 / 语音等所有类型）。
+       不按"对话"命名，是因为探测会把档案分成好几类，只列 chat 会让其余类型
+       存进去之后在页面上彻底消失；对话模型在其中按域绑定使用。
    添加模型时统一走右上角「添加模型」/各段的添加按钮，由探测结果自动归入对应分段。
    域 → 对话模型的绑定在「域空间」页操作。 */
 Console.renderSidebar('models');
@@ -222,9 +228,18 @@ Console.renderSidebar('models');
         }).join('');
     }
 
-    /* 卡片头部：端点族 + 输入模态 + 布尔能力（输出模态放 meta，避免"文本/向量"重复） */
+    /* 同样的中文名，但拼成一句纯文本 —— 用于要嵌进文案里的场合（标签是给 meta 行用的） */
+    function cnList(list, labelMap, emptyText) {
+        var names = (list || []).map(function (k) { return labelMap[k] || k; });
+        return names.length ? names.join('、') : (emptyText || '（无）');
+    }
+
+    /* 卡片头部：端点族 + 布尔能力。
+       输入 / 输出模态改由 meta 那两行完整列出 —— 头部标签位有限，多模态模型
+       （如输入 text+image、输出 text+image）在头部容易被挤掉或看着像"只有文本"，
+       而"能吃什么 / 产出什么"恰恰是挑模型时最该看的信息。 */
     function cardTags(p) {
-        return tagList(p.endpoints, EP_LABEL) + tagList(p.input, MOD_LABEL) + tagList(p.capabilities, CAP_LABEL);
+        return tagList(p.endpoints, EP_LABEL) + tagList(p.capabilities, CAP_LABEL);
     }
 
     /* 同名模型（两家服务商各配一份）自动编号：别名 = 模型名[-N]，卡片上显示 #N */
@@ -423,21 +438,30 @@ Console.renderSidebar('models');
         var box = pfEl('modelList');
         renderEmbedding();
 
-        /* 对话段：只有走chat 端点的档案。向量档案不在这里出现 —— 它由向量段单独管。 */
-        var chatProfiles = PROFILES.filter(isChatProfile);
-        if (!chatProfiles.length) {
+        /* 模型段 = 全部档案，减去当前占着向量槽位的那一个。
+           刻意不只筛 chat：探测会把档案分成 chat / embedding / images / tts / rerank 等
+           好几类，只列 chat 会让生图、语音这类档案存进去之后在页面上彻底消失 ——
+           看不到、测不了、也删不掉（用户配了硅基流动的生图模型就是这么"不见了"的）。 */
+        var models = PROFILES.filter(function (p) { return p.alias !== EMBEDDING.alias; });
+        if (!models.length) {
             box.innerHTML = '<div class="empty-box">'
-                + '<div class="empty-title">尚未配置对话模型</div>'
-                + '<div class="empty-sub">对话模型需要绑定到域才能被调用，绑定在「域空间」页操作。</div>'
-                + '<button class="btn-primary" data-add-chat>+ 添加对话模型</button>'
+                + '<div class="empty-title">还没有配置任何模型</div>'
+                + '<div class="empty-sub">点右上角或这里的「添加模型」登记一个连接，添加时会自动探测类型；'
+                + '对话模型要绑到域才能被调用（在「域空间」页操作）。</div>'
+                + '<button class="btn-primary" data-add-chat>+ 添加模型</button>'
                 + '</div>';
         } else {
-            box.innerHTML = chatProfiles.map(function (p) {
-                var used = (p.usedByDomains || []).length
-                    ? p.usedByDomains.map(function (d) {
-                        return '<span class="tag perm">' + Console.escapeHtml(d) + '</span>';
-                      }).join('')
-                    : '<span class="perm-none">未绑定任何域</span>';
+            box.innerHTML = models.map(function (p) {
+                var chat = isChatProfile(p);
+                /* 域绑定只对对话模型有意义（绑定接口会拒绝非对话档案），这里如实说明，
+                   免得用户以为生图 / 语音模型也能绑到域上 */
+                var used = !chat
+                    ? '<span class="perm-none">不参与域绑定</span>'
+                    : ((p.usedByDomains || []).length
+                        ? p.usedByDomains.map(function (d) {
+                            return '<span class="tag perm">' + Console.escapeHtml(d) + '</span>';
+                          }).join('')
+                        : '<span class="perm-none">未绑定任何域</span>');
                 return '<section class="card model-card">'
                     + '<header class="card-head">'
                     +   '<span class="model-dot"></span>'
@@ -450,18 +474,23 @@ Console.renderSidebar('models');
                     +   '<button class="ghost" data-del="' + Console.escapeHtml(p.alias) + '">删除</button>'
                     + '</header>'
                     + '<div class="model-meta">'
+                    +   '<div><span class="k">输入模态</span>'
+                    +      (tagList(p.input, MOD_LABEL) || '<span class="perm-none">—</span>') + '</div>'
                     +   '<div><span class="k">输出模态</span>'
                     +      (tagList(p.output, MOD_LABEL) || '<span class="perm-none">—</span>') + '</div>'
                     +   '<div><span class="k">服务商地址</span><span class="mono">'
                     +      Console.escapeHtml(p.baseUrl || '-') + '</span></div>'
                     +   '<div><span class="k">被哪些域使用</span>' + used + '</div>'
+                    +   (chat ? '' : '<div><span class="k">说明</span><span style="color:var(--amber);">'
+                    +      '该类型（' + Console.escapeHtml(cnList(p.endpoints, EP_LABEL)) + '）'
+                    +      '平台尚未接入对应功能，保存下来只作为能力画像，不会被调用</span></div>')
                     + '</div>'
                     + '</section>';
             }).join('');
         }
 
         var addChat = box.querySelector('[data-add-chat]');
-        if (addChat) { addChat.addEventListener('click', function () { openAdd('chat'); }); }
+        if (addChat) { addChat.addEventListener('click', function () { openAdd(); }); }
 
         box.querySelectorAll('button[data-edit]').forEach(function (b) {
             b.addEventListener('click', function () { openProfileEdit(b.getAttribute('data-edit')); });
@@ -473,8 +502,8 @@ Console.renderSidebar('models');
             b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
         });
 
-        /* 页头数量：向量最多 1 个 + 对话模型数 */
-        pfEl('modelCount').textContent = ((EMBEDDING.alias ? 1 : 0) + chatProfiles.length) + ' 个模型';
+        /* 页头数量：向量槽（至多 1 个）+ 模型段的全部档案 = 档案总数，与文件里的条数一致 */
+        pfEl('modelCount').textContent = ((EMBEDDING.alias ? 1 : 0) + models.length) + ' 个模型';
     }
 
     /* ---------- 弹窗：开 / 关 / 重置 ---------- */
@@ -765,14 +794,10 @@ Console.renderSidebar('models');
        对向量模型来说探测完仍是 ["embedding"]，卡片渲染结果与探测前**一模一样** ——
        只刷新卡片等于什么都没发生，用户会以为按钮坏了。 */
     function probeSummary(r) {
-        function labels(list, map) {
-            var names = (list || []).map(function (k) { return map[k] || k; });
-            return names.length ? names.join('、') : '（无）';
-        }
-        return '端点族：' + labels(r.endpoints, EP_LABEL)
-            + '\n输入模态：' + labels(r.input, MOD_LABEL)
-            + '\n输出模态：' + labels(r.output, MOD_LABEL)
-            + '\n布尔能力：' + labels(r.capabilities, CAP_LABEL)
+        return '端点族：' + cnList(r.endpoints, EP_LABEL)
+            + '\n输入模态：' + cnList(r.input, MOD_LABEL)
+            + '\n输出模态：' + cnList(r.output, MOD_LABEL)
+            + '\n布尔能力：' + cnList(r.capabilities, CAP_LABEL)
             + (r.dimension == null ? '' : '\n向量维度：' + r.dimension);
     }
 
@@ -833,7 +858,7 @@ Console.renderSidebar('models');
     /* ---------- 事件绑定 ---------- */
     pfEl('addModelBtn').addEventListener('click', function () { openAdd(); });
     pfEl('addEmbeddingBtn').addEventListener('click', function () { openAdd('embedding'); });
-    pfEl('addChatBtn').addEventListener('click', function () { openAdd('chat'); });
+    pfEl('addChatBtn').addEventListener('click', function () { openAdd(); });
     pfEl('probeBtn').addEventListener('click', runProbe);
     pfEl('saveProfileBtn').addEventListener('click', save);
     pfEl('resetProfileFormBtn').addEventListener('click', resetForm);

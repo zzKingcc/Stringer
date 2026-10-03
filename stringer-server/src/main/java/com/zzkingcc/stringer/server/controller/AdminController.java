@@ -14,6 +14,7 @@ import com.zzkingcc.stringer.runtime.tool.ToolRegistry;
 import com.zzkingcc.stringer.runtime.tool.ToolRouter;
 import com.zzkingcc.stringer.server.config.RedisProperties;
 import com.zzkingcc.stringer.server.config.PromptProperties;
+import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.prompt.DomainSystemPromptResolver;
 import com.zzkingcc.stringer.server.settings.EsCompatibility;
@@ -144,9 +145,17 @@ public class AdminController {
         body.put("chatTemperature", current.getChatTemperature());
         body.put("chatMaxTokens", current.getChatMaxTokens());
         body.put("chatCapabilities", current.getChatCapabilities());
-        body.put("embeddingBaseUrl", current.getEmbeddingBaseUrl());
+        /* 向量模型的「名字 / 地址」必须和上面那个 embeddingConfigured 同源。
+           embeddingConfigured 取自 holder（认识"选中的档案"），而 LlmSettings 只认
+           llm-settings.json / yaml —— 向量模型改由档案单选之后，那两处通常是空的。
+           两者混用会让知识库页拿到 configured=true 却显示空的模型名，地址还会回落到
+           对话模型的 baseUrl，看上去像"配了却没生效"。这里按档案优先、yaml 兜底取值。 */
+        ModelProfile embProfile = modelProfileRegistry.embeddingProfile().orElse(null);
+        body.put("embeddingBaseUrl", embProfile != null
+                ? embProfile.baseUrl() : current.getEmbeddingBaseUrl());
         body.put("embeddingApiKeyMasked", current.getMaskedEmbeddingApiKey());
-        body.put("embeddingModelName", current.getEmbeddingModelName());
+        body.put("embeddingModelName", embProfile != null
+                ? embProfile.modelName() : current.getEmbeddingModelName());
         body.put("embeddingDimensions", current.getEmbeddingDimensions());
         body.put("embeddingCapabilities", current.getEmbeddingCapabilities());
         body.put("chatConfigured", modelHolder.isConfigured() || modelProfileRegistry.hasChatModel());

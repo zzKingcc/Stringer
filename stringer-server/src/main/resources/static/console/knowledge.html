@@ -116,9 +116,11 @@
         var el = document.getElementById('embStatus');
         Console.request('/admin/settings').then(function (s) {
             var ok = !!s.embeddingConfigured;
+            /* 名称缺省时不渲染空的 <code>：那看起来像"配上了但没显示出来" */
+            var name = s.embeddingModelName ? '<code>' + esc(s.embeddingModelName) + '</code>' : '';
             el.className = 'status-line ' + (ok ? 'ok' : 'warn');
             el.innerHTML = ok
-                ? '<span>向量模型已就绪：<code>' + esc(s.embeddingModelName || '') + '</code></span>'
+                ? '<span>向量模型已就绪' + (name ? '：' + name : '') + '</span>'
                     + '<span class="pill">' + esc(s.embeddingBaseUrl || s.chatBaseUrl || '复用对话地址') + '</span>'
                 : '<span>向量模型未配置，上传与重建会失败。请先到「模型设置」填写向量模型的<b>模型名</b>。</span>';
             Console.setModelsWarn(!s.chatConfigured);

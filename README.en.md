@@ -2,7 +2,7 @@
 <h3 align="center">Stringer</h3>
 
 <p align="center">
-  <strong>An AI agent runtime middleware for the Java ecosystem.<br>Pick the starters you need: inject StringerAgent to call AI, annotate a method with @Tool to let AI call you, add the knowledge base SDK to upload documents. Orchestration, tool governance, knowledge base and the ops console all live in the server.</strong>
+  <strong>Java agent runtime middleware. Orchestration, tool governance, knowledge base and the ops console run in one standalone server process —<br>while the tools stay in your own code.<br>One server + three opt-in SDKs: <code>forDomain(domain)</code> gets the chat entry, and every turn assembles tools / prompts / model / knowledge for that domain; <code>@Tool(domains=…)</code> lets the agent call your business methods inside your own process; the knowledge base SDK uploads documents into per-domain indexes.<br>Permission violations fail loudly instead of degrading silently; tool changes take effect on the next turn; approval checkpoints survive a server restart.</strong>
 </p>
 
 <p align="center">

@@ -279,9 +279,9 @@
 | GET | `/admin/model-profiles` | — | `code`、`profiles[]`（每项含 `alias`、`endpoints`、`input`、`output`、`baseUrl`、`modelName`、`apiKeyMasked`、`temperature`、`maxTokens`、`dimensions`、`capabilities`、`fallbacks`、`capabilityHint`、`usedByDomains`）、`domainBindings`（域→别名列表）、`settingsFile` |
 | POST | `/admin/model-profiles` | body `ModelProfile`（`alias` / `apiKey` 必填，另含 `endpoints` / `input` / `output` / `baseUrl` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`） | `code`、`action`、`target`、`settingsFile`；`alias` 已存在则整体覆盖 |
 | POST | `/admin/model-profiles/probe` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：实测一个模型的端点族 / 模态 / 能力 / 维度 |
-| POST | `/admin/model-profiles/{alias}/probe` | path `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
-| POST | `/admin/model-profiles/{alias}/test` | path `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
-| DELETE | `/admin/model-profiles/{alias}` | path `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`、`settingsFile` |
+| POST | `/admin/model-profiles/probe-saved` | query `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
+| POST | `/admin/model-profiles/test` | query `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
+| DELETE | `/admin/model-profiles` | query `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`、`settingsFile` |
 | PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`（`bound` / `unbound`）、`target`、`aliases`（解绑后该域当前生效列表）、`sourceDomain`（生效来源：本域自绑还是从哪个祖先继承）、`domainBindings`、`settingsFile`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定；域未登记 → `40000 INVALID_PARAMETER` |
 
 约定：

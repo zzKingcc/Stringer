@@ -761,9 +761,14 @@ Console.renderSidebar('models');
     }
 
     /* ---------- 测试 ---------- */
-    /* 卡片上的「测试」= 用档案里已存的配置重新探测，结果写回档案 → 卡片标签随之刷新 */
+    /* 卡片上的「测试」= 用档案里已存的配置重新探测，结果写回档案 → 卡片标签随之刷新。
+
+       别名必须走查询串而不是路径段：别名由模型名派生，模型名常含 `/`
+       （如 nvidia/nemotron-3-embed-1b:free）。编码成 %2F 放进路径时，Tomcat 默认
+       ALLOW_ENCODED_SLASH=false 会在解码阶段直接回 400 HTML，请求到不了后端 ——
+       表现就是"探测失败：返回 400 且不是 JSON"。 */
     function testProfile(alias) {
-        Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias) + '/probe', 'POST')
+        Console.jsonRequest('/admin/model-profiles/probe-saved?alias=' + encodeURIComponent(alias), 'POST')
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '探测失败'); }
                 return loadProfiles();
@@ -789,7 +794,7 @@ Console.renderSidebar('models');
                 + '这些域将立即变为「无可调用模型」。\n\n';
         }
         if (!confirm(text)) { return; }
-        Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias), 'DELETE')
+        Console.jsonRequest('/admin/model-profiles?alias=' + encodeURIComponent(alias), 'DELETE')
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '删除失败'); }
                 if (r && r.message) { alert(r.message); }

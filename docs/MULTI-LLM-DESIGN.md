@@ -239,9 +239,9 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | GET | `/admin/model-profiles` | 档案列表（Key 脱敏，含 `endpoints` / `input` / `output` / `capabilities` / `usedByDomains`）+ `domainBindings`（域→别名列表） |
 | POST | `/admin/model-profiles` | 创建/更新档案（`alias` 为键；字段为 `endpoints` / `input` / `output` / `baseUrl` / `apiKey` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`，**无 `type`**） |
 | POST | `/admin/model-profiles/probe` | 实测一个模型的端点族 / 模态 / 能力 / 维度（不落盘） |
-| POST | `/admin/model-profiles/{alias}/probe` | 用档案已存配置重新探测并写回档案 |
-| POST | `/admin/model-profiles/{alias}/test` | 测试连接（返回实测可用性 + 模型名） |
-| DELETE | `/admin/model-profiles/{alias}` | 删除档案并**级联清理**所有域绑定；返回结果带出被摘掉绑定的域清单（这些域立即进入"无可调用"状态，由管控台明确提示） |
+| POST | `/admin/model-profiles/probe-saved` | 用档案已存配置重新探测并写回档案（`alias` 走**查询参数**，别名可含 `/`，放进路径段会被 Tomcat 以 400 拒收） |
+| POST | `/admin/model-profiles/test` | 测试连接（返回实测可用性 + 模型名；`alias` 同样走查询参数） |
+| DELETE | `/admin/model-profiles` | 删除档案并**级联清理**所有域绑定（`alias` 走查询参数）；返回结果带出被摘掉绑定的域清单（这些域立即进入"无可调用"状态，由管控台明确提示） |
 | PUT | `/admin/model-bindings/{domain}` | 设置域的可调用别名列表（整体覆盖，顺序即优先级；空＝解绑），返回 `sourceDomain` 标明生效绑定来自链上哪个域 |
 
 ---

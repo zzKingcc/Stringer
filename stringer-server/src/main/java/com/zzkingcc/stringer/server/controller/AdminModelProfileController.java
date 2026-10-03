@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
@@ -159,9 +160,15 @@ public class AdminModelProfileController {
      * 对<b>已保存</b>的档案重新探测：用档案里存的 Key 探，并把结果<b>写回档案</b>。
      *
      * <p>管控台卡片上的「测试」走这里 —— 探完卡片上的标签即刷新。</p>
+     *
+     * <p><b>别名走查询参数，不做路径变量</b>：别名由模型名派生，而模型名常含 {@code /}
+     * （如 OpenRouter 的 {@code nvidia/nemotron-3-embed-1b:free}）。前端把这种别名放进路径段
+     * 只能编码成 {@code %2F}，而 Tomcat 默认 {@code ALLOW_ENCODED_SLASH=false}，会在 URI 解码
+     * 阶段直接回 <b>400</b> —— 且返回的是 Tomcat 自己的 HTML 错误页，请求压根到不了这里，
+     * 表现为"探测失败：返回 400 且不是 JSON"。查询串不受该限制。</p>
      */
-    @PostMapping("/model-profiles/{alias}/probe")
-    public Map<String, Object> probeSaved(@PathVariable("alias") String alias) {
+    @PostMapping("/model-profiles/probe-saved")
+    public Map<String, Object> probeSaved(@RequestParam("alias") String alias) {
         ModelProfile existing = registry.profile(alias)
                 .orElseThrow(() -> new BaseException(ErrorCode.INVALID_PARAMETER, "档案不存在：" + alias));
 
@@ -211,9 +218,12 @@ public class AdminModelProfileController {
      *
      * <p>被清掉绑定的域立即进入"无可调用"状态，由管控台「域空间」页提示 ——
      * 删除不会被"仍被引用"拦在半路。</p>
+     *
+     * <p>别名走查询参数的原因同 {@link #probeSaved}：别名可含 {@code /}，放进路径段会被
+     * Tomcat 以 400 拒收。</p>
      */
-    @DeleteMapping("/model-profiles/{alias}")
-    public Map<String, Object> delete(@PathVariable("alias") String alias) {
+    @DeleteMapping("/model-profiles")
+    public Map<String, Object> delete(@RequestParam("alias") String alias) {
         ModelProfileRegistry.DeleteResult deleted = registry.delete(alias);
         if (!deleted.deleted()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, deleted.reason());
@@ -235,9 +245,11 @@ public class AdminModelProfileController {
 
     /**
      * 连通性测试：复用「模型设置」页同一套探测逻辑（只发一条极短请求，避免浪费额度）。
+     *
+     * <p>别名走查询参数的原因同 {@link #probeSaved}。</p>
      */
-    @PostMapping("/model-profiles/{alias}/test")
-    public Map<String, Object> test(@PathVariable("alias") String alias) {
+    @PostMapping("/model-profiles/test")
+    public Map<String, Object> test(@RequestParam("alias") String alias) {
         ModelProfile profile = registry.profile(alias)
                 .orElseThrow(() -> new BaseException(ErrorCode.INVALID_PARAMETER, "档案不存在：" + alias));
 

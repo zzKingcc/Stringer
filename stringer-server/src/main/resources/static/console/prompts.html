@@ -232,7 +232,6 @@
             baseline = { prompts: Object.assign({}, r.prompts || {}) };
             model = { prompts: Object.assign({}, baseline.prompts) };
             domains = r.domains || [];
-            document.getElementById('settingsFile').textContent = r.settingsFile || '—';
 
             var orphans = r.orphanPrompts || [];
             var box = document.getElementById('orphanBox');

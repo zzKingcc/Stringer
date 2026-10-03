@@ -34,7 +34,7 @@
         <form id="loginForm" autocomplete="off" onsubmit="return false;">
             <div class="field">
                 <label for="username">账号</label>
-                <input id="username" name="username" type="text" autocomplete="username" placeholder="stringer">
+                <input id="username" name="username" type="text" autocomplete="username" placeholder="服务端配置的账号">
             </div>
             <div class="field">
                 <label for="password">密码</label>
@@ -58,8 +58,7 @@
 </script>
 <script src="assets/console.js"></script>
 <script>
-    var esc = Console.escapeHtml;
-    var mode = 'login';           /* login | init */
+    var mode = 'login';           /* login | init | blocked */
     var resultEl = document.getElementById('result');
     var bannerEl = document.getElementById('banner');
     var noteEl = document.getElementById('note');
@@ -87,7 +86,9 @@
         }
         if (s.corrupted) {
             /* 账号文件存在但读不出来：服务端拒绝一切受保护请求，初始化入口也已关闭
-               （账号数据就在文件里，允许重新初始化等于允许接管）。这里只告知，不给任何入口。 */
+               （账号数据就在文件里，允许重新初始化等于允许接管）。这里只告知，不给任何入口。
+               ⚠️ 这一页是<b>未鉴权</b>的：不能出现任何凭证明文，也不能出现"删某个文件、重启后会怎样"
+               这类运维内部操作指引 —— 登录页是公开面，写在这里等于把它送给任何能打开浏览器的人。 */
             mode = 'blocked';
             document.getElementById('modeSub').textContent = '账号文件损坏，服务无法鉴权';
             document.getElementById('confirmField').style.display = 'none';
@@ -95,10 +96,8 @@
             document.getElementById('password2').disabled = true;
             submitBtn.disabled = true;
             submitBtn.textContent = '不可用';
-            noteEl.innerHTML = '服务端读不出账号文件 <code>' + esc(s.accountFile || 'config/accounts.json')
-                + '</code>，因此<b>拒绝一切受保护请求</b>，初始化入口也已关闭。'
-                + '请在服务器上修复或删除该文件后<b>重启服务</b>：删除后会回落到默认账号 '
-                + '<code>stringer / stringer</code>。';
+            noteEl.textContent = '服务端读不出账号文件，因此拒绝一切受保护请求，初始化入口也已关闭。'
+                + '请联系部署方处理后重启服务。';
             return;
         }
         if (!s.initialized) {
@@ -107,23 +106,21 @@
             document.getElementById('modeSub').textContent = '首次初始化：设置管理员账号';
             document.getElementById('confirmField').style.display = 'block';
             submitBtn.textContent = '完成初始化';
-            noteEl.innerHTML = '当前服务端<b>还没有账号</b>（连种子文件都不存在）。'
-                + '这里设置的账号密码将写入 <code>' + esc(s.accountFile || 'config/accounts.json') + '</code>。'
-                + '本入口只在无账号时开放，之后永久关闭，也<b>不存在注册与找回</b>。';
+            noteEl.textContent = '当前服务端还没有账号，这里设置的账号密码将成为唯一的管控台账号。'
+                + '本入口只在无账号时开放，之后永久关闭，也不存在注册与找回。';
         } else {
             mode = 'login';
             document.getElementById('modeSub').textContent = '登录以进入管控台';
             document.getElementById('confirmField').style.display = 'none';
             submitBtn.textContent = '登录';
-            noteEl.innerHTML = '忘记密码的唯一恢复方式：删除服务器上的 <code>config/accounts.json</code>，'
-                + '重启后会回落到默认账号 <code>stringer / stringer</code>。'
-                + '本产品不提供任何重置 / 找回入口。';
+            noteEl.textContent = '本产品不提供注册与密码找回。忘记密码请联系部署方处理。';
             if (s.defaultCredential) {
-                showBanner('当前仍是默认密码（stringer / stringer）。是否修改由部署方决定，'
-                    + '建议登录后到「账号」页改掉。', 'warn');
+                /* 只说"还是初始密码"，<b>不说初始密码是什么</b>。这一页未鉴权，
+                   把凭据写在页面上等于公开。初始值由部署方从部署文档/种子文件自行掌握。 */
+                showBanner('当前仍在使用初始密码，建议尽快修改。是否修改由部署方决定。', 'warn');
             }
         }
-        document.getElementById('username').value = s.username || 'stringer';
+        document.getElementById('username').value = s.username || '';
         document.getElementById('password').focus();
     }
 

@@ -29,9 +29,8 @@
                     <div class="fact">密码状态 <b id="acPwd">—</b></div>
                 </div>
                 <div class="note">
-                    账号文件：<code id="acFile">—</code><br>
                     密码以 <b>BCrypt 单向哈希</b>存储，不存明文，因此<b>无法手工编辑文件改密码</b>——
-                    改密码只能走下面这个入口。忘记密码的唯一恢复方式是删除该文件后重启（回落默认账号）。
+                    改密码只能走下面这个入口。本产品不提供密码找回入口，忘记密码请联系部署方处理。
                 </div>
             </div>
         </div>
@@ -87,8 +86,7 @@
             document.getElementById('acLastAt').textContent = s.lastLoginAt || '—';
             document.getElementById('acLastFrom').textContent = s.lastLoginFrom || '—';
             document.getElementById('acPwd').textContent =
-                s.defaultCredential ? '仍是默认密码' : '已修改';
-            document.getElementById('acFile').textContent = s.accountFile || '—';
+                s.defaultCredential ? '仍是初始密码' : '已修改';
         }).catch(function (e) {
             var el = document.getElementById('pwdResult');
             el.textContent = e.message;

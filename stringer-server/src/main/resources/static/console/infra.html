@@ -414,7 +414,9 @@
                         which === 'redis' ? renderRedisProbe(data) : renderEsProbe(data), 'ok');
                 } else {
                     console.debug('[stringer] 连接测试失败：', data.error);
-                    showResult(RESULT[which], '连接失败：' + (data.error || '未知原因'), 'err');
+                    /* data.error 是后端捕获的原始异常（ES/Redis 连接失败时最可能带 userinfo），
+                       经 Console.request 的清洗之外再兜一层 —— 这条路径不经过 request 的错误分支。 */
+                    showResult(RESULT[which], '连接失败：' + Console.sanitizeError(data.error || '未知原因'), 'err');
                 }
             })
             .catch(function (e) {
@@ -480,7 +482,7 @@
         Console.jsonRequest('/admin/infra', 'POST', buildPayload(which))
             .then(function (data) {
                 if (!data.success) {
-                    showResult(RESULT[which], '❌ 保存失败：' + (data.error || '未知原因'), 'err');
+                    showResult(RESULT[which], '❌ 保存失败：' + Console.sanitizeError(data.error || '未知原因'), 'err');
                     return;
                 }
                 afterSaved(which, data);

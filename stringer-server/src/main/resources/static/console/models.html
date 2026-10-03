@@ -375,14 +375,14 @@ Console.renderSidebar('models');
                         { alias: alias, mode: 'rebuild' });
                 }
                 if (r && r.code && r.code !== 0) {
-                    throw new Error(r.detail || r.error || r.message || '切换失败');
+                    throw new Error(Console.sanitizeError(r.detail || r.error || r.message) || '切换失败');
                 }
                 return r;
             })
             .then(function (r) {
                 if (!r) { return; }
                 if (r.code && r.code !== 0) {
-                    throw new Error(r.detail || r.error || r.message || '切换失败');
+                    throw new Error(Console.sanitizeError(r.detail || r.error || r.message) || '切换失败');
                 }
                 alert(r.message || '已切换');
                 loadProfiles();
@@ -540,7 +540,7 @@ Console.renderSidebar('models');
             .then(function (data) {
                 if (!data || !data.success) {
                     combo.items = [];
-                    comboState('连接失败：' + ((data && data.error) || '未知原因'));
+                    comboState('连接失败：' + Console.sanitizeError((data && data.error) || '未知原因'));
                     return;
                 }
                 combo.items = data.models || [];
@@ -613,7 +613,7 @@ Console.renderSidebar('models');
                             { baseUrl: baseUrl, apiKey: val('pfApiKey'), modelName: modelName })
             .then(function (r) {
                 if (!r || r.code !== 0 || !r.success) {
-                    throw new Error((r && (r.detail || r.error)) || '探测失败');
+                    throw new Error(Console.sanitizeError((r && (r.detail || r.error)) || '探测失败'));
                 }
                 PFEPS = r.endpoints || [];
                 PFIN = r.input || [];
@@ -710,7 +710,7 @@ Console.renderSidebar('models');
         };
         Console.jsonRequest('/admin/model-profiles', 'POST', body)
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '保存失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '保存失败'); }
                 closeModal();
                 return loadProfiles().then(function () {
                     /* 新档案若是向量模型、且当前还没有选向量模型，直接问要不要启用 ——
@@ -733,7 +733,7 @@ Console.renderSidebar('models');
     function testProfile(alias) {
         Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias) + '/probe', 'POST')
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '探测失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '探测失败'); }
                 return loadProfiles();
             })
             .catch(function (e) { alert('探测失败：' + e.message); });
@@ -759,7 +759,7 @@ Console.renderSidebar('models');
         if (!confirm(text)) { return; }
         Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias), 'DELETE')
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '删除失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '删除失败'); }
                 if (r && r.message) { alert(r.message); }
                 loadProfiles();
             })

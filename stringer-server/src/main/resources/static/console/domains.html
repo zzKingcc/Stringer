@@ -311,7 +311,7 @@
         Console.jsonRequest('/admin/model-bindings/' + encodeURIComponent(BIND_DOMAIN), 'PUT',
                             { aliases: aliases })
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '设置失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '设置失败'); }
                 closeBind();
                 loadBindings();
             })
@@ -325,7 +325,7 @@
         var callable = document.getElementById('newDomainCallable').checked;
         Console.jsonRequest('/admin/domains', 'POST', { id: id, callable: callable })
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '创建失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '创建失败'); }
                 input.value = '';
                 load();
             })
@@ -342,7 +342,7 @@
         Console.jsonRequest('/admin/domains/' + encodeURIComponent(id) + '/callable', 'PUT',
                             { callable: callable })
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '切换失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '切换失败'); }
                 load();
             })
             .catch(function (e) { alert('切换失败：' + e.message); });
@@ -357,7 +357,7 @@
         if (!ok) { return; }
         Console.jsonRequest('/admin/domains/' + encodeURIComponent(id), 'DELETE')
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '删除失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '删除失败'); }
                 load();
             })
             .catch(function (e) { alert('删除失败：' + e.message); });

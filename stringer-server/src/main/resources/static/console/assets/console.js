@@ -35,7 +35,7 @@
                         var isHtml = /^\s*</.test(raw);
                         throw new Error('接口 ' + url + ' 返回 ' + resp.status + '，且不是 JSON'
                             + (isHtml ? '（返回的是 HTML 页面，通常说明走到了其他服务的页面）' : '')
-                            + '：' + raw.slice(0, 120).replace(/\s+/g, ' '));
+                            + '：' + sanitizeError(raw.slice(0, 120).replace(/\s+/g, ' ')));
                     }
                     /* 按响应体里的 code 分流，而不是按 HTTP 状态码：
                        AUTH_REQUIRED(10002) 才是"登录态失效"，而"账号或密码错误" AUTH_FAILED(10003)
@@ -48,7 +48,7 @@
                     }
                     if (!resp.ok) {
                         throw new Error('接口 ' + url + ' 返回 ' + resp.status
-                            + '：' + (data.detail || data.error || raw.slice(0, 120))
+                            + '：' + sanitizeError(data.detail || data.error || raw.slice(0, 120))
                             + (data.code ? '（' + data.code + '）' : ''));
                     }
                     return data;
@@ -76,6 +76,35 @@
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    /* ===== 错误文案清洗 =====
+       服务端的异常原文是排障的主要依据，不能一刀切抹掉；但其中三类片段是**凭据**，
+       而这些异常会被原样渲染到页面上（ES / Redis 连接失败尤其常见）：
+         · URL 里的 userinfo —— redis://user:pass@host:6379、http://user:pass@host
+         · Windows 盘符绝对路径、常见 Unix 目录下的绝对路径（部署结构不该随错误一起公开）
+       只替换命中的凭据片段，前后文原样保留 —— 排障仍看得到"连的是哪台、报的什么错"。 */
+    var CRED_PATTERNS = [
+        /* 协议://user:pass@host → 协议://***@host（host 保留：要靠它定位连的是哪台） */
+        { re: /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\/\s:@]+:[^\/\s@]+@/g,
+          to: function (m, p1) { return p1 + '***@'; } },
+        /* Windows 盘符绝对路径：C:\Users\... 、 D:/java/...
+           ⚠️ 必须带前置边界：`redis://h:6379` 里的 `s:/` 会被裸正则当成盘符，
+           把 host 和端口一起吃掉 —— 而 host 恰恰是排障要看的。 */
+        { re: /(^|[\s"'（(])([A-Za-z]:[\\\/][^\s"'<>，。；、）)\]]{2,})/g,
+          to: function (m, p1) { return p1 + '***'; } },
+        /* 常见部署目录下的 Unix 绝对路径：/opt/... /var/... /home/... */
+        { re: /(^|[\s"'（(])((?:\/(?:opt|usr\/local|var|etc|home|root|tmp|Users|data|app)\/[^\s"'<>，。；、）)\]]{2,}))/g,
+          to: function (m, p1) { return p1 + '***'; } }
+    ];
+
+    function sanitizeError(s) {
+        var out = String(s == null ? '' : s);
+        if (!out) { return out; }
+        CRED_PATTERNS.forEach(function (p) {
+            out = out.replace(p.re, p.to);
+        });
+        return out;
     }
 
     /* ===== 导航定义：新增页面只需在这里加一项 + 落一个 html 文件 ===== */
@@ -260,6 +289,7 @@
         request: request,
         jsonRequest: jsonRequest,
         escapeHtml: escapeHtml,
+        sanitizeError: sanitizeError,
         renderSidebar: renderSidebar,
         ready: ready,
         warnIfCrossOrigin: warnIfCrossOrigin,

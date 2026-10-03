@@ -22,6 +22,7 @@ import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.model.output.Response;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -69,10 +70,19 @@ public class LlmModelHolder {
     private static final String NOT_CONFIGURED_EMBEDDING =
             "向量模型尚未配置：请先在管控台「模型设置」页选一个向量模型（保存后立即生效）";
 
+    /** 单元测试用的简化构造：无档案注册表，只看 yaml 兜底 */
     public LlmModelHolder(AiProperties yamlProps, LlmSettingsStore store) {
         this(yamlProps, store, null);
     }
 
+    /**
+     * Spring 注入入口 —— 必须显式标注 {@code @Autowired}。
+     *
+     * <p>本类有两个构造器，Spring 只在"唯一构造器"时才隐式选用；有多个且都没标注时，
+     * 它会退回去找无参构造器并抛 {@code NoSuchMethodException: LlmModelHolder.<init>()}，
+     * 表现为启动时 adminController → openAiEmbeddingModel 连锁创建失败。</p>
+     */
+    @Autowired
     public LlmModelHolder(AiProperties yamlProps, LlmSettingsStore store,
                           ModelProfileRegistry profileRegistry) {
         this.yamlProps = yamlProps;

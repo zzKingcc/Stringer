@@ -78,11 +78,19 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
             String json = ChatMessageSerializer.messagesToJson(messages);
             redisTemplate.opsForValue().set(key, json);
 
-            if (ttl != null && !ttl.isZero()) {
+            if (ttl != null && !ttl.isZero() && !ttl.isNegative()) {
                 redisTemplate.expire(key, ttl);
                 log.debug("[会话记忆] 更新会话[{}]：写入 {} 条消息，TTL={} 分钟",
                         memoryId, messages.size(), ttl.toMinutes());
             } else {
+                // 负数 TTL 落进 Redis 的 EXPIRE 会被服务端当作「立即删除」——
+                // 记忆会刚写进去就没了，Agent 表现为"永远失忆"且没有任何报错。
+                // 所以负数一律按"永久"处理并告警，让配置错误浮出来。
+                if (ttl != null && ttl.isNegative()) {
+                    log.warn("[会话记忆] 会话[{}] 的 TTL 配置为负数（{}），已按永久处理。"
+                                    + "负数 TTL 会让 Redis 立即删除该键（表现为记忆刚写即丢）。请改为正数或留空",
+                            memoryId, ttl);
+                }
                 log.debug("[会话记忆] 更新会话[{}]：写入 {} 条消息，TTL=永久",
                         memoryId, messages.size());
             }
@@ -120,12 +128,29 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
      * @return 删除的键数
      */
     public int deleteByDomain(String domain) {
-        return deleteByPattern(KEY_PREFIX + normalizedDomain(domain) + SessionKeys.SEPARATOR + "*", "会话记忆");
+        String normalized = domain == null ? "" : domain.trim();
+        // 守卫必须在拼 pattern 之前：domain 为空时 pattern 会退化成
+        // "stringer:chat:memory:|*"，匹配**全部域**的记忆 —— 一次误传就是全量清空，
+        // 而记忆保留期默认永久、清掉不可恢复。RedisCheckpointSaver 里有同款守卫。
+        if (normalized.isEmpty()) {
+            throw new ChatMemoryException(ErrorCode.INVALID_PARAMETER,
+                    "deleteByDomain 收到空域，已拒绝执行（否则会清空全部域的记忆）");
+        }
+        return deleteByPattern(KEY_PREFIX + normalized + SessionKeys.SEPARATOR + "*", "会话记忆");
     }
 
     /**
-     * 按模式删除本存储负责的键。失败只告警不抛 —— 删域流程不应因清理失败而中止
-     * （域本身的删除已经完成，这里是收尾动作）。
+     * 按模式删除本存储负责的键。<b>失败直接抛</b>，不再"只告警"。
+     *
+     * <p>原注释的理由是"删域流程不应因清理失败而中止（域本身的删除已经完成）"——
+     * <b>这个前提不成立</b>：删域流程里这一步在 {@code domainRegistry.delete} 之前，
+     * 抛出去正是中止在那之前，域还在。这两处 Redis 清理各自承担一条安全保证：
+     * <ul>
+     *   <li>记忆保留期默认永久 —— 不清的话同路径域重建，这段对话历史原样复活；</li>
+     *   <li>断点里存着"即将执行、尚未执行"的工具调用 —— 不清的话，24 小时内重建域
+     *       就能 {@code resume(approved=true)} 把当初被拦下的破坏性动作补执行掉。</li>
+     * </ul>
+     * 失败只 warn 等于把这两条保证静默降级为"尽力而为"，而用户看到的是"删除成功"。</p>
      */
     private int deleteByPattern(String pattern, String what) {
         if (pattern == null || pattern.isBlank()) {
@@ -144,13 +169,10 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
             log.info("[{}] 已按域清理 {} 个键（模式 {}）", what, deleted, pattern);
             return deleted == null ? 0 : deleted.intValue();
         } catch (Exception e) {
-            log.warn("[{}] 按模式清理失败（不阻断删域流程）: {}：{}", what, pattern, e.getMessage(), e);
-            return 0;
+            throw new ChatMemoryException(ErrorCode.CHAT_MEMORY_DELETE_ERROR,
+                    "按模式清理" + what + "失败（模式 " + pattern + "）：" + e.getMessage()
+                            + "。相关键可能残留 —— 需修复后重新执行删除", e);
         }
-    }
-
-    private static String normalizedDomain(String domain) {
-        return domain == null ? "" : domain.trim();
     }
 
     private String buildKey(Object memoryId) {

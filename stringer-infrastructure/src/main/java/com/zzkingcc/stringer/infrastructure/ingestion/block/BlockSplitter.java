@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.block;
 
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.SplitResult;
 import com.zzkingcc.stringer.infrastructure.ingestion.txt.Chunker;
@@ -235,12 +236,12 @@ public final class BlockSplitter {
                 String full = path.isEmpty() ? body : path + "\n\n" + body;
 
                 Metadata metadata = source.metadata().copy();
-                metadata.put("section_path", path);
-                metadata.put("section_title", piece.title);
-                metadata.put("chunk_seq", i + 1);
-                metadata.put("chunk_total", total);
+                metadata.put(ChunkMetadataKeys.SECTION_PATH, path);
+                metadata.put(ChunkMetadataKeys.SECTION_TITLE, piece.title);
+                metadata.put(ChunkMetadataKeys.CHUNK_SEQ, i + 1);
+                metadata.put(ChunkMetadataKeys.CHUNK_TOTAL, total);
                 if (piece.pageNo > 0) {
-                    metadata.put("page_from", piece.pageNo);
+                    metadata.put(ChunkMetadataKeys.PAGE_FROM, piece.pageNo);
                 }
                 segments.add(TextSegment.from(full, metadata));
             }

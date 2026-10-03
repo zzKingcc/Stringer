@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.infrastructure.ingestion.txt;
 
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.SplitResult;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
@@ -83,10 +84,10 @@ public class TxtSplitter implements DocumentSplitter {
             String full = path.isEmpty() ? bodies.get(i) : path + "\n\n" + bodies.get(i);
 
             Metadata metadata = document.metadata().copy();
-            metadata.put("section_path", path);
-            metadata.put("section_title", section.title());
-            metadata.put("chunk_seq", i + 1);
-            metadata.put("chunk_total", total);
+            metadata.put(ChunkMetadataKeys.SECTION_PATH, path);
+            metadata.put(ChunkMetadataKeys.SECTION_TITLE, section.title());
+            metadata.put(ChunkMetadataKeys.CHUNK_SEQ, i + 1);
+            metadata.put(ChunkMetadataKeys.CHUNK_TOTAL, total);
             segments.add(TextSegment.from(full, metadata));
         }
 
@@ -120,7 +121,7 @@ public class TxtSplitter implements DocumentSplitter {
     /** 三级回退取文件名：file_name → source → absolute_path */
     private static String safeFileName(Document doc) {
         try {
-            String name = doc.metadata().getString("file_name");
+            String name = doc.metadata().getString(ChunkMetadataKeys.FILE_NAME);
             if (name != null && !name.isBlank()) {
                 return name;
             }

@@ -5,6 +5,7 @@ import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import com.zzkingcc.stringer.api.code.ErrorCode;
+import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestLimits;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -73,17 +75,27 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
             return report;
         }
 
-        // 2. 根据切片正文生成唯一 content_hash（不含文件名 —— 改了文件名重传也该去重）
+        // 2. 生成去重键：正文哈希 **与 file_name 一起** 构成去重身份
+        //
+        //    只用正文哈希会造成跨文档误伤：一次上传可能包含多个文件，而两个文件里
+        //    出现同一句话（合同的标准条款、多份文件共用的表头、政策里的通用表述）
+        //    是常态。纯正文哈希会让后一个文件的这条切片被当成"已存在"而丢弃 ——
+        //    报告仍按文档数返回、日志仍写"写入完成"，用户完全看不出来有内容没入库。
+        //
+        //    加了 file_name 之后：同一文档内的重复段落仍会去重（真正想做的），
+        //    而"改了文件名重传同一份文档"不再是同一身份 —— 这是可接受的，
+        //    因为文档管理侧本来就有同名校验与 replace 覆盖。
         for (TextSegment seg : allSegments) {
-            String hash = computeContentHash(seg.text());
-            seg.metadata().put("content_hash", hash);
+            seg.metadata().put("content_hash", computeContentHash(seg.text()));
+            seg.metadata().put("dedup_key", computeDedupKey(
+                    seg.metadata().getString("content_hash"),
+                    seg.metadata().getString(ChunkMetadataKeys.FILE_NAME)));
         }
 
-        // 3. 批次内去重
+        // 3. 批次内去重（同一批次内跨文档也要各算各的）
         Map<String, TextSegment> uniqueSegments = new LinkedHashMap<>();
         for (TextSegment seg : allSegments) {
-            String hash = seg.metadata().getString("content_hash");
-            uniqueSegments.putIfAbsent(hash, seg);
+            uniqueSegments.putIfAbsent(seg.metadata().getString("dedup_key"), seg);
         }
         int batchDupCount = allSegments.size() - uniqueSegments.size();
         if (batchDupCount > 0) {
@@ -91,12 +103,20 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
                     sourceTag, strategyName(), allSegments.size(), uniqueSegments.size(), batchDupCount);
         }
 
-        // 4. ES 去重
-        Set<String> existingHashes = queryExistingHashes(esClient, indexName, uniqueSegments.keySet());
+        // 4. ES 去重：先按正文哈希召回候选，再在内存里按 (哈希 + 文件名) 配对
+        //
+        //    分两步是有意的：ES 的 terms 查询没法表达「哈希 A 且文件名 X」这种配对条件，
+        //    而 mapping 里也没有 dedup_key 字段（新增字段要重建存量索引，代价太大）。
+        //    先用 terms 取回候选文档的 (content_hash, file_name)，在内存里算去重键比对 ——
+        //    存量索引无需迁移，行为也正确。
+        Set<String> candidateHashes = new LinkedHashSet<>();
+        for (TextSegment seg : uniqueSegments.values()) {
+            candidateHashes.add(seg.metadata().getString("content_hash"));
+        }
+        Set<String> existingKeys = queryExistingKeys(esClient, indexName, candidateHashes);
         List<TextSegment> newSegments = new ArrayList<>();
         for (TextSegment seg : uniqueSegments.values()) {
-            String hash = seg.metadata().getString("content_hash");
-            if (!existingHashes.contains(hash)) {
+            if (!existingKeys.contains(seg.metadata().getString("dedup_key"))) {
                 newSegments.add(seg);
             }
         }
@@ -179,12 +199,26 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
     }
 
     /**
-     * 分批 terms 查询索引中已存在的 content_hash。
-     * 查询失败返回空集，不阻塞导入。
+     * 去重键 = 正文哈希 + 文件名。
+     *
+     * <p>加文件名是为了把去重限制在「同一份文档内」：同一文档里的重复段落仍会被去掉
+     * （这是去重本来要解决的问题），但不会把另一个文件里相同的句子误判成重复内容。
+     * 分隔符用 {@code \n} —— 文件名在入库时已被规范化，不含控制字符，不会与内容混淆。</p>
      */
-    protected Set<String> queryExistingHashes(ElasticsearchClient esClient,
-                                               String indexName,
-                                               Set<String> hashesToCheck) {
+    protected static String computeDedupKey(String contentHash, String fileName) {
+        return (contentHash == null ? "" : contentHash) + "\n" + (fileName == null ? "" : fileName);
+    }
+
+    /**
+     * 分批 terms 查询索引中已存在的去重键。
+     * 查询失败返回空集，不阻塞导入。
+     *
+     * @param hashesToCheck 本次要检查的正文哈希（不是去重键）
+     * @return 已存在的 {@code (哈希 + 文件名)} 去重键集合
+     */
+    protected Set<String> queryExistingKeys(ElasticsearchClient esClient,
+                                             String indexName,
+                                             Set<String> hashesToCheck) {
         if (hashesToCheck == null || hashesToCheck.isEmpty()) {
             return Set.of();
         }
@@ -216,15 +250,20 @@ public abstract class AbstractDocumentProcessStrategy implements DocumentProcess
                         Map.class);
 
                 resp.hits().hits().forEach(h -> {
-                    if (h.source() != null) {
-                        Object metadataObj = h.source().get("metadata");
-                        if (metadataObj instanceof Map) {
-                            Object hash = ((Map<?, ?>) metadataObj).get("content_hash");
-                            if (hash != null) {
-                                existing.add(hash.toString());
-                            }
-                        }
+                    if (h.source() == null) {
+                        return;
                     }
+                    Object metadataObj = h.source().get("metadata");
+                    if (!(metadataObj instanceof Map)) {
+                        return;
+                    }
+                    Map<?, ?> meta = (Map<?, ?>) metadataObj;
+                    Object hash = meta.get("content_hash");
+                    if (hash == null) {
+                        return;
+                    }
+                    Object name = meta.get(ChunkMetadataKeys.FILE_NAME);
+                    existing.add(computeDedupKey(hash.toString(), name == null ? null : name.toString()));
                 });
             } catch (Exception e) {
                 log.warn("[分片去重-{}] 查询ES已有content_hash失败（索引可能不存在或无content_hash字段），"

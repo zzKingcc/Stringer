@@ -149,16 +149,20 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
      * 删除某个<b>域</b>下的全部检查点（删域级联清理用）。
      *
      * <p>断点里存着"即将执行但还没执行"的工具调用。域被删后若不清，24 小时内同路径域重建
-     * 就能 {@code resume(approved=true)} 把当初那个破坏性动作补执行掉 —— 域的删除没有撤销授权。</p>
+     * 就能 {@code resume(approved=true)} 把当初那个破坏性动作补执行掉 —— 域的删除没有撤销授权。
+     * 因此这里<b>失败直接抛</b>：静默跳过等于"删除成功"却把授权留在了原地。</p>
      *
      * @return 删除的键数
+     * @throws ChatMemoryException 清理失败或域为空
      */
     public int deleteByDomain(String domain) {
         String normalized = domain == null ? "" : domain.trim();
-        String pattern = KEY_PREFIX + normalized + SessionKeys.SEPARATOR + "*";
+        // 守卫必须先于 pattern 拼接：空域会让 pattern 匹配到**全部域**的断点
         if (normalized.isEmpty()) {
-            return 0;
+            throw new ChatMemoryException(ErrorCode.INVALID_PARAMETER,
+                    "deleteByDomain 收到空域，已拒绝执行（否则会清空全部域的检查点）");
         }
+        String pattern = KEY_PREFIX + normalized + SessionKeys.SEPARATOR + "*";
         try {
             List<String> keys = new ArrayList<>();
             try (Cursor<String> cursor = redisTemplate.scan(
@@ -171,14 +175,23 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
             Long deleted = redisTemplate.delete(keys);
             log.info("[检查点] 已按域清理 {} 个键（模式 {}）", deleted, pattern);
             return deleted == null ? 0 : deleted.intValue();
+        } catch (ChatMemoryException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("[检查点] 按模式清理失败（不阻断删域流程）: {}：{}", pattern, e.getMessage(), e);
-            return 0;
+            throw new ChatMemoryException(ErrorCode.CHECKPOINT_ERROR,
+                    "按域清理检查点失败（模式 " + pattern + "）：" + e.getMessage()
+                            + "。相关断点可能残留 —— 其中可能存有待执行的工具调用，"
+                            + "需修复后重新执行删除", e);
         }
     }
 
     private String buildKey(RunnableConfig config) {
         return KEY_PREFIX + threadId(config);
+    }
+
+    /** 从键里还原 threadId，仅用于日志（键形如 {@code stringer:graph:checkpoint:{域}|{sessionId}}） */
+    private static String threadIdFromKey(String key) {
+        return key != null && key.startsWith(KEY_PREFIX) ? key.substring(KEY_PREFIX.length()) : String.valueOf(key);
     }
 
     /**
@@ -230,8 +243,15 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         String base64 = Base64.getEncoder().encodeToString(baos.toByteArray());
         redisTemplate.opsForValue().set(key, base64);
         // 每次写入都续期:中断后长期不 resume 的会话不应永久占用内存
-        if (ttl != null && !ttl.isZero()) {
+        if (ttl != null && !ttl.isZero() && !ttl.isNegative()) {
             redisTemplate.expire(key, ttl);
+        } else if (ttl != null && ttl.isNegative()) {
+            // 负数 TTL 落进 Redis 的 EXPIRE 会被服务端当作「立即删除」——
+            // 断点刚写进去就没了，挂起的审批从此永远无法 resume，而 get 会报
+            // "会话不存在"，把问题指向完全错误的方向。负数一律按永久处理并告警。
+            log.warn("[检查点] 会话[{}] 的 checkpoint-ttl 配置为负数（{}），已按永久处理。"
+                            + "负数 TTL 会让 Redis 立即删除该键（挂起的审批将无法恢复）。请改为正数",
+                    threadIdFromKey(key), ttl);
         }
     }
 }

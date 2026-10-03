@@ -19,7 +19,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * txt 切片的回归样例：定稿的设计别再被改回去。
  */
 class TxtSplitterTest {
-
     private static final Charset GB18030 = Charset.forName("GB18030");
 
     private static Document doc(String text, String fileName) {
@@ -28,6 +27,42 @@ class TxtSplitterTest {
 
     private static SplitResult split(String text, String fileName) {
         return new TxtSplitter().splitWithStats(doc(text, fileName));
+    }
+
+    /**
+     * 回归：超长无标点行不能把切片拖成 O(n²)。
+     *
+     * <p>此前每字符都重建一次 String 并全量数长度，一个 20,000 字的行会放大到数亿次字符操作；
+     * 而导入是全局串行的（{@code Semaphore(1)}），一条这样的数据就能卡死整个知识库队列。
+     * 这里用「同样的输入，耗时不随长度线性放大」来守住 —— 留足余量避免 CI 抖动误报。</p>
+     */
+    @Test
+    void veryLongLineWithoutPunctuationDoesNotBlowUp() {
+        String noPunctuation = "A".repeat(20_000);      // 无句末标点、无换行
+        Chunker chunker = new Chunker(400, 0, 50);
+
+        long t0 = System.nanoTime();
+        List<String> parts = chunker.chunk(List.of(noPunctuation));
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+
+        assertFalse(parts.isEmpty(), "超长行仍应被切开");
+        assertTrue(elapsedMs < 3_000,
+                "20,000 字无标点行耗时 " + elapsedMs + "ms —— 超过说明又退回 O(n²) 了");
+    }
+
+    /** 切出来的片不能因为换了判断口径就明显超限 */
+    @Test
+    void longSentenceIsSplitNearConfiguredLimit() {
+        Chunker chunker = new Chunker(200, 0, 20);
+        String sentence = "甲".repeat(1_000);            // 1000 字一句，无软断点
+
+        List<String> parts = chunker.chunk(List.of(sentence));
+
+        assertTrue(parts.size() >= 5, "应被切成多片，实际 " + parts.size());
+        for (String part : parts) {
+            assertTrue(part.length() <= 200,
+                    "单片长度 " + part.length() + " 超过配置上限 200");
+        }
     }
 
     // ==================== 例子走全程 ====================

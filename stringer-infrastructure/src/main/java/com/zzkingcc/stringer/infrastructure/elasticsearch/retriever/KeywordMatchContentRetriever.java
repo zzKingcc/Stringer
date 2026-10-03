@@ -5,6 +5,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
+import com.zzkingcc.stringer.common.util.LogSanitizer;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
@@ -100,39 +101,21 @@ public class KeywordMatchContentRetriever implements ContentRetriever {
                 }
                 if (!text.isBlank()) {
                     TextSegment segment = TextSegment.from(text);
-                    // 将 ES BM25 分数写入 metadata，供后续分数融合使用
-                    segment.metadata().put("_retrieval_score", h.score());
-                    // 将 ES 元数据字段传递给上层，供 boost 计算使用
-                    copyEsMetadata(h.source(), segment);
+                    // ES 检索分写入 metadata，供后续分数融合使用
+                    segment.metadata().put(EsMetadata.RAW_SCORE, h.score());
+                    // 元数据整体搬运（含 chunk_seq，排序稳定性靠它）
+                    EsMetadata.copy(h.source(), segment);
                     out.add(Content.from(segment));
                 }
             });
 
-            log.info("[ES关键词检索] 查询完成，关键词='{}'，设定{}条，命中{}条",
-                    queryText.length() > 50 ? queryText.substring(0, 50) + "..." : queryText,
-                    maxResults, out.size());
+            // queryText 是用户提问原文，只记长度不记内容
+            log.info("[ES关键词检索] 查询完成，查询{}，设定{}条，命中{}条",
+                    LogSanitizer.describeUserText(queryText), maxResults, out.size());
             return out;
         } catch (IOException e) {
             log.error("[ES关键词检索] 查询异常: {}", e.getMessage(), e);
             throw new KnowledgeBaseException(ErrorCode.KNOWLEDGE_SEARCH_ERROR, "ES 关键词检索异常: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 从 ES source 中提取 file_name、section_title 等元数据写入 TextSegment metadata
-     */
-    @SuppressWarnings("unchecked")
-    private void copyEsMetadata(Map<String, Object> source, TextSegment segment) {
-        if (source == null) return;
-        Object metadataObj = source.get("metadata");
-        if (metadataObj instanceof Map) {
-            Map<String, Object> meta = (Map<String, Object>) metadataObj;
-            if (meta.get("file_name") != null) {
-                segment.metadata().put("file_name", meta.get("file_name").toString());
-            }
-            if (meta.get("section_title") != null) {
-                segment.metadata().put("section_title", meta.get("section_title").toString());
-            }
         }
     }
 }

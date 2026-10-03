@@ -6,6 +6,7 @@ import co.elastic.clients.elasticsearch.cluster.HealthResponse;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.indices.IndexState;
 import co.elastic.clients.json.JsonData;
+import com.zzkingcc.stringer.api.support.KbIndexes;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,18 +32,36 @@ public class EsIndexManager {
 
     private EsIndexManager() {}
 
-    /** 索引是否存在 */
+    /**
+     * 索引是否存在。<b>查询本身失败时抛异常，不返回 {@code false}</b>。
+     *
+     * <p>为什么不能 fail-open：调用方拿这个结果做的是<b>破坏性决策</b> ——
+     * {@link #deleteIndex} 会先问"存在吗"，答"不"就直接跳过删除。
+     * 若把"查不到"当成"不存在"，那么 ES 一抖动（超时、连接被拒、集群 red），
+     * 删域就会静默跳过索引删除并继续往下走，域没了索引还在 ——
+     * 而同一路径域重建后索引名相同（{@link KbIndexes#nameOf} 是路径哈希），
+     * 这份"本该删掉的知识内容"会原样复活，且没有任何报错。</p>
+     *
+     * <p>失败时抛而不是返回，是这一类的通用判据：**存疑时宁可让操作失败，
+     * 不能给一个看起来正常的错答案**。</p>
+     *
+     * @throws EsAccessException ES 不可达或查询失败
+     */
     public static boolean exists(ElasticsearchClient esClient, String indexName) {
         try {
             return esClient.indices().exists(e -> e.index(indexName)).value();
         } catch (Exception e) {
-            log.warn("[ES] 判断索引[{}]是否存在失败: {}", indexName, e.getMessage());
-            return false;
+            throw new EsAccessException("查询索引[" + indexName + "]是否存在失败（无法确认，不等同于不存在）："
+                    + e.getMessage(), e);
         }
     }
 
     /**
      * 列出匹配 {@code pattern}（支持通配）的索引名，按字典序返回；一个都没有时返回空列表。
+     *
+     * <p>与 {@link #exists} 不同，这里<b>保持 fail-open</b>：它只用于管控台列表展示
+     * 与"当前有哪些域有索引"的展示口径，返回空列表的代价是多显示一行空，
+     * 而抛异常的代价是页面整个打不开。</p>
      */
     public static List<String> listIndices(ElasticsearchClient esClient, String pattern) {
         try {
@@ -55,21 +74,26 @@ public class EsIndexManager {
     }
 
     /**
-     * 删除单个索引；不存在视为成功。
+     * 删除单个索引；<b>确实不存在</b>时返回 {@code false}（没有东西可删）。
      *
      * @return 是否确实删掉了一个已存在的索引
+     * @throws EsAccessException 查询或删除失败 —— 调用方<b>必须</b>当成失败处理，
+     *                              不能继续往下删域
      */
     public static boolean deleteIndex(ElasticsearchClient esClient, String indexName) {
-        try {
-            if (!exists(esClient, indexName)) {
-                return false;
-            }
-            esClient.indices().delete(d -> d.index(indexName));
-            log.info("[ES] 已删除索引: {}", indexName);
-            return true;
-        } catch (Exception e) {
-            throw new IllegalStateException("删除索引[" + indexName + "]失败：" + e.getMessage(), e);
+        // 这里不能再包一层 try-catch 转 IllegalStateException：exists 现在会抛
+        // EsAccessException，而"查询失败"和"删除失败"在上层要区别对待 ——
+        // 前者索引可能还在（不该删域），后者是删操作本身没成功（同样不该删域）
+        if (!exists(esClient, indexName)) {
+            return false;
         }
+        try {
+            esClient.indices().delete(d -> d.index(indexName));
+        } catch (Exception e) {
+            throw new EsAccessException("删除索引[" + indexName + "]失败：" + e.getMessage(), e);
+        }
+        log.info("[ES] 已删除索引: {}", indexName);
+        return true;
     }
 
     /** 启动诊断：输出 ES 版本、集群健康、索引存在性及字段结构 */
@@ -138,6 +162,80 @@ public class EsIndexManager {
     }
 
     /**
+     * 构造 IK 分词器版本的索引 mapping JSON。
+     *
+     * <p>metadata 用 {@code dynamic:false} + 全部字段显式声明：
+     * <ol>
+     *   <li>防字段污染（切片器将来加字段不会悄悄变成 text 把检索带偏）；</li>
+     *   <li>{@code doc_id} 必须显式声明为可精确查询的类型 —— 它一旦被动态映射成 text，
+     *       删除/统计用的 {@code term(metadata.doc_id)} 就会失效：UUID 被分词后基本查不中。</li>
+     * </ol>
+     *
+     * <p>text 挂两个子字段：{@code keyword} 精确等值（留档）；
+     * {@code standard} 标准分词器，救 ik 会把英文词/数字/订单号切碎的场景
+     * （{@code ik_smart} 对 "SKU-10086"、"v2.1" 这类标识符切出来的词往往对不上）。</p>
+     *
+     * <p>⚠️ <b>字段名必须与 {@link ChunkMetadataKeys} 一致</b>。这里是 JSON 字面量，
+     * 用不了常量，只能靠约定 —— 所以 {@code EsMetadataMappingTest} 会把两边逐字比对，
+     * 改名只改一处时那条测试会红。</p>
+     */
+    static String buildIkMapping(int dims) {
+        return """
+                {
+                  "mappings": {
+                    "properties": {
+                      "vector": {
+                        "type": "dense_vector",
+                        "dims": %d,
+                        "index": true,
+                        "similarity": "cosine"
+                      },
+                      "text": {
+                        "type": "text",
+                        "analyzer": "ik_max_word",
+                        "search_analyzer": "ik_smart",
+                        "fields": {
+                          "keyword": {
+                            "type": "keyword",
+                            "ignore_above": 256
+                          },
+                          "standard": {
+                            "type": "text",
+                            "analyzer": "standard"
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "dynamic": false,
+                        "properties": {
+                          "doc_id":          { "type": "keyword" },
+                          "file_name":       { "type": "keyword" },
+                          "file_name_lower": { "type": "keyword" },
+                          "upload_time":     { "type": "keyword" },
+                          "domain":          { "type": "keyword" },
+                          "content_hash":    { "type": "keyword" },
+                          "chunk_seq":       { "type": "integer" },
+                          "chunk_total":     { "type": "integer" },
+                          "page_from":       { "type": "integer" },
+                          "section_title":   { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+                          "section_path": {
+                            "type": "text",
+                            "analyzer": "ik_max_word",
+                            "search_analyzer": "ik_smart",
+                            "fields": {
+                              "keyword": { "type": "keyword", "ignore_above": 512 }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                """.formatted(dims);
+    }
+
+    /**
      * 创建带 IK 分词器的索引 mapping。
      *
      * @param esClient  ES 客户端
@@ -161,67 +259,7 @@ public class EsIndexManager {
             }
 
             // 使用原始 JSON 构建 mapping（Java API Builder 对 analyzer 支持不直观）
-            // metadata 用 dynamic:false + 全部字段显式声明：
-            //   1) 防字段污染（切片器将来加字段不会悄悄变成 text 把检索带偏）；
-            //   2) doc_id 必须显式声明为可精确查询的类型 —— 它一旦被动态映射成 text，
-            //      删除/统计用的 term(metadata.doc_id) 就会失效：UUID 被分词后基本查不中。
-            // text 挂两个子字段：
-            //   keyword  —— 精确等值（留档）；
-            //   standard —— 标准分词器，救 ik 会把英文词/数字/订单号切碎的场景
-            //               （ik_smart 对 "SKU-10086"、"v2.1" 这类标识符切出来的词往往对不上）。
-            String mappingJson = """
-                    {
-                      "mappings": {
-                        "properties": {
-                          "vector": {
-                            "type": "dense_vector",
-                            "dims": %d,
-                            "index": true,
-                            "similarity": "cosine"
-                          },
-                          "text": {
-                            "type": "text",
-                            "analyzer": "ik_max_word",
-                            "search_analyzer": "ik_smart",
-                            "fields": {
-                              "keyword": {
-                                "type": "keyword",
-                                "ignore_above": 256
-                              },
-                              "standard": {
-                                "type": "text",
-                                "analyzer": "standard"
-                              }
-                            }
-                          },
-                          "metadata": {
-                            "type": "object",
-                            "dynamic": false,
-                            "properties": {
-                              "doc_id":          { "type": "keyword" },
-                              "file_name":       { "type": "keyword" },
-                              "file_name_lower": { "type": "keyword" },
-                              "upload_time":     { "type": "keyword" },
-                              "domain":          { "type": "keyword" },
-                              "content_hash":    { "type": "keyword" },
-                              "chunk_seq":       { "type": "integer" },
-                              "chunk_total":     { "type": "integer" },
-                              "page_from":       { "type": "integer" },
-                              "section_title":   { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
-                              "section_path": {
-                                "type": "text",
-                                "analyzer": "ik_max_word",
-                                "search_analyzer": "ik_smart",
-                                "fields": {
-                                  "keyword": { "type": "keyword", "ignore_above": 512 }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                    """.formatted(dims);
+            String mappingJson = buildIkMapping(dims);
 
             esClient.indices().create(c -> c
                     .index(indexName)

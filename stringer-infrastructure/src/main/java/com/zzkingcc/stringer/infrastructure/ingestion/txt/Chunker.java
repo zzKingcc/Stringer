@@ -146,15 +146,26 @@ public final class Chunker {
         return sentences;
     }
 
-    /** 单句超过上限时的兜底：先在软断点处断，再不行按字数硬切 */
+    /**
+     * 单句超过上限时的兜底：先在软断点处断，再不行按字数硬切
+     *
+     * <p>长度判断用 {@code StringBuilder.length()}（O(1)）而不是「每字符重建字符串再全量数」：
+     * 后者是 O(n²) —— 一个 10,000 字的无标点行（minified JS、base64、异常堆栈）会放大到
+     * 约 1 亿次字符操作，而导入是全局串行的（{@code Semaphore(1)}），一条这样的数据
+     * 就能把整个知识库入库队列卡住。</p>
+     *
+     * <p>{@code length()} 数的是 UTF-16 单元，对代理对会多算 1 —— 用于「是否超上限」的粗判
+     * 完全够；需要精确字符数时用 {@code CjkWidth.countChars}。</p>
+     */
     private List<String> breakLongSentence(String sentence) {
         List<String> parts = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        int softAt = Math.max(1, maxChars / 2);
         for (int i = 0; i < sentence.length(); i++) {
             char c = sentence.charAt(i);
             current.append(c);
-            boolean soft = SOFT_BREAKS.indexOf(c) >= 0 && count(current.toString()) >= Math.max(1, maxChars / 2);
-            if (soft || count(current.toString()) >= maxChars) {
+            boolean soft = SOFT_BREAKS.indexOf(c) >= 0 && current.length() >= softAt;
+            if (soft || current.length() >= maxChars) {
                 parts.add(current.toString().strip());
                 current.setLength(0);
             }

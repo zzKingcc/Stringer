@@ -28,8 +28,17 @@ public class ModelProfileSettings {
     /** 域 → 可调用<b>对话</b>模型别名列表（有序；首个为当前使用；空 = 未绑定 / 无可调用） */
     private Map<String, java.util.List<String>> domainBindings = new LinkedHashMap<>();
 
-    /** 别名 → 档案（对话 / 向量都在这里，靠 {@link ProfileData#getEndpoints()} 区分） */
+    /** 别名 → 档案（<b>不含</b>纯向量档案 —— 那批在 {@link #embeddingProfiles} 里单独存放） */
     private Map<String, ProfileData> profiles = new LinkedHashMap<>();
+
+    /**
+     * 别名 → <b>纯向量</b>档案，与 {@link #profiles} 分开存放。
+     *
+     * <p>分开是刻意的：向量模型是<b>全局唯一单选</b>、不参与域绑定，与"可以绑到域上按需调用"
+     * 的对话 / 生图 / 语音那类档案根本是两种东西。混在一个 map 里时，管控台的「模型」段只能
+     * 靠 endpoints 过滤才不至于把向量模型画进去 —— 漏掉一处就会冒出"怎么还有一个向量模型"。</p>
+     */
+    private Map<String, ProfileData> embeddingProfiles = new LinkedHashMap<>();
 
     /**
      * 当前启用的<b>向量</b>模型档案别名（全局唯一，不参与域绑定）。
@@ -38,6 +47,78 @@ public class ModelProfileSettings {
      * 换向量模型会让已灌库的向量全部失效，必须先做二次确认（见管理面接口）。</p>
      */
     private String embeddingAlias;
+
+    /**
+     * 是不是「纯向量」档案 —— 只做向量、不接对话。
+     *
+     * <p>同时具备 chat 与 embedding 的档案<b>不算</b>：它要能被绑到域上当对话模型用。
+     * 若一律按 {@code isEmbedding} 分出去，这种档案会从「模型」段消失、且再也没法绑域。</p>
+     */
+    private static boolean isVectorOnly(ProfileData data, String alias) {
+        if (data == null) {
+            return false;
+        }
+        ModelProfile profile = data.toProfile(alias);
+        return profile.isEmbedding() && !profile.isChat();
+    }
+
+    /** 在两类档案里查同一个别名（写操作请分别走 {@link #put} / {@link #remove}） */
+    public ProfileData find(String alias) {
+        if (alias == null) {
+            return null;
+        }
+        ProfileData data = profiles.get(alias);
+        return data != null ? data : embeddingProfiles.get(alias);
+    }
+
+    /** 两类档案合并后的视图（全量统计 / 诊断用），顺序为「先普通、后向量」 */
+    public Map<String, ProfileData> allProfiles() {
+        Map<String, ProfileData> all = new LinkedHashMap<>(profiles);
+        all.putAll(embeddingProfiles);
+        return all;
+    }
+
+    /**
+     * 把一份档案放进对应的桶，并确保它<b>不会同时留在另一个桶里</b>。
+     *
+     * <p>必须清另一侧：档案类型会被重新探测改写 —— 一个纯向量模型换个模型名重探可能变成
+     * 对话模型，此时若不从向量桶摘掉，它会在两个桶里各留一份，语义直接矛盾。</p>
+     */
+    public void put(String alias, ProfileData data) {
+        if (isVectorOnly(data, alias)) {
+            profiles.remove(alias);
+            embeddingProfiles.put(alias, data);
+        } else {
+            embeddingProfiles.remove(alias);
+            profiles.put(alias, data);
+        }
+    }
+
+    /** 从两类档案里都摘掉该别名 */
+    public boolean remove(String alias) {
+        boolean removed = profiles.remove(alias) != null;
+        return embeddingProfiles.remove(alias) != null || removed;
+    }
+
+    /**
+     * 把历史上混在 {@link #profiles} 里的纯向量档案挪到 {@link #embeddingProfiles}。
+     *
+     * <p>旧布局是"一个 profiles 装所有档案"、只靠 endpoints 区分。读盘时做一次归一，
+     * 返回值表示是否真有改动 —— 调用方据此决定要不要把新布局写回文件。</p>
+     */
+    public boolean splitVectorProfiles() {
+        boolean moved = false;
+        java.util.Iterator<Map.Entry<String, ProfileData>> it = profiles.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, ProfileData> entry = it.next();
+            if (isVectorOnly(entry.getValue(), entry.getKey())) {
+                it.remove();
+                embeddingProfiles.putIfAbsent(entry.getKey(), entry.getValue());
+                moved = true;
+            }
+        }
+        return moved;
+    }
 
     /**
      * 沿链解析结果

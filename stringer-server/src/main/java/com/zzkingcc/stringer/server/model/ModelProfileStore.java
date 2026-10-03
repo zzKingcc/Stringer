@@ -42,7 +42,22 @@ public class ModelProfileStore {
         try {
             String json = Files.readString(settingsFile, StandardCharsets.UTF_8);
             ModelProfileSettings settings = MAPPER.readValue(json, ModelProfileSettings.class);
-            return settings == null ? new ModelProfileSettings() : settings;
+            if (settings == null) {
+                return new ModelProfileSettings();
+            }
+            /* 旧布局把纯向量档案也放在 profiles 里，只靠 endpoints 区分。读盘时归一，
+               并把新布局写回文件 —— 否则"分开了没有"在文件里看不出来。
+               落盘失败只告警：启动不该因为一次迁移写盘失败而失败（内存里已经分好了）。 */
+            if (settings.splitVectorProfiles()) {
+                log.info("[模型档案] 已将 {} 个纯向量档案从 profiles 分离到 embeddingProfiles：{}",
+                        settings.getEmbeddingProfiles().size(), settings.getEmbeddingProfiles().keySet());
+                try {
+                    save(settings);
+                } catch (Exception e) {
+                    log.warn("[模型档案] 分离后的布局落盘失败（内存已生效，下次写入会重试）: {}", e.getMessage());
+                }
+            }
+            return settings;
         } catch (IOException e) {
             log.error("[模型档案] 读取 {} 失败，按空档案继续（可进管控台修正）: {}",
                     settingsFile.toAbsolutePath(), e.getMessage());
@@ -58,8 +73,9 @@ public class ModelProfileStore {
     public void save(ModelProfileSettings settings) {
         try {
             AtomicFiles.write(settingsFile, MAPPER.writeValueAsBytes(settings));
-            log.info("[模型档案] 已保存：档案 {} 个、域绑定 {} 条",
+            log.info("[模型档案] 已保存：模型档案 {} 个、向量档案 {} 个、域绑定 {} 条",
                     settings.getProfiles().size(),
+                    settings.getEmbeddingProfiles().size(),
                     settings.getDomainBindings().size());
         } catch (IOException e) {
             throw new IllegalStateException("模型档案保存失败：" + settingsFile.toAbsolutePath(), e);

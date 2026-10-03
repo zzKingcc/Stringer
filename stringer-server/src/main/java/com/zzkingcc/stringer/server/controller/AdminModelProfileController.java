@@ -98,14 +98,23 @@ public class AdminModelProfileController {
         body.put("embeddingDimensions", selected == null ? null : selected.dimensions());
         body.put("embeddingSource", holder.embeddingSource());
         body.put("embeddingCandidates", embeddingCandidates());
+        /* 档案总数（模型桶 + 向量桶）：页头计数不能靠前端把两个列表相加得出 ——
+           未被选中的向量档案不在 profiles 里、又可能因不可用而不进 candidates，
+           前端怎么加都会少报。 */
+        body.put("profileCount", registry.allProfiles().size());
         body.put("settingsFile", store.filePath());
         return body;
     }
 
-    /** 可选作向量模型的档案（必须是向量档案且必填齐备），供页面直接渲染单选列表 */
+    /**
+     * 可选作向量模型的档案（必须是向量档案且必填齐备），供页面直接渲染单选列表。
+     *
+     * <p>遍历的是<b>全部</b>档案而非 {@code registry.profiles()}：纯向量档案已单独存放，
+     * 不在那一侧；只看 profiles 会让下拉里一个候选都没有。</p>
+     */
     private List<Map<String, Object>> embeddingCandidates() {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (ModelProfile p : registry.profiles()) {
+        for (ModelProfile p : registry.allProfiles()) {
             if (!p.isEmbedding() || !p.isUsable()) {
                 continue;
             }

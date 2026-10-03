@@ -42,8 +42,9 @@ public class ModelProfileRegistry {
     public ModelProfileRegistry(ModelProfileStore store) {
         this.store = store;
         this.settings = store.load();
-        log.info("[模型档案] 初始化：档案 {} 个 {}，域绑定 {} 条",
+        log.info("[模型档案] 初始化：模型档案 {} 个 {}，向量档案 {} 个 {}，域绑定 {} 条",
                 settings.getProfiles().size(), settings.getProfiles().keySet(),
+                settings.getEmbeddingProfiles().size(), settings.getEmbeddingProfiles().keySet(),
                 settings.getDomainBindings().size());
     }
 
@@ -60,17 +61,25 @@ public class ModelProfileRegistry {
     }
 
     /**
-     * 取档案。全部对话 / 向量模型都存于本注册表，没有"内置 default"那一类了。
+     * 取档案（两类里都找）。
+     *
+     * <p>全部档案都存于本注册表，没有"内置 default"那一类了；向量档案单独存放，
+     * 但按别名取用时调用方不该关心它存在哪个桶里。</p>
      */
     public Optional<ModelProfile> profile(String alias) {
         if (!hasText(alias)) {
             return Optional.empty();
         }
-        ModelProfileSettings.ProfileData data = settings.getProfiles().get(alias.trim());
+        ModelProfileSettings.ProfileData data = settings.find(alias.trim());
         return data == null ? Optional.empty() : Optional.of(data.toProfile(alias.trim()));
     }
 
-    /** 全部档案（按别名排序） */
+    /**
+     * <b>非向量</b>档案（对话 / 生图 / 语音…），按别名排序。
+     *
+     * <p>纯向量档案<b>不</b>在此列 —— 它们单独存放，见 {@link #embeddingProfiles()}。
+     * 管控台「模型」段直接渲染这个列表，因此不会冒出向量模型。</p>
+     */
     public List<ModelProfile> profiles() {
         List<ModelProfile> list = new ArrayList<>();
         settings.getProfiles().forEach((alias, data) -> list.add(data.toProfile(alias)));
@@ -78,14 +87,30 @@ public class ModelProfileRegistry {
         return List.copyOf(list);
     }
 
+    /** <b>纯向量</b>档案（单独存放的那一批），按别名排序 */
+    public List<ModelProfile> embeddingProfiles() {
+        List<ModelProfile> list = new ArrayList<>();
+        settings.getEmbeddingProfiles().forEach((alias, data) -> list.add(data.toProfile(alias)));
+        list.sort(java.util.Comparator.comparing(ModelProfile::alias));
+        return List.copyOf(list);
+    }
+
+    /** 两类档案的合并视图（全量统计 / 诊断用），按别名排序 */
+    public List<ModelProfile> allProfiles() {
+        List<ModelProfile> list = new ArrayList<>();
+        settings.allProfiles().forEach((alias, data) -> list.add(data.toProfile(alias)));
+        list.sort(java.util.Comparator.comparing(ModelProfile::alias));
+        return List.copyOf(list);
+    }
+
     /** 是否存在任意可用的对话类模型（供「对话模型是否就绪」这类全局判据使用） */
     public boolean hasChatModel() {
-        return profiles().stream().anyMatch(p -> p.isChat() && p.isUsable());
+        return allProfiles().stream().anyMatch(p -> p.isChat() && p.isUsable());
     }
 
     /** 是否存在任意可用的向量档案（仅供管控台提示"有档案可选"，不代表已启用） */
     public boolean hasEmbeddingProfile() {
-        return profiles().stream().anyMatch(p -> p.isEmbedding() && p.isUsable());
+        return allProfiles().stream().anyMatch(p -> p.isEmbedding() && p.isUsable());
     }
 
     // ==================== 向量模型：全局单选 ====================
@@ -118,7 +143,7 @@ public class ModelProfileRegistry {
     public synchronized String setEmbeddingAlias(String alias) {
         String key = hasText(alias) ? alias.trim() : null;
         if (key != null) {
-            ModelProfileSettings.ProfileData data = settings.getProfiles().get(key);
+            ModelProfileSettings.ProfileData data = settings.find(key);
             if (data == null) {
                 return "档案不存在：" + key + "（请先到「模型设置」创建该档案）";
             }
@@ -166,10 +191,10 @@ public class ModelProfileRegistry {
         }
 
         ModelProfileSettings next = copyOf(settings);
-        next.getProfiles().put(alias, ModelProfileSettings.ProfileData.from(profile));
+        next.put(alias, ModelProfileSettings.ProfileData.from(profile));
         persist(next);
-        log.info("[模型档案] 已保存档案 {}（model={}，baseUrl={}）—— 绑定它的域立即生效",
-                alias, profile.modelName(), profile.baseUrl());
+        log.info("[模型档案] 已保存档案 {}（model={}，baseUrl={}，endpoints={}）—— 绑定它的域立即生效",
+                alias, profile.modelName(), profile.baseUrl(), profile.endpoints());
         return null;
     }
 
@@ -186,7 +211,8 @@ public class ModelProfileRegistry {
             return new DeleteResult(false, "别名不能为空", List.of(), false);
         }
         String key = alias.trim();
-        if (!settings.getProfiles().containsKey(key)) {
+        /* 两类档案里都查：纯向量档案不在 profiles 里，只查一处会删不掉它 */
+        if (settings.find(key) == null) {
             return new DeleteResult(false, "档案不存在：" + key, List.of(), false);
         }
 
@@ -207,7 +233,7 @@ public class ModelProfileRegistry {
         if (wasEmbedding) {
             next.setEmbeddingAlias(null);
         }
-        next.getProfiles().remove(key);
+        next.remove(key);
         persist(next);
         log.info("[模型档案] 已删除档案 {}{}；级联清理了 {} 个域的绑定：{}",
                 key, wasEmbedding ? "（它正是当前向量模型，已一并取消向量配置）" : "",
@@ -249,7 +275,8 @@ public class ModelProfileRegistry {
             if (Domains.DEFAULT.equals(target)) {
                 return "default 已不再作为可绑定的模型别名，请选择自建模型档案";
             }
-            ModelProfileSettings.ProfileData data = settings.getProfiles().get(target);
+            /* 两类档案里都查：同时支持 chat 与 embedding 的档案留在 profiles，纯向量档案在另一桶 */
+            ModelProfileSettings.ProfileData data = settings.find(target);
             if (data == null) {
                 return "档案不存在：" + target + "（请先到「模型设置」创建该档案）";
             }
@@ -337,12 +364,20 @@ public class ModelProfileRegistry {
         source.getDomainBindings().forEach((domain, aliases) ->
                 bindings.put(domain, new ArrayList<>(aliases)));
         copy.setDomainBindings(bindings);
-        Map<String, ModelProfileSettings.ProfileData> profiles = new LinkedHashMap<>();
-        source.getProfiles().forEach((alias, data) -> profiles.put(alias,
-                ModelProfileSettings.ProfileData.from(data.toProfile(alias))));
-        copy.setProfiles(profiles);
+        /* 两个桶都要深拷贝：漏掉向量桶的话，任何一次写入（改绑定、加档案）
+           都会把分离出去的向量档案整个丢掉。 */
+        copy.setProfiles(copyProfiles(source.getProfiles()));
+        copy.setEmbeddingProfiles(copyProfiles(source.getEmbeddingProfiles()));
         copy.setEmbeddingAlias(source.getEmbeddingAlias());
         return copy;
+    }
+
+    private static Map<String, ModelProfileSettings.ProfileData> copyProfiles(
+            Map<String, ModelProfileSettings.ProfileData> source) {
+        Map<String, ModelProfileSettings.ProfileData> out = new LinkedHashMap<>();
+        source.forEach((alias, data) -> out.put(alias,
+                ModelProfileSettings.ProfileData.from(data.toProfile(alias))));
+        return out;
     }
 
     /** 落盘成功后整体替换内存态（写失败时抛异常，内存态保持原样） */

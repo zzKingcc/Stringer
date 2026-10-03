@@ -156,6 +156,9 @@ Console.renderSidebar('models');
        又因 loadSettings 的 catch 只打 console.debug 而被静默吞掉，表现为整段渲染不出来。 */
     var EMBEDDING = { alias: null, configured: false, modelName: null, dimensions: null, source: null };
     var CANDIDATES = [];/* 可选作向量模型的档案 */
+    /* 服务端给出的档案总数（模型桶 + 向量桶）。前端加不出来：未选中的向量档案
+       不在 PROFILES 里，又可能因不可用而不进 CANDIDATES。 */
+    var PROFILE_COUNT = null;
     var SETTINGS = null;               /* /admin/settings：对话 / 向量 两组部署配置（yaml 兜底） */
 
     /* 表单只有一种：编辑一份模型档案（MODE 恒为 profile，保留变量只为 openModal 内赋值处自洽）。
@@ -205,6 +208,7 @@ Console.renderSidebar('models');
                 source: (r && r.embeddingSource) || null
             };
             CANDIDATES = (r && r.embeddingCandidates) || [];
+            PROFILE_COUNT = (r && typeof r.profileCount === 'number') ? r.profileCount : null;
             renderProfiles();
         }).catch(function (e) {
             pfEl('modelList').innerHTML = '<div class="card" style="color:var(--red);">'
@@ -276,6 +280,15 @@ Console.renderSidebar('models');
     }
 
     /* ============ 分段一：向量模型 ============ */
+    /* 按别名找一份档案：纯向量档案由服务端单独存放，只会出现在 CANDIDATES 里；
+       其余（对话 / 生图 / 语音，以及同时支持 chat+embedding 的双类型）在 PROFILES 里。
+       两处都查，才不会出现"向量卡片丢了 API Key""删除时不提示它正是向量模型"这类回归。 */
+    function findProfile(alias) {
+        if (!alias) { return null; }
+        return PROFILES.filter(function (p) { return p.alias === alias; })[0]
+            || CANDIDATES.filter(function (p) { return p.alias === alias; })[0]
+            || null;
+    }
     function isEmbeddingProfile(p) {
         return (p.endpoints || []).indexOf('embedding') >= 0;
     }
@@ -297,7 +310,8 @@ Console.renderSidebar('models');
 
     function embeddingCard() {
         var alias = EMBEDDING.alias;
-        var profile = alias ? PROFILES.filter(function (p) { return p.alias === alias; })[0] : null;
+        /* 选中的向量档案在 CANDIDATES 里（纯向量档案已从 PROFILES 分出），用 findProfile 两处都查 */
+        var profile = findProfile(alias);
         var ready = !!alias && EMBEDDING.configured;
         var options = CANDIDATES.map(function (p) {
             return '<option value="' + Console.escapeHtml(p.alias) + '"'
@@ -438,10 +452,9 @@ Console.renderSidebar('models');
         var box = pfEl('modelList');
         renderEmbedding();
 
-        /* 模型段 = 全部档案，减去当前占着向量槽位的那一个。
-           刻意不只筛 chat：探测会把档案分成 chat / embedding / images / tts / rerank 等
-           好几类，只列 chat 会让生图、语音这类档案存进去之后在页面上彻底消失 ——
-           看不到、测不了、也删不掉（用户配了硅基流动的生图模型就是这么"不见了"的）。 */
+        /* 模型段 = 服务端返回的非向量档案，再减去当前占着向量槽位的那一个。
+           纯向量档案在服务端已单独存放，根本不会出现在 PROFILES 里 —— 这里只需处理
+           "同时支持 chat 与 embedding 的双类型档案被选为向量模型"这一种重复。 */
         var models = PROFILES.filter(function (p) { return p.alias !== EMBEDDING.alias; });
         if (!models.length) {
             box.innerHTML = '<div class="empty-box">'
@@ -481,9 +494,6 @@ Console.renderSidebar('models');
                     +   '<div><span class="k">服务商地址</span><span class="mono">'
                     +      Console.escapeHtml(p.baseUrl || '-') + '</span></div>'
                     +   '<div><span class="k">被哪些域使用</span>' + used + '</div>'
-                    +   (chat ? '' : '<div><span class="k">说明</span><span style="color:var(--amber);">'
-                    +      '该类型（' + Console.escapeHtml(cnList(p.endpoints, EP_LABEL)) + '）'
-                    +      '平台尚未接入对应功能，保存下来只作为能力画像，不会被调用</span></div>')
                     + '</div>'
                     + '</section>';
             }).join('');
@@ -502,8 +512,9 @@ Console.renderSidebar('models');
             b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
         });
 
-        /* 页头数量：向量槽（至多 1 个）+ 模型段的全部档案 = 档案总数，与文件里的条数一致 */
-        pfEl('modelCount').textContent = ((EMBEDDING.alias ? 1 : 0) + models.length) + ' 个模型';
+        /* 页头数量优先用服务端给的档案总数（模型桶 + 向量桶），拿不到时才按可见项估算 */
+        var total = PROFILE_COUNT == null ? ((EMBEDDING.alias ? 1 : 0) + models.length) : PROFILE_COUNT;
+        pfEl('modelCount').textContent = total + ' 个模型';
     }
 
     /* ---------- 弹窗：开 / 关 / 重置 ---------- */
@@ -703,7 +714,7 @@ Console.renderSidebar('models');
         pfEl('pfBaseUrl').focus();
     }
     function openProfileEdit(alias) {
-        var p = PROFILES.filter(function (x) { return x.alias === alias; })[0];
+        var p = findProfile(alias);
         if (!p) { return; }
         resetForm();
         EDIT_ALIAS = alias;                 /* 别名不再可改，编辑时沿用原值 */
@@ -722,12 +733,13 @@ Console.renderSidebar('models');
         showResult(true, '');
     }
 
-    /* 别名已从表单移除：按模型名自动派生，重名加数字后缀（别名仍是绑定/删除用的键） */
+    /* 别名已从表单移除：按模型名自动派生，重名加数字后缀（别名仍是绑定/删除用的键）。
+       查重必须跨两处（findProfile）：纯向量档案不在 PROFILES 里，只看 PROFILES 会派生出
+       一个与已有向量档案同名的别名，保存时把那份向量档案整个覆盖掉。 */
     function deriveAlias(modelName) {
         var base = aliasBase(modelName);
         function taken(a) {
-            return a === 'default'
-                || PROFILES.some(function (p) { return p.alias === a; });
+            return a === 'default' || findProfile(a) !== null;
         }
         var alias = base, n = 2;
         while (taken(alias)) { alias = base + '-' + n; n++; }
@@ -831,8 +843,10 @@ Console.renderSidebar('models');
     /* 删除向量档案就是删档案本身（与对话档案同一条路径）；
        唯一差别是要提示「当前向量模型会被取消」，那段在 deleteProfile 里。 */
     function deleteProfile(alias) {
-        var isEmbedding = PROFILES.filter(function (p) { return p.alias === alias; })[0];
-        var isEmb = isEmbedding && isEmbeddingProfile(isEmbedding);
+        /* 必须跨两处找：纯向量档案不在 PROFILES 里，只查 PROFILES 会让"它正是当前向量模型"
+           的警告消失，用户删掉正在用的向量模型却只看到一句普通的删除确认。 */
+        var target = findProfile(alias);
+        var isEmb = target && isEmbeddingProfile(target);
         var isCurrentEmbedding = isEmb && EMBEDDING.alias === alias;
 
         var text = '确认删除模型 ' + alias + '？\n\n';

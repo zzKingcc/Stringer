@@ -51,7 +51,7 @@ public class DefaultModelResolver implements ModelResolver {
             ModelProfile profile = registry.profile(alias).orElse(null);
             if (profile == null || !profile.isUsable() || !profile.isChat()) {
                 log.warn("[模型档案] 域 {} 的可调用模型 {} 不存在 / 不可用 / 非对话类型，尝试列表中的下一个（档案列表：{}）",
-                        domain, alias, registry.profiles().stream().map(ModelProfile::alias).toList());
+                        domain, alias, registry.allProfiles().stream().map(ModelProfile::alias).toList());
                 continue;
             }
             if (!profile.supportsTools()) {
@@ -64,7 +64,7 @@ public class DefaultModelResolver implements ModelResolver {
 
         /* 列表里的档案全都不存在 / 不可用 / 非对话类型 → 同样不回落任何默认模型 */
         log.warn("[模型档案] 域 {} 的可调用列表 {} 均不可用（档案列表：{}）",
-                domain, aliases, registry.profiles().stream().map(ModelProfile::alias).toList());
+                domain, aliases, registry.allProfiles().stream().map(ModelProfile::alias).toList());
         throw new NotConfiguredException("域 " + domain + " 的可调用列表 " + aliases
                 + " 中没有可用模型 —— 请到管控台「域空间」重新指定");
     }

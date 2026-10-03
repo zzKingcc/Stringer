@@ -30,4 +30,13 @@ public class ClientProperties {
 
     /** 响应读取超时（SSE 为长连接，可适当放宽；0 表示不超时） */
     private Duration readTimeout = Duration.ofMinutes(10);
+
+    /**
+     * {@code ask} 等待整轮答案的上限（默认 30m）。
+     *
+     * <p>与 {@link #readTimeout} 是两件事：readTimeout 管"两个数据帧之间隔多久算断"，
+     * 本项管"整轮从发出到收到终止事件最多等多久"。后者此前无界 ——
+     * 服务端完全不响应时调用线程会永久阻塞。</p>
+     */
+    private Duration answerTimeout = Duration.ofMinutes(30);
 }

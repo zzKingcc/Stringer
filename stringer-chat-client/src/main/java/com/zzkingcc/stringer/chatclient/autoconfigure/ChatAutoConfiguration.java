@@ -5,6 +5,7 @@ import com.zzkingcc.stringer.chatclient.client.DefaultStringerAgentFactory;
 import com.zzkingcc.stringer.api.agent.StringerAgentFactory;
 import com.zzkingcc.stringer.clientcore.autoconfigure.StringerClientAutoConfiguration;
 import com.zzkingcc.stringer.clientcore.http.ClientCredential;
+import com.zzkingcc.stringer.clientcore.properties.ClientProperties;
 import com.zzkingcc.stringer.sdkcore.config.StringerProperties;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -36,8 +37,10 @@ public class ChatAutoConfiguration {
     @ConditionalOnMissingBean
     public StringerAgentFactory stringerAgentFactory(WebClient stringerWebClient,
                                                     StringerProperties server,
-                                                    ClientCredential stringerClientCredential) {
+                                                    ClientCredential stringerClientCredential,
+                                                    ClientProperties clientProperties) {
         return new DefaultStringerAgentFactory(
-                new AgentServiceClient(stringerWebClient, server, stringerClientCredential));
+                new AgentServiceClient(stringerWebClient, server, stringerClientCredential),
+                clientProperties.getAnswerTimeout());
     }
 }

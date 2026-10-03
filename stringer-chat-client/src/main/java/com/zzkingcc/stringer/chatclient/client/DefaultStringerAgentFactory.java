@@ -5,6 +5,7 @@ import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.agent.StringerAgent;
 import com.zzkingcc.stringer.api.agent.StringerAgentFactory;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,14 +22,24 @@ public class DefaultStringerAgentFactory implements StringerAgentFactory {
 
     private final AgentService transport;
     private final Map<String, StringerAgent> agents = new ConcurrentHashMap<>();
+    private final Duration answerTimeout;
 
     public DefaultStringerAgentFactory(AgentService transport) {
+        this(transport, null);
+    }
+
+    /**
+     * @param answerTimeout {@code ask} 等待整轮答案的上限；{@code null} / 非法值走默认
+     */
+    public DefaultStringerAgentFactory(AgentService transport, Duration answerTimeout) {
         this.transport = Objects.requireNonNull(transport, "transport 不能为空");
+        this.answerTimeout = answerTimeout;
     }
 
     @Override
     public StringerAgent forDomain(String domainId) {
         String normalized = Domains.normalize(domainId);
-        return agents.computeIfAbsent(normalized, domain -> new DefaultStringerAgent(transport, domain));
+        return agents.computeIfAbsent(normalized,
+                domain -> new DefaultStringerAgent(transport, domain, answerTimeout));
     }
 }

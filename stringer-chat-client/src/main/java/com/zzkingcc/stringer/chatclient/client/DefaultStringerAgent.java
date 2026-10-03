@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -34,12 +35,29 @@ public class DefaultStringerAgent implements StringerAgent {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * {@code ask} 的默认上限。
+     *
+     * <p>SSE 正常结束由终止事件（{@code DONE}）判定，不需要靠超时收尾；但服务端完全不响应
+     * （线程池满、网关挂起、连接建立后不吐任何帧）时，无参 {@code block()} 会让调用线程
+     * <b>永久阻塞</b>。给一个有界的兜底：宽到能容下一次正常的长回答，窄到不会挂死业务线程。</p>
+     */
+    public static final Duration DEFAULT_ANSWER_TIMEOUT = Duration.ofMinutes(30);
+
     private final AgentService transport;
     private final String domainId;
+    private final Duration answerTimeout;
 
     public DefaultStringerAgent(AgentService transport, String domainId) {
+        this(transport, domainId, DEFAULT_ANSWER_TIMEOUT);
+    }
+
+    public DefaultStringerAgent(AgentService transport, String domainId, Duration answerTimeout) {
         this.transport = Objects.requireNonNull(transport, "transport 不能为空");
         this.domainId = domainId;
+        this.answerTimeout = answerTimeout == null || answerTimeout.isNegative() || answerTimeout.isZero()
+                ? DEFAULT_ANSWER_TIMEOUT
+                : answerTimeout;
     }
 
     @Override
@@ -54,7 +72,13 @@ public class DefaultStringerAgent implements StringerAgent {
 
     @Override
     public String ask(String sessionId, String question, String tenantId, String userId) {
-        List<AgentEvent> collected = events(sessionId, question, tenantId, userId).collectList().block();
+        List<AgentEvent> collected;
+        try {
+            collected = events(sessionId, question, tenantId, userId).collectList().block(answerTimeout);
+        } catch (IllegalStateException e) {
+            // reactor 的 block(Duration) 超时抛这个，消息通常不含业务信息
+            throw timedOut(sessionId, e);
+        }
         if (collected == null) {
             return "";
         }
@@ -104,6 +128,14 @@ public class DefaultStringerAgent implements StringerAgent {
                 "事件流在收到终止事件（DONE/STOPPED/ERROR）前结束，答案不完整（已收到 " + received
                         + " 个事件）；若本轮耗时较长，请调大 stringer.client.read-timeout 或服务端"
                         + " spring.mvc.async.request-timeout");
+    }
+
+    /** 整轮等待超过上限：连截断信号都没等到，只能按超时收场 */
+    private StringerException timedOut(String sessionId, Throwable cause) {
+        log.warn("[StringerAgent] 会话[{}] 等待答案超过上限（{}）", sessionId, answerTimeout, cause);
+        return new StringerException(ErrorCode.EXTERNAL_SERVICE_TIMEOUT,
+                "等待答案超过上限（" + answerTimeout + "），本轮未收到任何终止事件。"
+                        + "请确认服务端仍在运行，或调大 stringer.client.answer-timeout");
     }
 
     @Override
@@ -166,24 +198,33 @@ public class DefaultStringerAgent implements StringerAgent {
 
     private ApprovalRequiredException approvalRequired(String sessionId, AgentEvent event) {
         return new ApprovalRequiredException(sessionId, domainId,
-                parseToolCalls(event.getPayload()), event.getTraceId());
+                parseToolCalls(sessionId, event.getPayload()), event.getTraceId());
     }
 
     /**
      * 解析中断 payload（{@code {"tools":[{"name":..,"arguments":{..},"requireApproval":true}]}}）。
      *
-     * <p>解析失败不当成"异常"往上抛：宿主仍然可以批准/拒绝，把"需要审批"这件事本身弄丢才是更糟的。</p>
+     * <p><b>解析失败即失败</b>，不当成"没有待授权工具"往下走：
+     * 空清单会被宿主渲染成一张空的确认框，宿主照样能点批准 → 危险动作执行，
+     * 而没人看到过批准内容。这与"丢掉需要审批这件事"一样糟，只是更隐蔽 ——
+     * 后者宿主知道出事了，前者宿主以为自己批的是空操作。</p>
+     *
+     * <p>抛出的异常不含原始 payload（避免把工具参数带进异常消息落到日志里）。</p>
      */
-    private static List<ToolCall> parseToolCalls(String payload) {
+    private List<ToolCall> parseToolCalls(String sessionId, String payload) {
         if (payload == null || payload.isBlank()) {
-            return List.of();
+            throw new StringerException(ErrorCode.UNEXPECTED_ERROR,
+                    "审批中断事件未携带待授权清单，无法在本轮继续；请查看服务端日志排查 payload 构造。"
+                            + "为安全起见本轮不会放行任何工具，请重试该会话");
         }
+        List<ToolCall> calls = new ArrayList<>();
         try {
-            List<ToolCall> calls = new ArrayList<>();
             for (JsonNode tool : MAPPER.readTree(payload).path("tools")) {
                 String name = tool.path("name").asText("");
                 if (name.isBlank()) {
-                    continue;
+                    // 清单里有无名条目 = 宿主渲染出来是一行空白，用户不知道自己在批什么
+                    throw new StringerException(ErrorCode.UNEXPECTED_ERROR,
+                            "审批清单中存在无名称条目，无法确认待授权动作，已阻断本轮（请重试该会话）");
                 }
                 JsonNode arguments = tool.path("arguments");
                 calls.add(ToolCall.of(
@@ -191,11 +232,21 @@ public class DefaultStringerAgent implements StringerAgent {
                         arguments.isMissingNode() || arguments.isNull() ? null : arguments.toString(),
                         tool.path("requireApproval").asBoolean(false)));
             }
-            return List.copyOf(calls);
+        } catch (StringerException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("[StringerAgent] 中断 payload 解析失败，待审批清单按空处理: {}", e.getMessage());
-            return List.of();
+            log.warn("[StringerAgent] 会话[{}] 中断 payload 解析失败（已阻断本轮，不按空清单放行）",
+                    sessionId, e);
+            throw new StringerException(ErrorCode.UNEXPECTED_ERROR,
+                    "审批清单解析失败，本轮不会放行任何工具，请查看服务端日志排查 payload 构造");
         }
+        if (calls.isEmpty()) {
+            // 服务端发了"有审批中断"但清单为空：状态不一致，绝不能当成"无需审批"
+            log.warn("[StringerAgent] 会话[{}] 收到空的审批清单，已阻断本轮", sessionId);
+            throw new StringerException(ErrorCode.UNEXPECTED_ERROR,
+                    "审批清单为空，无法确认待授权动作，本轮不会放行任何工具，请重试该会话");
+        }
+        return List.copyOf(calls);
     }
 
     /** ERROR 事件 → 带码异常；traceId 并进文案，方便一键排障 */

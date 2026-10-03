@@ -13,6 +13,7 @@ import com.zzkingcc.stringer.api.event.AgentEvent;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -195,6 +196,55 @@ class DefaultStringerAgentTest {
         assertEquals("admin", stopCallers.get(0).profile(), "stop 必须带上门面绑定的域，服务端才能定位 (域, sessionId)");
     }
 
+    // ==================== 审批清单不可用时不得放行 ====================
+    // 反向用例：这三种 payload 以前都按"空清单"处理，宿主拿到空确认框照样能点批准，
+    // 于是危险动作在用户没看到任何内容的情况下执行了。
+
+    @Test
+    void 审批清单解析失败时抛异常而不是交出空清单() {
+        scripted = Flux.just(AgentEvent.interrupt(SESSION, "{不是 JSON"));
+
+        StringerException ex = assertThrows(StringerException.class,
+                () -> agentOf("admin").ask(SESSION, "关掉 FR2024001"));
+        assertFalse(ex.getMessage().contains("不是 JSON"), "异常消息不得回显原始 payload（工具参数会落到日志里）");
+    }
+
+    @Test
+    void 审批清单为空时抛异常而不是当作无需审批() {
+        scripted = Flux.just(AgentEvent.interrupt(SESSION, "{\"tools\":[]}"));
+
+        assertThrows(StringerException.class, () -> agentOf("admin").ask(SESSION, "关掉 FR2024001"));
+    }
+
+    @Test
+    void 审批清单缺payload时抛异常() {
+        scripted = Flux.just(AgentEvent.interrupt(SESSION, null));
+
+        assertThrows(StringerException.class, () -> agentOf("admin").ask(SESSION, "关掉 FR2024001"));
+    }
+
+    @Test
+    void 审批清单含无名条目时抛异常() {
+        scripted = Flux.just(AgentEvent.interrupt(SESSION, "{\"tools\":[{\"arguments\":{}}]}"));
+
+        assertThrows(StringerException.class, () -> agentOf("admin").ask(SESSION, "关掉 FR2024001"));
+    }
+
+    @Test
+    void stream遇审批清单不可用时同样以错误收尾() {
+        scripted = Flux.just(AgentEvent.token(SESSION, "准备关单"), AgentEvent.interrupt(SESSION, "{\"tools\":[]}"));
+
+        List<String> emitted = new ArrayList<>();
+        Throwable error = null;
+        try {
+            agentOf("admin").stream(SESSION, "关单").doOnNext(emitted::add).blockLast();
+        } catch (Throwable e) {
+            error = e;
+        }
+        assertEquals(List.of("准备关单"), emitted);
+        assertTrue(error instanceof StringerException, "清单不可用必须以错误收尾，实际: " + error);
+    }
+
     @Test
     void 同一域复用同一门面且空域归一化为根域() {
         StringerAgentFactory factory = new DefaultStringerAgentFactory(fakeTransport);
@@ -213,5 +263,47 @@ class DefaultStringerAgentTest {
     void 缺少底层通道直接失败() {
         assertThrows(NullPointerException.class, () -> new DefaultStringerAgentFactory(null));
         assertThrows(NullPointerException.class, () -> new DefaultStringerAgent(null, "customer"));
+    }
+
+    // ==================== 整轮等待上限 ====================
+
+    /**
+     * 服务端完全不响应（线程池满 / 网关挂起 / 连上了但不吐帧）时，
+     * 无上限的 {@code block()} 会让业务线程永久挂住。
+     */
+    @Test
+    void 服务端无响应时按answerTimeout收场而不是永久阻塞() {
+        scripted = Flux.never();
+
+        long start = System.currentTimeMillis();
+        StringerException ex = assertThrows(StringerException.class,
+                () -> new DefaultStringerAgent(fakeTransport, "customer", Duration.ofMillis(150))
+                        .ask(SESSION, "在吗"));
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertEquals(ErrorCode.EXTERNAL_SERVICE_TIMEOUT.getCode(), ex.getErrorCode().getCode());
+        assertTrue(elapsed < 5_000, "应在上限内收场，实际耗时 " + elapsed + "ms");
+    }
+
+    @Test
+    void answerTimeout非法值时回落默认上限而不是变成无上限() {
+        // 0 / 负数都意味着"立刻放弃"或"无界"，两者都会让 ask 失去保护。
+        // 不能真跑一次 30 分钟的等待 —— 用反射读回落后的实际值断言
+        for (Duration bad : new Duration[]{Duration.ZERO, Duration.ofSeconds(-1), null}) {
+            DefaultStringerAgent agent = new DefaultStringerAgent(fakeTransport, "customer", bad);
+            assertEquals(DefaultStringerAgent.DEFAULT_ANSWER_TIMEOUT, answerTimeoutOf(agent),
+                    "非法值 " + bad + " 应回落默认值");
+        }
+    }
+
+    /** 读出构造后真正生效的上限 —— 靠它避免测试真的去等默认的 30 分钟 */
+    private static Duration answerTimeoutOf(DefaultStringerAgent agent) {
+        try {
+            var field = DefaultStringerAgent.class.getDeclaredField("answerTimeout");
+            field.setAccessible(true);
+            return (Duration) field.get(agent);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("读不到 answerTimeout 字段，字段名或可见性变了", e);
+        }
     }
 }

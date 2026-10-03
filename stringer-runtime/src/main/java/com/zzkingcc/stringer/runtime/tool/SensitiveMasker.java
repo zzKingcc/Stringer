@@ -32,6 +32,9 @@ public final class SensitiveMasker {
     /** 掩码文案；固定长度、不含原值任何信息 */
     public static final String MASK = "***";
 
+    /** 参数无法解析为 JSON 时的整段占位：不含任何原文，且明确告诉阅读者"这里本该有内容" */
+    public static final String UNPARSEABLE = "[参数无法解析，已整体屏蔽]";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private SensitiveMasker() {
@@ -40,9 +43,18 @@ public final class SensitiveMasker {
     /**
      * 掩码参数 JSON。
      *
+     * <p><b>解析失败时整段屏蔽，绝不原样返回。</b>模型生成的 {@code arguments} 是畸形 JSON
+     * 的常态，此时若"为了不丢原文"而原样返回，恰好把最需要保护的那批值（身份证、手机号、
+     * 银行卡）明文送进<b>工具调用事件</b>与<b>审批 payload</b> —— 而这两处正是脱敏要守的地方。
+     * 保护机制在失败时退化成不保护，比不保护更危险。</p>
+     *
+     * <p>整段屏蔽而非逐字段兜底：解析不出来就无从知道哪些字段敏感，索性不给内容。
+     * 代价是审批人看不到参数，但<b>看不到比误批安全</b> —— {@link #isMasked(String)}
+     * 能让调用方识别出这种情况并拒绝自动批准。</p>
+     *
      * @param argumentsJson  工具调用参数（可能为 null / 空白 / 非 JSON）
      * @param sensitiveNames 需要掩码的参数名（空即原样返回）
-     * @return 掩码后的 JSON 文本；无需或无法掩码时原样返回
+     * @return 掩码后的 JSON 文本
      */
     public static String mask(String argumentsJson, Set<String> sensitiveNames) {
         if (argumentsJson == null || argumentsJson.isBlank()
@@ -53,10 +65,20 @@ public final class SensitiveMasker {
             JsonNode masked = maskNode(MAPPER.readTree(argumentsJson), sensitiveNames);
             return MAPPER.writeValueAsString(masked);
         } catch (Exception e) {
-            // 参数不是合法 JSON 时，不能因为"要脱敏"反而把原文弄丢或改坏：留痕后原样返回
-            log.warn("[脱敏] 工具参数不是合法 JSON，按原样输出: {}", e.getMessage());
-            return argumentsJson;
+            // 留痕但不外泄原文：只记长度与工具无关的上下文
+            log.warn("[脱敏] 工具参数不是合法 JSON（长度 {}），已整段屏蔽而非原样输出。"
+                    + "解析失败时原样返回会让敏感值明文进入调用事件与审批 payload", argumentsJson.length());
+            return UNPARSEABLE;
         }
+    }
+
+    /**
+     * 这次展示文本是否被整体屏蔽了 —— 调用方据此拒绝"盲批"。
+     *
+     * <p>没有它，宿主看到的就是一个"参数为空"的审批项，与"参数本来就短"无法区分。</p>
+     */
+    public static boolean isMasked(String maskedText) {
+        return UNPARSEABLE.equals(maskedText);
     }
 
     private static JsonNode maskNode(JsonNode node, Set<String> sensitiveNames) {

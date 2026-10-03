@@ -1,5 +1,6 @@
 package com.zzkingcc.stringer.runtime.usage;
 
+import com.zzkingcc.stringer.common.util.CjkWidth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,7 +25,7 @@ public final class TokenUsageRecorder {
     /** 记录 LLM 输出 token（流式输出的每个 chunk） */
     public static void recordLlmOutputChunk(String chunk) {
         TokenStats s = STATS.get();
-        s.llmOutputTokens += estimateTokens(chunk);
+        s.llmOutputTokens += CjkWidth.estimateTokens(chunk);
     }
 
     /** 直接累加预计算的 LLM 输出 token 数（用于跨线程回调场景） */
@@ -33,11 +34,24 @@ public final class TokenUsageRecorder {
         s.llmOutputTokens += tokens;
     }
 
+    /**
+     * 估算一段文本的 token 数。
+     *
+     * <p>流式回调在<b>模型线程</b>上调用它累加计数，而 {@link #recordLlmOutputChunk(String)}
+     * 记的是当前线程的 ThreadLocal —— 两者不是同一个统计桶，所以这里只提供估算、
+     * 不落状态，累加仍由调用方拿到累计值自己 {@code addAndGet}。</p>
+     *
+     * <p>宽度判定只有 {@link CjkWidth} 一份实现，避免"两处各判一次"再次分叉。</p>
+     */
+    public static int estimateTokens(String text) {
+        return CjkWidth.estimateTokens(text);
+    }
+
     /** 记录 Tool 调用 token（输入参数 + 输出结果） */
     public static void recordToolCall(String toolName, String input, String output) {
         TokenStats s = STATS.get();
-        int inputTokens = estimateTokens(input);
-        int outputTokens = estimateTokens(output);
+        int inputTokens = CjkWidth.estimateTokens(input);
+        int outputTokens = CjkWidth.estimateTokens(output);
         s.toolInputTokens += inputTokens;
         s.toolOutputTokens += outputTokens;
         s.toolCallCount++;
@@ -51,31 +65,6 @@ public final class TokenUsageRecorder {
         log.info("[Token统计] 本次请求 — LLM输出≈{} tokens | Tool调用{}次(输入≈{} + 输出≈{} tokens) | 合计≈{} tokens",
                 s.llmOutputTokens, s.toolCallCount, s.toolInputTokens, s.toolOutputTokens, total);
         STATS.remove();
-    }
-
-    //1、Token 估算
-    public static int estimateTokens(String text) {
-        if (text == null || text.isEmpty()) {
-            return 0;
-        }
-        double tokens = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (isCJK(c)) {
-                tokens += 1.5;
-            } else {
-                tokens += 0.25;
-            }
-        }
-        return (int) Math.ceil(tokens);
-    }
-
-    private static boolean isCJK(char c) {
-        return (c >= '\u4E00' && c <= '\u9FFF')
-                || (c >= '\u3400' && c <= '\u4DBF')
-                || (c >= '\u3000' && c <= '\u303F')
-                || (c >= '\uFF00' && c <= '\uFFEF')
-                || (c >= '\uAC00' && c <= '\uD7AF');
     }
 
     private static class TokenStats {

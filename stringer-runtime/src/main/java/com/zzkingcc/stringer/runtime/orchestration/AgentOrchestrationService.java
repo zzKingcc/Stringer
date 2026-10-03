@@ -566,6 +566,11 @@ public class AgentOrchestrationService implements AgentService {
      */
     public Flux<AgentEvent> orchestrate(String sessionId, String message, CallerContext caller) {
         String key = stateKeyOf(caller, sessionId);
+        // 清上一轮遗留的停止标志 —— 必须在这里，**提交进线程池之前**。
+        // 编排任务会先排队，用户可以在排队期间点停止；清理若发生在任务出队后执行，
+        // 那次停止就被抹掉了（任务照跑到底，界面显示"停止中"却什么都没发生）。
+        // 这就是 R-03 的根因：清理的时机决定了"排队期间的停止"能否生效。
+        cancellationRegistry.prepareNewRound(key);
         return Flux.create(sink -> {
             StreamContext context = streamSinks.register(key, sink, caller);
             // 流被取消(客户端断连)或终止时,通知执行线程退出并清理上下文。
@@ -591,8 +596,10 @@ public class AgentOrchestrationService implements AgentService {
 
     private void runOrchestrate(String sessionId, String key, String message, StreamContext context) {
         // 同会话串行：本会话已有一轮在执行则直接拒绝（最细粒度的并发控制）。
-        // 必须放在 clear() 之前——clear 会清掉停止标志，若先 clear，并发请求会把
-        // 正在执行那一轮的 stop 标志抹掉，用户点停止将不生效。
+        // ⚠️ 停止标志的清理**不在这里**，而在提交进线程池之前（见 orchestrate 的 prepareNewRound）。
+        // 若在这里清：本方法是在任务**出队后**才执行的，而用户可以在"排队中"点停止——
+        // 那次停止会被这一次清理抹掉，任务照跑到底，界面上"停止中"却什么都没发生。
+        // 不报错、不留痕，只表现为"停止偶尔不灵"。
         if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排] 会话[{}] 正在执行中，拒绝并发请求（如需重开请先 stop 并等其结束）", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
@@ -606,9 +613,6 @@ public class AgentOrchestrationService implements AgentService {
             return;
         }
 
-        // 入口清理:避免上一轮遗留的停止标志导致本轮一启动就被终止
-        cancellationRegistry.clear(key);
-
         // 本轮排障标识：贯穿日志与 ERROR 事件，便于用 traceId 串起一次完整调用
         TraceId.begin(context == null ? null : context.traceId());
         // 提问前的记忆快照（停止时回滚用）；声明在 try 之外，停止分支也要用。
@@ -618,11 +622,30 @@ public class AgentOrchestrationService implements AgentService {
         try {
             ChatMemory memory = chatMemoryProvider.get(key);
 
-            // ① 封顶判定（入口最优先）：记忆只增不淘汰，到上限后这一轮直接拒绝，且刻意做成**零副作用** ——
+            // ① 先读断点：这一轮<b>是否要额外补一条占位回答</b>取决于有没有待审批断点，
+            //    而封顶判定必须按真实写入量算（3 条 vs 2 条），所以顺序不能反。
+            //    读不出来 ≠ 没有待审批：此刻绝不能走到入口清理——那恰好会把待审批的断点删掉，
+            //    正是本轮要防的那件事。直接报"检查点读写失败"并返回，由调用方退避后重试。
+            boolean pending;
+            try {
+                pending = pendingApproval(key);
+            } catch (IllegalStateException e) {
+                log.error("[Agent编排] 会话[{}] 读取检查点失败，无法判断是否存在待审批中断点", sessionId, e);
+                context.emit(AgentEvent.error(sessionId, ErrorCode.CHECKPOINT_ERROR,
+                        TraceId.currentOrNew()));
+                context.complete();
+                return;
+            }
+
+            // ② 封顶判定：记忆只增不淘汰，到上限后这一轮直接拒绝，且刻意做成**零副作用** ——
             //    不写记忆、不清断点、不调模型（用户不会白烧一次调用），换 sessionId 才有出路。
             //    判定是粘性的：只要记忆还满着，之后每次都用同一个码拒绝，不需要"已封顶"标记位。
+            //
+            //    预留条数必须告诉它 pending：那一轮会多补一条占位回答（见 ③），
+            //    按 2 条预留会在 maxMessages-2 时放行、写完 maxMessages+1 —— 记忆只增不淘汰，
+            //    破限之后**永久**拒绝，这个会话再也开不了新轮。
             if (memory instanceof DualConstraintChatMemory dual) {
-                DualConstraintChatMemory.Capacity capacity = dual.capacityFor(message);
+                DualConstraintChatMemory.Capacity capacity = dual.capacityFor(message, pending);
                 if (!capacity.canAccept()) {
                     log.warn("[Agent编排] 会话[{}] 已达记忆上限，拒绝新一轮：{}", sessionId, capacity.detail());
                     context.emit(AgentEvent.error(sessionId, capacity.detail(),
@@ -632,22 +655,10 @@ public class AgentOrchestrationService implements AgentService {
                 }
             }
 
-            // ② 上一轮停在审批点、用户没回复审批而是直接开了新对话 → **视为用户拒绝了那次审批**。
+            // ③ 上一轮停在审批点、用户没回复审批而是直接开了新对话 → **视为用户拒绝了那次审批**。
             //    既不能把新对话挡回去（那会让会话在断点 TTL 到期前整个不可用），
             //    也不能把断点留着（否则事后任何一次 resume 都能把那个待授权动作执行掉）。
             //    所以：补一条占位回答让那一轮成为完整轮次（不留"有问无答"），再取消断点。
-            boolean pending;
-            try {
-                pending = pendingApproval(key);
-            } catch (IllegalStateException e) {
-                // 读不出来 ≠ 没有待审批。此刻绝不能继续走到入口清理——那恰好会把待审批的断点删掉，
-                // 正是本轮要防的那件事。直接报"检查点读写失败"并返回，由调用方退避后重试。
-                log.error("[Agent编排] 会话[{}] 读取检查点失败，无法判断是否存在待审批中断点", sessionId, e);
-                context.emit(AgentEvent.error(sessionId, ErrorCode.CHECKPOINT_ERROR,
-                        TraceId.currentOrNew()));
-                context.complete();
-                return;
-            }
             if (pending) {
                 log.info("[Agent编排] 会话[{}] 存在待审批断点且用户发起了新一轮对话 → 视为拒绝：取消该动作",
                         sessionId);
@@ -712,12 +723,18 @@ public class AgentOrchestrationService implements AgentService {
         } catch (Exception e) {
             if (isCancellationException(e)) {
                 handleStop(sessionId, key, context, "orchestrate", memoryBefore);
-            } else if (!handleNotConfigured(sessionId, key, context, e)) {
+            } else if (!handleNotConfigured(sessionId, key, context, e, memoryBefore)) {
                 log.error("[Agent编排] 会话[{}] traceId={} 执行失败", sessionId, TraceId.current(), e);
                 // 异常中断时图没走到 END，releaseThread 不会触发，checkpoint 会残留。
                 // 残留状态里可能有"悬空的 AiMessage（带工具调用却没有结果）"，
                 // 下一轮带着它继续跑会反复失败——必须在这里主动清掉，避免一次异常拖垮后续所有提问。
                 releaseCheckpointQuietly(key, "执行异常");
+                // 记忆必须与 checkpoint 一起回滚：本轮开头写进去的 UserMessage 已经没有对应的
+                // 回答（回答是在 rememberFinalAnswer 里写的，那一步没走到）。不回滚就留下
+                // 一条永久"有问无答"的记录 —— 下一轮模型看到上次的提问没有回应，
+                // 会顺着答非所问，而且这个偏差会一直累积，用户从界面上看不出出了什么事。
+                // stop 路径早就守住了这个不变式，异常路径此前没守住。
+                restoreMemory(key, memoryBefore);
                 context.emit(AgentEvent.error(sessionId, ErrorCode.ORCHESTRATION_FAILED,
                         TraceId.currentOrNew()));
                 context.complete();
@@ -751,6 +768,9 @@ public class AgentOrchestrationService implements AgentService {
                     TraceId.currentOrNew()));
         }
         String key = stateKeyOf(caller, sessionId);
+        // 同 orchestrate：清上一轮遗留的停止标志必须发生在提交进线程池之前，
+        // 否则用户在排队期间点的 stop 会被任务出队后的清理抹掉
+        cancellationRegistry.prepareNewRound(key);
         return Flux.create(sink -> {
             StreamContext context = streamSinks.register(key, sink, caller);
             // 同 orchestrate：只有"自己仍是当前上下文"才算客户端断连，
@@ -775,7 +795,8 @@ public class AgentOrchestrationService implements AgentService {
 
     private void runResume(String sessionId, String key, boolean approved, StreamContext context) {
         // 同会话串行同样适用于 resume：本会话已有一轮在执行时拒绝，理由与 chat 一致。
-        // 同样放在 clear() 之前，避免把正在执行那轮的 stop 标志抹掉。
+        // 停止标志已在 resume() 提交前清过，此处不再清（见 orchestrate 里关于
+        // "排队期间的 stop 会被出队后的清理抹掉"的说明）
         if (!cancellationRegistry.tryMarkRunning(key)) {
             log.warn("[Agent编排-resume] 会话[{}] 正在执行中，拒绝并发 resume", sessionId);
             context.emit(AgentEvent.error(sessionId, ErrorCode.SESSION_BUSY, TraceId.currentOrNew()));
@@ -784,10 +805,9 @@ public class AgentOrchestrationService implements AgentService {
             context.complete();
             return;
         }
-        cancellationRegistry.clear(key);
         TraceId.begin(context == null ? null : context.traceId());
 
-               try {
+        try {
             TokenUsageRecorder.begin();
 
             RunnableConfig config = RunnableConfig.builder()
@@ -953,6 +973,11 @@ public class AgentOrchestrationService implements AgentService {
 
     /**
      * 构建中断事件 payload:待授权工具调用列表(JSON)
+     *
+     * <p><b>失败即失败</b>：序列化异常时向上抛，绝不降级成空清单。
+     * 空清单会被客户端渲染成"没有待授权动作"，用户据此点了批准 → 危险动作照常执行，
+     * 而他从头到尾没看到自己在批准什么。这比整轮失败危险得多。
+     * 抛出后由上层 catch 收尾：清断点（不能留下可被 resume 的待授权断点）+ ERROR 事件。</p>
      */
     private String buildInterruptPayload(MessagesState<ChatMessage> state, String profile) {
         Set<String> approvalTools = toolRouter.getToolsRequiringApproval(profile);
@@ -970,11 +995,21 @@ public class AgentOrchestrationService implements AgentService {
                 }
             }
         }
+        // 走到 review 分支就说明图已经拦下了待授权的工具请求，"清单却是空的"只能是状态不一致
+        // （state 丢失、消息被换掉）。发一个空清单等于告诉调用方"没有待授权动作"，
+        // 调用方据此放行 → 审批形同虚设。同样按失败收尾。
+        if (calls.isEmpty()) {
+            log.error("[Agent编排] 会话中断于审批点但待授权清单为空，断点状态与图状态不一致；"
+                    + "本轮按失败收尾（不发送空清单：那会让调用方在无审批内容的情况下放行工具）");
+            throw new IllegalStateException("审批清单为空但图已拦下待授权动作，断点状态不一致，已阻断本轮");
+        }
         try {
             return OBJECT_MAPPER.writeValueAsString(ToolCallPayload.of(calls));
         } catch (Exception e) {
-            log.error("[Agent编排] 中断 payload 序列化失败,降级为空列表", e);
-            return "{\"tools\":[]}";
+            log.error("[Agent编排] 中断 payload 序列化失败，待授权动作={} 个，本轮按失败收尾"
+                    + "（不降级为空清单：用户会看不到批准内容却按下批准）", calls.size(), e);
+            throw new IllegalStateException("构建审批清单失败，已阻断本轮（不会在用户未看清内容的情况下放行工具执行）: "
+                    + e.getMessage(), e);
         }
     }
 
@@ -1004,6 +1039,18 @@ public class AgentOrchestrationService implements AgentService {
      * @return true 表示已按"未配置"处理并结束流，调用方不要再走通用兜底
      */
     private boolean handleNotConfigured(String sessionId, String key, StreamContext context, Throwable e) {
+        return handleNotConfigured(sessionId, key, context, e, null);
+    }
+
+    /**
+     * "依赖未配置"的专用收尾 —— 把它从通用执行失败里择出来。
+     *
+     * @param memoryBefore 提问前的记忆快照；不为 {@code null} 时一并回滚，
+     *                     理由同通用异常路径（提问已写入而回答未写入）
+     * @return true 表示已按"未配置"处理并结束流，调用方不要再走通用兜底
+     */
+    private boolean handleNotConfigured(String sessionId, String key, StreamContext context, Throwable e,
+                                        List<ChatMessage> memoryBefore) {
         NotConfiguredException notConfigured = findNotConfigured(e);
         if (notConfigured == null) {
             return false;
@@ -1012,6 +1059,9 @@ public class AgentOrchestrationService implements AgentService {
                 sessionId, TraceId.current(),
                 notConfigured.getCodeName(), notConfigured.getMessage());
         releaseCheckpointQuietly(key, "依赖未配置");
+        // 同样要回滚记忆：这一轮是以 ERROR 收尾的，没有回答，
+        // 留着孤零零一条提问就是永久"有问无答"
+        restoreMemory(key, memoryBefore);
         // 用 4 参重载，把"去管控台哪一页填"的具体指引带进事件体（枚举默认文案只有一句概括）
         context.emit(AgentEvent.error(sessionId, notConfigured.getMessage(),
                 notConfigured.getErrorCode(), TraceId.currentOrNew()));

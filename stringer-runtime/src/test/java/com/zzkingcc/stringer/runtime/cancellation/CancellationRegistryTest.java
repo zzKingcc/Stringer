@@ -85,4 +85,52 @@ class CancellationRegistryTest {
         assertFalse(registry.isCancelled("s-1"));
         assertEquals(1, registry.runningCount(), "clear 只清停止标志，不动执行中标记");
     }
+
+    /**
+     * R-03 的核心契约：<b>排队期间的 stop 必须活到任务真正开始执行</b>。
+     *
+     * <p>编排任务先进线程池排队，用户可以在排队期间点停止。若清停止标志的动作发生在
+     * "任务出队后"，那次停止就被抹掉了 —— 任务照跑到底，界面上显示"停止中"却什么都没发生。
+     * 不报错、不留痕，只表现为"停止偶尔不灵"。</p>
+     */
+    @Test
+    @DisplayName("清理放在提交前时，排队期间的 stop 能一直活到执行期")
+    void stopRaisedWhileQueuedSurvivesUntilExecution() {
+        CancellationRegistry registry = new CancellationRegistry();
+
+        // ① 提交前清理上一轮的残留
+        registry.prepareNewRound("s-1");
+        assertFalse(registry.isCancelled("s-1"), "新一轮开始前应无停止标志");
+
+        // ② 任务在队列里等着，用户点了停止
+        registry.requestStop("s-1");
+        assertTrue(registry.isCancelled("s-1"));
+
+        // ③ 任务出队开始执行 —— 执行期**不再**清标志，停止请求得以生效
+        assertTrue(registry.isCancelled("s-1"),
+                "任务开始执行时不得清除停止标志，否则排队期间的停止请求会静默丢失");
+    }
+
+    @Test
+    @DisplayName("准备新一轮会清掉上一轮遗留的标志")
+    void prepareNewRoundClearsPreviousFlag() {
+        CancellationRegistry registry = new CancellationRegistry();
+
+        registry.requestStop("s-1");
+        registry.prepareNewRound("s-1");
+
+        assertFalse(registry.isCancelled("s-1"), "上一轮遗留的停止标志会误杀新一轮");
+        assertEquals(0, registry.runningCount(), "prepareNewRound 不碰执行中标记");
+    }
+
+    @Test
+    @DisplayName("无残留时不产生日志噪音也不改变状态")
+    void prepareNewRoundIsIdempotent() {
+        CancellationRegistry registry = new CancellationRegistry();
+
+        registry.prepareNewRound("s-1");
+        registry.prepareNewRound("s-1");
+
+        assertFalse(registry.isCancelled("s-1"));
+    }
 }

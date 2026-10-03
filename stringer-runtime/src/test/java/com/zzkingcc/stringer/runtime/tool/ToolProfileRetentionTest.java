@@ -107,4 +107,54 @@ class ToolProfileRetentionTest {
         assertFalse(registry.find("remote_tool").get().descriptor().visibleIn("default.finance"),
                 "删域等于撤销该域的授权边界");
     }
+
+    /**
+     * 回归：删域把工具的<b>全部</b>声明剥光时，绝不能让它回落成「挂在根域」。
+     *
+     * <p>回落即全树可见 —— 删域（意图：撤销授权）会变成放开授权，且工具越多、声明越集中的场景越明显。
+     * 这条断言是本次修复的核心：之前只覆盖了「多声明删其一」，剥光路径没人测过。</p>
+     */
+    @Test
+    void forgetProfilesDoesNotWidenToolWhenAllDomainsStripped() {
+        registry.register(tool("payroll_tool", "stringer", List.of("default.hr.payroll")));
+        assertTrue(registry.find("payroll_tool").get().descriptor().visibleIn("default.hr.payroll"));
+
+        // 递归删父域：affected = 自身 + 全部子孙，正好把唯一那条声明剥光
+        registry.forgetProfiles(List.of("default.hr", "default.hr.payroll"));
+
+        ToolDescriptor descriptor = registry.find("payroll_tool").orElseThrow().descriptor();
+        assertFalse(descriptor.visibleIn("default.sales"), "剥光后绝不能对无关域可见（授权放大）");
+        assertFalse(descriptor.visibleIn("default"), "根域同样不可见");
+        assertFalse(descriptor.visibleIn("default.hr"), "被删的域不可见");
+        assertFalse(descriptor.visibleIn("default.hr.payroll"), "被删的子孙域不可见");
+        assertTrue(registry.find("payroll_tool").isPresent(), "工具条目保留，只是不再对任何域可见");
+    }
+
+    /** 哨兵不是域：不能让它出现在「域空间」的域全集里 */
+    @Test
+    void revokedDomainNeverAppearsInKnownProfiles() {
+        registry.register(tool("payroll_tool", "stringer", List.of("default.hr.payroll")));
+
+        registry.forgetProfiles(List.of("default.hr.payroll"));
+
+        assertFalse(registry.knownProfiles().contains(ToolDescriptor.REVOKED_DOMAIN),
+                "哨兵不能被当成一个真域");
+        assertFalse(registry.acceptsProfile(ToolDescriptor.REVOKED_DOMAIN),
+                "哨兵不能被当成一个可调用域");
+    }
+
+    /** 重新注册（作者改了代码）后必须能恢复：哨兵不能变成永久烙印 */
+    @Test
+    void reRegisteringAfterRevocationRestoresVisibility() {
+        registry.register(tool("payroll_tool", "stringer", List.of("default.hr.payroll")));
+        registry.forgetProfiles(List.of("default.hr.payroll"));
+        assertFalse(registry.find("payroll_tool").orElseThrow().descriptor().visibleIn("default.hr"));
+
+        // 模拟重启：同一实例再次整包上报，声明里带回了原来的域
+        registry.replaceInstanceTools("i1", "http://10.0.0.5:8081/invoke", List.of());
+        registry.register(tool("payroll_tool2", "stringer", List.of("default.hr")));
+
+        assertTrue(registry.find("payroll_tool2").orElseThrow().descriptor().visibleIn("default.hr"),
+                "新声明不受哨兵影响");
+    }
 }

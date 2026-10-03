@@ -20,9 +20,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 注解扫描器
@@ -40,7 +44,13 @@ public final class AnnotatedToolScanner {
      *
      * <p>方法上有 {@code @Tool} 即算工具。</p>
      *
-     * @param provider 工具提供者 Bean
+     * <p><b>注解从「用户类」取，执行走「代理类」</b>：Spring 的 CGLIB / JDK 代理会重写方法，
+     * 而方法注解不随重写继承 —— 直接扫 {@code provider.getClass()} 会让
+     * {@code @Transactional} / {@code @Async} 切过的 Service 上的 {@code @Tool} 全部扫不到
+     * （工具凭空消失，且只留一行 WARN）。反过来若拿用户类的 {@code Method} 去反射调用，
+     * 又会绕过代理链、让切面失效。两件事必须分开：<b>元数据查用户类，invoke 用代理类的方法</b>。</p>
+     *
+     * @param provider 工具提供者 Bean（可能是代理实例）
      * @return 该 Bean 上所有工具方法的注册项（可能为空）
      */
     public static List<ToolRegistry.Registered> scan(Object provider) {
@@ -49,8 +59,13 @@ public final class AnnotatedToolScanner {
             return registered;
         }
 
-        for (Method method : provider.getClass().getMethods()) {
-            ToolDescriptor descriptor = describe(provider.getClass(), method);
+        Class<?> proxyClass = provider.getClass();
+        Class<?> userClass = userClassOf(proxyClass);
+
+        for (Method declared : annotatedMethods(userClass)) {
+            // 执行目标：优先用代理类上真正会被调用的那个方法，保住切面链
+            Method executable = executableMethod(provider, proxyClass, declared);
+            ToolDescriptor descriptor = describe(userClass, declared);
             if (descriptor == null) {
                 continue;
             }
@@ -71,16 +86,102 @@ public final class AnnotatedToolScanner {
                     .build();
 
             // 复用 LangChain4j 的参数反序列化：arguments(JSON) → 方法参数
-            DefaultToolExecutor executor = new DefaultToolExecutor(provider, method);
+            DefaultToolExecutor executor = new DefaultToolExecutor(provider, executable);
 
             registered.add(ToolRegistry.Registered.local(descriptor, specification, executor));
         }
 
         if (registered.isEmpty()) {
             log.warn("[工具扫描] {} 未实现任何 @Tool 方法，已注册 0 个工具",
-                    provider.getClass().getName());
+                    userClass.getName());
         }
         return registered;
+    }
+
+    /**
+     * 剥掉 Spring 生成的代理类，回到用户类 —— CGLIB 代理的类名形如 {@code Xxx$$SpringCGLIB$$0}。
+     *
+     * <p>JDK 动态代理（{@code com.sun.proxy.$ProxyN}）的父类是 {@code java.lang.reflect.Proxy}，
+     * 类名里没有 {@code $$}，这里剥不掉 —— 那种情况由 {@link #annotatedMethods} 扫接口兜住。</p>
+     */
+    private static Class<?> userClassOf(Class<?> candidate) {
+        Class<?> current = candidate;
+        while (current.getName().contains("$$")) {
+            Class<?> parent = current.getSuperclass();
+            if (parent == null || parent == Object.class) {
+                break;
+            }
+            current = parent;
+        }
+        return current;
+    }
+
+    /**
+     * 收集带 {@link Tool} 的方法：用户类自己的 + 各接口上的，按签名去重。
+     *
+     * <p>接口必须一起扫：JDK 动态代理下注解只写在接口方法上，实现类的方法拿不到。</p>
+     */
+    private static List<Method> annotatedMethods(Class<?> userClass) {
+        List<Method> candidates = new ArrayList<>(List.of(userClass.getMethods()));
+        for (Class<?> itf : allInterfacesOf(userClass)) {
+            candidates.addAll(List.of(itf.getMethods()));
+        }
+
+        Set<String> seen = new LinkedHashSet<>();
+        List<Method> methods = new ArrayList<>();
+        for (Method method : candidates) {
+            if (method.isSynthetic() || method.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            if (method.getAnnotation(Tool.class) == null) {
+                continue;
+            }
+            if (seen.add(signatureOf(method))) {
+                methods.add(method);
+            }
+        }
+        return methods;
+    }
+
+    private static List<Class<?>> allInterfacesOf(Class<?> type) {
+        List<Class<?>> out = new ArrayList<>();
+        Set<Class<?>> seen = new LinkedHashSet<>();
+        Deque<Class<?>> queue = new ArrayDeque<>(List.of(type));
+        while (!queue.isEmpty()) {
+            Class<?> current = queue.poll();
+            for (Class<?> itf : current.getInterfaces()) {
+                if (seen.add(itf)) {
+                    out.add(itf);
+                    queue.add(itf);
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 找到「真正会被调用」的那个方法：代理类上同签名的那一份。
+     *
+     * <p>CGLIB 代理重写了方法，拿到它才能让调用经过代理链（切面生效）；
+     * JDK 代理的代理类上没有实现类的方法，{@code getMethod} 会抛
+     * {@link NoSuchMethodException}，此时退回用户类/接口方法 —— 对 JDK 代理而言
+     * 接口方法 invoke 同样会经过代理。</p>
+     */
+    private static Method executableMethod(Object provider, Class<?> proxyClass, Method declared) {
+        try {
+            Method onProxy = proxyClass.getMethod(declared.getName(), declared.getParameterTypes());
+            return onProxy.getDeclaringClass() == Object.class ? declared : onProxy;
+        } catch (NoSuchMethodException e) {
+            return declared;
+        }
+    }
+
+    private static String signatureOf(Method method) {
+        StringBuilder sb = new StringBuilder(method.getName());
+        for (Class<?> paramType : method.getParameterTypes()) {
+            sb.append('|').append(paramType.getName());
+        }
+        return sb.toString();
     }
 
     /**

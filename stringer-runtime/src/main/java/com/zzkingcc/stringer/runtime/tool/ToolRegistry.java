@@ -381,7 +381,8 @@ public class ToolRegistry {
             return;
         }
         for (String p : profiles) {
-            if (p != null && !p.isBlank()) {
+            if (p != null && !p.isBlank() && !ToolDescriptor.REVOKED_DOMAIN.equals(p)) {
+                // 哨兵不是域：放进 knownProfiles 会让「域空间」多出一个假域
                 target.add(p);
             }
         }
@@ -429,11 +430,22 @@ public class ToolRegistry {
             if (kept.size() == descriptor.domains().size()) {
                 continue;
             }
-            // 副本列表与执行体原样保留：这里只改"这个工具对哪些域可见"，不碰它还能不能被调用
+            // 剥光 = 这个工具原本只服务于被删的域。必须写哨兵让它对任何域都不可见：
+            // 留空会回落根域（空列表 = 挂在根域上），根域在每个域的祖先链里，
+            // 于是删域反而把授权「放大到全域」。见 ToolDescriptor.REVOKED_DOMAIN。
+            List<String> effective = kept.isEmpty()
+                    ? List.of(ToolDescriptor.REVOKED_DOMAIN)
+                    : kept;
+            if (kept.isEmpty()) {
+                log.warn("[工具注册] 工具 {} 的全部域声明（{}）已随删域被撤销，"
+                                + "该工具当前对任何域都不可见；作者重新声明域并重启/重新注册后自动恢复",
+                        entry.getKey(), descriptor.domains());
+            }
+            // 副本列表与执行体原样保留：这里只改这个工具对哪些域可见，不碰它还能不能被调用
             tools.computeIfPresent(entry.getKey(), (name, old) -> new Registered(
                     new ToolDescriptor(descriptor.name(), descriptor.description(), descriptor.category(),
                             descriptor.version(), descriptor.sideEffect(), descriptor.idempotent(),
-                            descriptor.toModel(), descriptor.params(), kept, descriptor.approval(),
+                            descriptor.toModel(), descriptor.params(), effective, descriptor.approval(),
                             descriptor.source()),
                     old.specification(), old.executor(), old.endpoints()));
         }

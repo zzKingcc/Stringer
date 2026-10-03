@@ -352,7 +352,7 @@ Console.renderSidebar('models');
 
         var test = box.querySelector('[data-test]');
         if (test) {
-            test.addEventListener('click', function () { testProfile(test.getAttribute('data-test')); });
+            test.addEventListener('click', function () { testProfile(test.getAttribute('data-test'), test); });
         }
         var del = box.querySelector('[data-del]');
         if (del) {
@@ -467,7 +467,7 @@ Console.renderSidebar('models');
             b.addEventListener('click', function () { openProfileEdit(b.getAttribute('data-edit')); });
         });
         box.querySelectorAll('button[data-test]').forEach(function (b) {
-            b.addEventListener('click', function () { testProfile(b.getAttribute('data-test')); });
+            b.addEventListener('click', function () { testProfile(b.getAttribute('data-test'), b); });
         });
         box.querySelectorAll('button[data-del]').forEach(function (b) {
             b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
@@ -760,20 +760,47 @@ Console.renderSidebar('models');
             .catch(function (e) { showResult(false, '保存失败：' + e.message); });
     }
 
+    /* 把探测结果拼成一段人能读的摘要。
+       为什么必须显式回显：探测的产出是"实测到了什么"，而卡片只画端点族 / 模态 / 能力。
+       对向量模型来说探测完仍是 ["embedding"]，卡片渲染结果与探测前**一模一样** ——
+       只刷新卡片等于什么都没发生，用户会以为按钮坏了。 */
+    function probeSummary(r) {
+        function labels(list, map) {
+            var names = (list || []).map(function (k) { return map[k] || k; });
+            return names.length ? names.join('、') : '（无）';
+        }
+        return '端点族：' + labels(r.endpoints, EP_LABEL)
+            + '\n输入模态：' + labels(r.input, MOD_LABEL)
+            + '\n输出模态：' + labels(r.output, MOD_LABEL)
+            + '\n布尔能力：' + labels(r.capabilities, CAP_LABEL)
+            + (r.dimension == null ? '' : '\n向量维度：' + r.dimension);
+    }
+
     /* ---------- 测试 ---------- */
     /* 卡片上的「测试」= 用档案里已存的配置重新探测，结果写回档案 → 卡片标签随之刷新。
 
        别名必须走查询串而不是路径段：别名由模型名派生，模型名常含 `/`
        （如 nvidia/nemotron-3-embed-1b:free）。编码成 %2F 放进路径时，Tomcat 默认
        ALLOW_ENCODED_SLASH=false 会在解码阶段直接回 400 HTML，请求到不了后端 ——
-       表现就是"探测失败：返回 400 且不是 JSON"。 */
-    function testProfile(alias) {
+       表现就是"探测失败：返回 400 且不是 JSON"。
+
+       成功与失败都必须有可见反馈：探测可能耗时数秒，没有"探测中…"会让人以为没点上；
+       成功了不回显结果，又会让人以为按钮没反应。 */
+    function testProfile(alias, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = '探测中…'; }
         Console.jsonRequest('/admin/model-profiles/probe-saved?alias=' + encodeURIComponent(alias), 'POST')
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '探测失败'); }
-                return loadProfiles();
+                /* 带上 r 往后传：卡片刷完之后还要用它回显结果 */
+                return loadProfiles().then(function () { return r; });
             })
-            .catch(function (e) { alert('探测失败：' + e.message); });
+            .then(function (r) {
+                alert('档案 ' + alias + ' 探测完成\n\n' + probeSummary(r));
+            })
+            .catch(function (e) { alert('探测失败：' + e.message); })
+            /* 被刷新掉的旧按钮已经脱离文档，这里恢复不到也无妨（新卡片上的按钮本就是可用的）；
+               真正需要它的是失败路径 —— 那时不会重渲染，不恢复就再也点不动了。 */
+            .then(function () { if (btn) { btn.disabled = false; btn.textContent = '测试'; } });
     }
 
     /* 删除向量档案就是删档案本身（与对话档案同一条路径）；

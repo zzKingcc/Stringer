@@ -20,18 +20,35 @@
         </div>
 
         <div class="info-box">
-            <div class="line"><b>接入模型</b> —— 点右上角「添加模型」登记一个连接。</div>
+            <div class="line"><b>接入模型</b> —— 点右上角「添加模型」登记一个连接，添加时会自动探测模型类型并归入下方对应分段。</div>
             <div class="line">配置文件：<span class="mono" id="settingsFileHint">—</span></div>
         </div>
 
-        <!-- ============ 模型卡片列表：一个模型一张卡片 ============ -->
+        <!-- ============ 分段一：向量模型（全局唯一一个，全部域共享） ============ -->
+        <div class="seg">
+            <h3>向量模型</h3>
+            <span class="seg-note">全局只能选一个，所有域共用；知识库的灌库与向量检索都走它</span>
+            <span class="spacer"></span>
+            <button class="ghost" id="addEmbeddingBtn">+ 添加向量模型</button>
+        </div>
+        <div id="embeddingList">
+            <div class="card perm-none">加载中…</div>
+        </div>
+
+        <!-- ============ 分段二：对话模型（可多个，按域绑定） ============ -->
+        <div class="seg">
+            <h3>对话模型</h3>
+            <span class="seg-note">可以有多个；在「域空间」页把某个模型绑给域</span>
+            <span class="spacer"></span>
+            <button class="ghost" id="addChatBtn">+ 添加对话模型</button>
+        </div>
         <div id="modelList">
             <div class="card perm-none">加载中…</div>
         </div>
 
         <!-- ============ 添加 / 编辑模型：遮罩层弹窗 ============
-             MODE 三态：profile（自定义模型档案）/ chat（对话模型）/ embedding（向量模型）
-             字段按模式显隐（见 openModal） -->
+             只有一种表单：编辑一份模型档案。向量模型不是独立表单 ——
+             它是「被选中的那份embedding 档案」，配置组按探测出的端点自适应显隐。 -->
         <div class="modal-mask" id="profileModal" hidden>
             <div class="modal-panel" role="dialog" aria-modal="true"
                  aria-labelledby="profileModalTitle">
@@ -51,7 +68,6 @@
                 <div class="field" id="fBaseUrl">
                     <label>服务商地址（OpenAI 兼容 baseUrl）</label>
                     <input id="pfBaseUrl" class="mono" placeholder="https://api.example.com/v1">
-                    <div class="help" id="hBaseUrl" hidden></div>
                 </div>
 
                 <div class="row">
@@ -121,19 +137,23 @@
 <script src="assets/console.js"></script>
 <script>
     /* ============ 模型设置 ============
-       一个模型一张卡片：配置文件（config/llm-settings.json）里的「对话模型 / 向量模型」两张，
-       外加用户自建的模型档案。右上角「添加模型」→ 遮罩层弹窗。
-       域 → 模型的绑定在「域空间」页操作。 */
-    Console.renderSidebar('models');
+   分两段：
+     · 向量模型 —— 全局只能选一个，所有域共用；没有配置时显示空状态，只给一个添加按钮
+     · 对话模型 —— 可以有多个，按域绑定
+   添加模型时统一走右上角「添加模型」/各段的添加按钮，由探测结果自动归入对应分段。
+   域 → 对话模型的绑定在「域空间」页操作。 */
+Console.renderSidebar('models');
 
     var PROFILES = [];
-    var SETTINGS = null;              /* /admin/settings：对话 / 向量 两个模型的配置 */
+    var EMBEDDING = null;              /* 向量模型单选状态（来自 /admin/model-profiles） */
+    var CANDIDATES = [];/* 可选作向量模型的档案 */
+    var SETTINGS = null;               /* /admin/settings：对话 / 向量 两组部署配置（yaml 兜底） */
 
-    /* 弹窗模式：profile=自建档案 / chat=对话模型 / embedding=向量模型 */
+    /* 表单只有一种：编辑一份模型档案（MODE 恒为 profile，保留变量只为 openModal 内赋值处自洽）。
+       向量模型不是独立表单，它是「被选中的那份embedding 档案」。 */
     var MODE = 'profile';
-    var EDIT_ALIAS = null;            /* 正在编辑的档案别名（别名已不在表单里，编辑时靠它定位） */
-
-    /* 当前表单探测到的能力画像：端点族 / 输入模态 / 输出模态 / 布尔能力（都可多选） */
+    var ADD_KIND = null;                /* 从哪个分段进来的（chat/embedding）：只影响模型名候选池从哪个端点拉 */
+    var EDIT_ALIAS = null;              /* 正在编辑的档案别名（别名已不在表单里，编辑时靠它定位） */
     var PFEPS = [];
     var PFIN = [];
     var PFOUT = [];
@@ -168,6 +188,14 @@
     function loadProfiles() {
         return Console.request('/admin/model-profiles').then(function (r) {
             PROFILES = (r && r.profiles) || [];
+            EMBEDDING = {
+                alias: (r && r.embeddingAlias) || null,
+                configured: !!(r && r.embeddingConfigured),
+                modelName: (r && r.embeddingModelName) || null,
+                dimensions: (r && r.embeddingDimensions) == null ? null : r.embeddingDimensions,
+                source: (r && r.embeddingSource) || null
+            };
+            CANDIDATES = (r && r.embeddingCandidates) || [];
             renderProfiles();
         }).catch(function (e) {
             pfEl('modelList').innerHTML = '<div class="card" style="color:var(--red);">'
@@ -229,76 +257,185 @@
             + tagList(PFCAPS, CAP_LABEL);
     }
 
-    function builtinEmbeddingCard(s) {
-        var base = s.embeddingBaseUrl
-            ? '<span class="mono">' + Console.escapeHtml(s.embeddingBaseUrl) + '</span>'
-            : '<span class="perm-none">未配置</span>';
-        return '<section class="card model-card">'
+    /* ============ 分段一：向量模型 ============ */
+    function isEmbeddingProfile(p) {
+        return (p.endpoints || []).indexOf('embedding') >= 0;
+    }
+    function isChatProfile(p) {
+        return (p.endpoints || []).indexOf('chat') >= 0;
+    }
+
+    /* 没配置时的空状态：一个虚线框 + 一句说明 + 一个添加按钮。
+       刻意不摆可编辑表单框 —— 没有配置时最该做的是说清"还没有"，而不是给一个
+       不知道该填什么的空输入框在那里等着被填错。 */
+    function embeddingEmptyBox() {
+        return '<div class="empty-box">'
+            + '<div class="empty-title">尚未配置向量模型</div>'
+            + '<div class="empty-sub">知识库的文档向量化与向量检索都依赖它；<br>'
+            + 'BM25 关键词检索不依赖向量模型，未配置时那条通道仍可用。</div>'
+            + '<button class="btn-primary" data-add-embedding>+ 添加向量模型</button>'
+            + '</div>';
+    }
+
+    function embeddingCard() {
+        var alias = EMBEDDING.alias;
+        var profile = alias ? PROFILES.filter(function (p) { return p.alias === alias; })[0] : null;
+        var ready = EMBEDDING.configured;
+        var options = CANDIDATES.map(function (p) {
+            return '<option value="' + Console.escapeHtml(p.alias) + '"'
+                + (p.alias === alias ? ' selected' : '') + '>'
+                + Console.escapeHtml(p.modelName || p.alias)
+                + (p.dimensions == null ? '（维度未知）' : '（' + p.dimensions + ' 维）')
+                + '</option>';
+        }).join('');
+
+        return '<section class="card model-card emb">'
             + '<header class="card-head">'
             +   '<span class="model-dot"></span>'
-            +   '<h2>' + modelTitle(s.embeddingModelName) + '</h2>'
-            +   tagList(s.embeddingCapabilities, CAP_LABEL)
-            +   '<span class="mbadge ' + (s.embeddingConfigured ? 'ok' : 'off') + '">'
-            +      (s.embeddingConfigured ? '已就绪' : '未配置') + '</span>'
+            +   '<h2>' + modelTitle(EMBEDDING.modelName) + '</h2>'
+            +   '<span class="mbadge ' + (ready ? 'ok' : 'off') + '">'
+            +      (ready ? '已就绪' : '不可用') + '</span>'
             +   '<span class="spacer"></span>'
-            +   '<button class="ghost" data-edit-builtin="embedding">编辑</button>'
-            +   '<button class="ghost" data-del-builtin="embedding">删除</button>'
+            +   '<button class="ghost" data-test="' + Console.escapeHtml(alias) + '">测试</button>'
+            +   '<button class="ghost" data-del="' + Console.escapeHtml(alias) + '">删除</button>'
             + '</header>'
             + '<div class="model-meta">'
-            +   kv('服务商地址', base)
-            +   kv('向量维度', s.embeddingDimensions == null
-                    ? '<span class="perm-none">按模型默认</span>' : s.embeddingDimensions)
-            +   kv('API Key', s.embeddingApiKeyMasked
-                    ? '<span class="mono">' + Console.escapeHtml(s.embeddingApiKeyMasked) + '</span>'
-                    : '<span class="perm-none">未配置</span>')
+            +   kv('向量维度', EMBEDDING.dimensions == null
+                    ? '<span class="perm-none">按模型默认</span>' : EMBEDDING.dimensions + '')
+            +   kv('作用范围', '<span class="perm-none">全部域共享</span>')
+            +   (profile && profile.apiKeyMasked
+                ? kv('API Key', '<span class="mono">' + Console.escapeHtml(profile.apiKeyMasked) + '</span>')
+                : '')
+            +   (ready ? '' : kv('说明', '<span style="color:var(--amber);">'
+                    + (profile ? '该档案已不可用（可能已删除或服务不可达）'
+                               : '已选中的档案不可用')
+                    + '，知识库灌库与向量检索已停用</span>'))
+            + '</div>'
+            + '<div class="card-foot">'
+            +   '<span class="hint" style="flex:1 1 320px;">切换向量模型会让已灌库的向量作废，'
+            +     '届时需选择「用新向量重灌」或「丢弃旧内容」。</span>'
+            +   '<select id="embSelect" class="mono" style="min-width:220px;"'
+            +     + (CANDIDATES.length ? '' : ' disabled') + '>'
+            +     '<option value="">— 选择向量模型 —</option>' + options
+            +   '</select>'
+            +   '<button class="sec" id="embApplyBtn"'
+            +     + (CANDIDATES.length ? '' : ' disabled') + '>应用</button>'
             + '</div>'
             + '</section>';
     }
 
+    function renderEmbedding() {
+        var box = pfEl('embeddingList');
+        box.innerHTML = EMBEDDING.alias ? embeddingCard() : embeddingEmptyBox();
+
+        var add = box.querySelector('[data-add-embedding]');
+        if (add) { add.addEventListener('click', function () { openAdd('embedding'); }); }
+
+        var test = box.querySelector('[data-test]');
+        if (test) {
+            test.addEventListener('click', function () { testProfile(test.getAttribute('data-test')); });
+        }
+        var del = box.querySelector('[data-del]');
+        if (del) {
+            del.addEventListener('click', function () { deleteProfile(del.getAttribute('data-del')); });
+        }
+        var applyBtn = pfEl('embApplyBtn');
+        if (applyBtn) {
+            applyBtn.addEventListener('click', function () { applyEmbedding(); });
+        }
+    }
+
+    /* 切换向量模型：有已灌库内容时先要用户表态（重灌 / 丢弃），服务端会再校验一次 */
+    function applyEmbedding() {
+        var alias = pfEl('embSelect').value;
+        var applyBtn = pfEl('embApplyBtn');
+        if (applyBtn) { applyBtn.disabled = true; }
+        Console.jsonRequest('/admin/embedding-model', 'PUT', { alias: alias })
+            .then(function (r) {
+                if (r && r.requiresConfirmation) {
+                    var msg = r.message || '知识库已有内容，换向量模型需要选择处理方式。';
+                    /* 两个选项：保留原文重灌 / 丢弃旧内容。取消则不做任何改动。 */
+                    var useRebuild = window.confirm(msg
+                        + '\n\n点【确定】= 用新向量重灌（推荐，文档无需重新上传）'
+                        + '\n点【取消】= 丢弃全部知识库内容（之后需自行重新上传）'
+                        + '\n\n若想先不动，请直接关掉本页面。');
+                    if (!useRebuild) {
+                        var purge = window.confirm(
+                            '请确认：是否<b>丢弃</b>全部知识库内容？\n\n'
+                            + '点【确定】= 全部删除，之后需重新上传文档\n'
+                            + '点【取消】= 本次不做任何改动，向量模型保持原样');
+                        if (!purge) {
+                            loadProfiles();
+                            return;
+                        }
+                        return Console.jsonRequest('/admin/embedding-model', 'PUT',
+                            { alias: alias, mode: 'purge' });
+                    }
+                    return Console.jsonRequest('/admin/embedding-model', 'PUT',
+                        { alias: alias, mode: 'rebuild' });
+                }
+                if (r && r.code && r.code !== 0) {
+                    throw new Error(r.detail || r.error || r.message || '切换失败');
+                }
+                return r;
+            })
+            .then(function (r) {
+                if (!r) { return; }
+                if (r.code && r.code !== 0) {
+                    throw new Error(r.detail || r.error || r.message || '切换失败');
+                }
+                alert(r.message || '已切换');
+                loadProfiles();
+                loadSettings();
+            })
+            .catch(function (e) { alert('切换失败：' + e.message); })
+            .then(function () { if (applyBtn) { applyBtn.disabled = false; } });
+    }
+
     function renderProfiles() {
         var box = pfEl('modelList');
-        var html = '';
+        renderEmbedding();
 
-        /* 配置文件里的向量模型（知识库 / 检索这条链路），按「模型：name」展示 */
-        if (SETTINGS) { html += builtinEmbeddingCard(SETTINGS); }
+        /* 对话段：只有走chat 端点的档案。向量档案不在这里出现 —— 它由向量段单独管。 */
+        var chatProfiles = PROFILES.filter(isChatProfile);
+        if (!chatProfiles.length) {
+            box.innerHTML = '<div class="empty-box">'
+                + '<div class="empty-title">尚未配置对话模型</div>'
+                + '<div class="empty-sub">对话模型需要绑定到域才能被调用，绑定在「域空间」页操作。</div>'
+                + '<button class="btn-primary" data-add-chat>+ 添加对话模型</button>'
+                + '</div>';
+        } else {
+            box.innerHTML = chatProfiles.map(function (p) {
+                var used = (p.usedByDomains || []).length
+                    ? p.usedByDomains.map(function (d) {
+                        return '<span class="tag perm">' + Console.escapeHtml(d) + '</span>';
+                      }).join('')
+                    : '<span class="perm-none">未绑定任何域</span>';
+                return '<section class="card model-card">'
+                    + '<header class="card-head">'
+                    +   '<span class="model-dot"></span>'
+                    +   '<h2>' + modelTitle(p.modelName || p.alias) + '</h2>'
+                    +   dupBadge(p)
+                    +   cardTags(p)
+                    +   '<span class="spacer"></span>'
+                    +   '<button class="ghost" data-edit="' + Console.escapeHtml(p.alias) + '">编辑</button>'
+                    +   '<button class="ghost" data-test="' + Console.escapeHtml(p.alias) + '">测试</button>'
+                    +   '<button class="ghost" data-del="' + Console.escapeHtml(p.alias) + '">删除</button>'
+                    + '</header>'
+                    + '<div class="model-meta">'
+                    +   '<div><span class="k">输出模态</span>'
+                    +      (tagList(p.output, MOD_LABEL) || '<span class="perm-none">—</span>') + '</div>'
+                    +   '<div><span class="k">服务商地址</span><span class="mono">'
+                    +      Console.escapeHtml(p.baseUrl || '-') + '</span></div>'
+                    +   '<div><span class="k">被哪些域使用</span>' + used + '</div>'
+                    + '</div>'
+                    + '</section>';
+            }).join('');
+        }
 
-        PROFILES.forEach(function (p) {
-            var used = (p.usedByDomains || []).length
-                ? p.usedByDomains.map(function (d) {
-                    return '<span class="tag perm">' + Console.escapeHtml(d) + '</span>';
-                  }).join('')
-                : '<span class="perm-none">未绑定任何域</span>';
-            html += '<section class="card model-card">'
-                + '<header class="card-head">'
-                +   '<span class="model-dot"></span>'
-                +   '<h2>' + modelTitle(p.modelName || p.alias) + '</h2>'
-                +   dupBadge(p)
-                +   cardTags(p)
-                +   '<span class="spacer"></span>'
-                +   '<button class="ghost" data-edit="' + Console.escapeHtml(p.alias) + '">编辑</button>'
-                +   '<button class="ghost" data-test="' + Console.escapeHtml(p.alias) + '">测试</button>'
-                +   '<button class="ghost" data-del="' + Console.escapeHtml(p.alias) + '">删除</button>'
-                + '</header>'
-                + '<div class="model-meta">'
-                +   '<div><span class="k">输出模态</span>'
-                +      (tagList(p.output, MOD_LABEL) || '<span class="perm-none">—</span>') + '</div>'
-                +   '<div><span class="k">服务商地址</span><span class="mono">'
-                +      Console.escapeHtml(p.baseUrl || '-') + '</span></div>'
-                + (p.dimensions == null ? ''
-                    : '<div><span class="k">向量维度</span>' + p.dimensions + '</div>')
-                +   '<div><span class="k">被哪些域使用</span>' + used + '</div>'
-                + '</div>'
-                + '</section>';
-        });
+        var addChat = box.querySelector('[data-add-chat]');
+        if (addChat) { addChat.addEventListener('click', function () { openAdd('chat'); }); }
 
-        box.innerHTML = html;
-
-        box.querySelectorAll('button[data-edit-builtin]').forEach(function (b) {
-            b.addEventListener('click', function () { openBuiltin(b.getAttribute('data-edit-builtin')); });
-        });
-        box.querySelectorAll('button[data-del-builtin]').forEach(function (b) {
-            b.addEventListener('click', function () { deleteBuiltin(b.getAttribute('data-del-builtin')); });
-        });
         box.querySelectorAll('button[data-edit]').forEach(function (b) {
             b.addEventListener('click', function () { openProfileEdit(b.getAttribute('data-edit')); });
         });
@@ -309,27 +446,17 @@
             b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
         });
 
-        /* 页头右侧数量统计：向量一个（内置配置）+ 自建模型数 */
-        pfEl('modelCount').textContent = ((SETTINGS ? 1 : 0) + PROFILES.length) + ' 个模型';
+        /* 页头数量：向量最多 1 个 + 对话模型数 */
+        pfEl('modelCount').textContent = ((EMBEDDING.alias ? 1 : 0) + chatProfiles.length) + ' 个模型';
     }
 
     /* ---------- 弹窗：开 / 关 / 重置 ---------- */
-    function openModal(mode, title) {
-        MODE = mode;
-        if (mode === 'chat' || mode === 'embedding') {
-            PFEPS = [mode];
-            PFIN = ['text'];
-            PFOUT = (mode === 'embedding') ? ['embedding'] : ['text'];
-            PFCAPS = [];
-            PFKNOWN = true;
-        }
+    /* 弹窗只有一种形态：编辑一份模型档案。向量模型不再是独立表单，
+       它就是「档案里选中了哪一个 embedding 档案」，所以 MODE 恒为 profile。 */
+    function openModal(title) {
+        MODE = 'profile';
         pfEl('profileModalTitle').textContent = title;
-        var h = pfEl('hBaseUrl');
-        h.hidden = (mode !== 'embedding');
-        h.textContent = (mode === 'embedding') ? '留空则复用对话模型地址。' : '';
-        pfEl('modalHint').textContent = (mode === 'profile')
-            ? ''
-            : '测试会真实调用一次服务商接口；保存后立即生效，无需重启。';
+        pfEl('modalHint').textContent = '测试会真实调用一次服务商接口；保存后立即生效，无需重启。';
         combo.items = [];
         comboClose();
         applyProbeFields();
@@ -389,9 +516,11 @@
         pfEl('pfModelName').value = id;
         comboClose();
     }
-    /* 目录接口吃的是 LlmSettings 形状：按当前模式映射到 chat* / embedding* */
+    /* 目录接口吃的是 LlmSettings 形状。表单只有一份（MODE恒为 profile），
+       所以用ADD_KIND 记「从哪个分段进来的」来选端点 —— 它只影响候选池从哪个端点拉，
+       不影响保存，归类一律以探测结果为准。 */
     function catalogPayload() {
-        return (MODE === 'embedding')
+        return (ADD_KIND === 'embedding')
             ? { embeddingBaseUrl: val('pfBaseUrl'), embeddingApiKey: val('pfApiKey') }
             : { chatBaseUrl: val('pfBaseUrl'), chatApiKey: val('pfApiKey') };
     }
@@ -406,7 +535,7 @@
         combo.loading = true;
         comboState('加载中…');
         comboOpen();
-        Console.jsonRequest('/admin/models?type=' + (MODE === 'embedding' ? 'embedding' : 'chat'),
+        Console.jsonRequest('/admin/models?type=' + (ADD_KIND === 'embedding' ? 'embedding' : 'chat'),
                             'POST', catalogPayload())
             .then(function (data) {
                 if (!data || !data.success) {
@@ -501,29 +630,20 @@
             .then(function () { btn.disabled = false; });
     }
 
-    function openAdd() {
+    /* 添加：kind 只是给标题/预置用（点分段里的按钮进来），
+       真正的归类一律以探测结果为准 —— 探测出 embedding 就归向量段。
+       MODE 恒为 profile：不管从哪个分段进来，存的都是同一份档案。 */
+    function openAdd(kind) {
         resetForm();
         EDIT_ALIAS = null;
+        ADD_KIND = kind || null;
         PFEPS = [];
         PFIN = [];
         PFOUT = [];
         PFCAPS = [];
         PFKNOWN = false;
-        openModal('profile', '添加模型');
-        pfEl('pfBaseUrl').focus();
-    }
-    function openBuiltin(type) {
-        if (!SETTINGS) { return; }
-        resetForm();
-        EDIT_ALIAS = null;
-        if (type === 'embedding') {
-            pfEl('pfBaseUrl').value = SETTINGS.embeddingBaseUrl || '';
-            pfEl('pfModelName').value = SETTINGS.embeddingModelName || '';
-            pfEl('pfDimensions').value = SETTINGS.embeddingDimensions == null ? '' : SETTINGS.embeddingDimensions;
-            openModal('embedding', '编辑向量模型');
-            PFCAPS = SETTINGS.embeddingCapabilities || [];
-        }
-        applyProbeFields();      /* openModal 里用空能力刷过一次，这里按已存能力再刷一遍 */
+        openModal(kind === 'embedding' ? '添加向量模型'
+                 : (kind === 'chat' ? '添加对话模型' : '添加模型'));
         pfEl('pfBaseUrl').focus();
     }
     function openProfileEdit(alias) {
@@ -531,6 +651,7 @@
         if (!p) { return; }
         resetForm();
         EDIT_ALIAS = alias;                 /* 别名不再可改，编辑时沿用原值 */
+        ADD_KIND = isEmbeddingProfile(p) ? 'embedding' : 'chat';
         PFEPS = p.endpoints || [];
         PFIN = p.input || [];
         PFOUT = p.output || [];
@@ -541,7 +662,7 @@
         pfEl('pfTemperature').value = (p.temperature == null ? '' : p.temperature);
         pfEl('pfMaxTokens').value = (p.maxTokens == null ? '' : p.maxTokens);
         pfEl('pfDimensions').value = (p.dimensions == null ? '' : p.dimensions);
-        openModal('profile', '编辑模型');
+        openModal('编辑模型');
         showResult(true, '');
     }
 
@@ -564,84 +685,12 @@
         box.textContent = message;
     }
 
-    /* ---------- 保存 ---------- */
-    /* 保存对话 / 向量模型：/admin/settings 是整对象覆盖，
-       所以另一组用当前已保存值占位，避免把对方配置抹掉；API Key 传 null = 不修改。 */
-    function settingsPayload() {
-        var p = {
-            chatBaseUrl: SETTINGS.chatBaseUrl || null,
-            chatApiKey: null,
-            chatModelName: SETTINGS.chatModelName || null,
-            chatTemperature: SETTINGS.chatTemperature == null ? null : SETTINGS.chatTemperature,
-            chatMaxTokens: SETTINGS.chatMaxTokens == null ? null : SETTINGS.chatMaxTokens,
-            chatCapabilities: SETTINGS.chatCapabilities || [],
-            embeddingBaseUrl: SETTINGS.embeddingBaseUrl || null,
-            embeddingApiKey: null,
-            embeddingModelName: SETTINGS.embeddingModelName || null,
-            embeddingDimensions: SETTINGS.embeddingDimensions == null ? null : SETTINGS.embeddingDimensions,
-            embeddingCapabilities: SETTINGS.embeddingCapabilities || []
-        };
-        if (MODE === 'chat') {
-            p.chatBaseUrl = val('pfBaseUrl');
-            p.chatApiKey = val('pfApiKey');
-            p.chatModelName = val('pfModelName');
-            p.chatTemperature = num('pfTemperature');
-            p.chatMaxTokens = num('pfMaxTokens');
-            p.chatCapabilities = PFCAPS;
-        } else {
-            p.embeddingBaseUrl = val('pfBaseUrl');
-            p.embeddingApiKey = val('pfApiKey');
-            p.embeddingModelName = val('pfModelName');
-            p.embeddingDimensions = num('pfDimensions');
-            p.embeddingCapabilities = PFCAPS;
-        }
-        return p;
-    }
-
-    function saveSettings(btn, confirmedRebuild) {
-        var handedOver = false;
-        if (btn) { btn.disabled = true; }
-        showResult(true, '保存中…');
-        Console.jsonRequest('/admin/settings' + (confirmedRebuild ? '?rebuildIndex=true' : ''),
-                            'POST', settingsPayload())
-            .then(function (data) {
-                if (!data.success) {
-                    /* 向量维度变了：ES 索引维度建好后不可改，必须先重建索引 */
-                    if (data.requiresRebuild) {
-                        var ok = window.confirm(
-                            '⚠️ 向量维度将由 ' + data.indexDimension + ' 变为 ' + data.newDimension
-                            + '，与已建好的知识库索引不一致。\n\n'
-                            + 'ES 索引的向量维度建好后无法修改，必须先重建索引，'
-                            + '否则写入会被 ES 以维度不符拒绝。\n\n'
-                            + '是否保存并立即重建知识库索引？\n'
-                            + '（重建会删除并清空现有索引，已有文档需重新上传；取消则本次保存不生效。）');
-                        if (ok) {
-                            handedOver = true;
-                            saveSettings(btn, true);
-                            return;
-                        }
-                        showResult(false, '已取消，本次未保存。\n' + (data.error || ''));
-                        return;
-                    }
-                    /* 配置已落盘、只是索引重建失败：状态照实刷新 */
-                    if (data.saved) {
-                        showResult(false, '⚠️ ' + data.error);
-                        loadSettings();
-                        return;
-                    }
-                    showResult(false, '保存失败：' + (data.error || '未知原因'));
-                    return;
-                }
-                showResult(true, '已保存并立即生效');
-                loadSettings().then(function () { closeModal(); });
-            })
-            .catch(function (e) { showResult(false, '请求失败：' + e.message); })
-            .then(function () { if (!handedOver && btn) { btn.disabled = false; } });
-    }
-
+    /* ---------- 保存 ----------
+       向量模型不再是独立表单：它就是「档案里选中了哪一个 embedding 档案」，
+       所以只有一条保存路径 —— POST /admin/model-profiles。
+       llm-settings.json 的 embedding* 仅在「一个都没选」时作 yaml 兜底，不在这里编辑。 */
     function save() {
         if (!val('pfApiKey')) { showResult(false, '请填写 API Key'); return; }
-        if (MODE !== 'profile') { saveSettings(pfEl('saveProfileBtn'), false); return; }
         var modelName = pfEl('pfModelName').value.trim();
         if (!modelName) { showResult(false, '请先填写模型名'); return; }
         /* 别名已从表单移除：编辑沿用原别名，新建按模型名派生 */
@@ -663,7 +712,18 @@
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '保存失败'); }
                 closeModal();
-                loadProfiles();
+                return loadProfiles().then(function () {
+                    /* 新档案若是向量模型、且当前还没有选向量模型，直接问要不要启用 ——
+                       免得用户存完才发现还要去另一个下拉里手动选一次。 */
+                    var isEmb = (PFEPS || []).indexOf('embedding') >= 0;
+                    if (isEmb && !EMBEDDING.alias && EDIT_ALIAS === null) {
+                        if (window.confirm('已保存向量模型「' + modelName + '」。\n\n'
+                                + '向量模型全局只能选一个，是否现在就启用它？')) {
+                            pfEl('embSelect').value = alias;
+                            applyEmbedding();
+                        }
+                    }
+                });
             })
             .catch(function (e) { showResult(false, '保存失败：' + e.message); });
     }
@@ -679,35 +739,37 @@
             .catch(function (e) { alert('探测失败：' + e.message); });
     }
 
-    /* 内置卡的「删除」= 清空该套内置配置（内置是全局兜底，必须二次确认） */
-    function deleteBuiltin(kind) {
-        var label = (kind === 'embedding') ? '向量模型' : '对话模型';
-        if (!confirm('确认删除内置「' + label + '」？\n\n'
-                + '会清空它的服务商地址 / API Key / 模型名等配置。\n'
-                + '注意：内置是全局兜底 —— 清空后「未绑定任何模型」的域将没有可用模型。')) { return; }
-        Console.jsonRequest('/admin/settings/' + encodeURIComponent(kind), 'DELETE')
-            .then(function (r) {
-                if (r && (r.success === false || (r.code && r.code !== 0))) {
-                    throw new Error(r.error || r.detail || '删除失败');
-                }
-                return loadSettings();
-            })
-            .catch(function (e) { alert('删除失败：' + e.message); });
-    }
-
+    /* 删除向量档案就是删档案本身（与对话档案同一条路径）；
+       唯一差别是要提示「当前向量模型会被取消」，那段在 deleteProfile 里。 */
     function deleteProfile(alias) {
-        if (!confirm('确认删除模型 ' + alias + '？\n\n该模型会从所有域的绑定里一并移除（级联清理），'
-                + '这些域将立即变为「无可调用模型」。')) { return; }
+        var isEmbedding = PROFILES.filter(function (p) { return p.alias === alias; })[0];
+        var isEmb = isEmbedding && isEmbeddingProfile(isEmbedding);
+        var isCurrentEmbedding = isEmb && EMBEDDING.alias === alias;
+
+        var text = '确认删除模型 ' + alias + '？\n\n';
+        if (isCurrentEmbedding) {
+            text += '⚠️ 它正是当前向量模型，删除后向量配置会一并取消，'
+                + '知识库的灌库与向量检索将停用（已灌库的向量仍在索引里，需换模型后重灌）。\n\n';
+        } else if (isEmb) {
+            text += '它是一个向量档案，删除后需要重新选用向量模型。\n\n';
+        } else {
+            text += '该模型会从所有域的绑定里一并移除（级联清理），'
+                + '这些域将立即变为「无可调用模型」。\n\n';
+        }
+        if (!confirm(text)) { return; }
         Console.jsonRequest('/admin/model-profiles/' + encodeURIComponent(alias), 'DELETE')
             .then(function (r) {
                 if (r && r.code && r.code !== 0) { throw new Error(r.detail || r.error || '删除失败'); }
+                if (r && r.message) { alert(r.message); }
                 loadProfiles();
             })
             .catch(function (e) { alert('删除失败：' + e.message); });
     }
 
     /* ---------- 事件绑定 ---------- */
-    pfEl('addModelBtn').addEventListener('click', openAdd);
+    pfEl('addModelBtn').addEventListener('click', function () { openAdd(); });
+    pfEl('addEmbeddingBtn').addEventListener('click', function () { openAdd('embedding'); });
+    pfEl('addChatBtn').addEventListener('click', function () { openAdd('chat'); });
     pfEl('probeBtn').addEventListener('click', runProbe);
     pfEl('saveProfileBtn').addEventListener('click', save);
     pfEl('resetProfileFormBtn').addEventListener('click', resetForm);

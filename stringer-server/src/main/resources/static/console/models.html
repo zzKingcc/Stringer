@@ -52,7 +52,9 @@
 
         <!-- ============ 添加 / 编辑模型：遮罩层弹窗 ============
              只有一种表单：编辑一份模型档案。向量模型不是独立表单 ——
-             它是「被选中的那份embedding 档案」，配置组按探测出的端点自适应显隐。 -->
+             它是「被选中的那份 embedding 档案」。
+             类型 / 模态 / 能力由「读取提供商信息」（只读 /models，不发试探请求）+ 手工点选决定；
+             读不到就留空，不替用户猜。 -->
         <div class="modal-mask" id="profileModal" hidden>
             <div class="modal-panel" role="dialog" aria-modal="true"
                  aria-labelledby="profileModalTitle">
@@ -97,12 +99,20 @@
                     </div>
                 </div>
 
-                <div class="field" id="fProbe">
-                    <label>模型能力</label>
-                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                        <span id="pfTypeLabel"></span>
-                        <button type="button" class="sec" id="probeBtn">探测</button>
-                        <span class="hint" id="probeResult" style="margin:0;"></span>
+                <div class="field" id="fDeclare">
+                    <label>模型类型与模态（点一下切换选中）</label>
+                    <div class="chips" id="chipsEndpoints"></div>
+                    <div class="chips" id="chipsInput" style="margin-top:6px;"></div>
+                    <div class="chips" id="chipsOutput" style="margin-top:6px;"></div>
+                    <div class="chips" id="chipsCaps" style="margin-top:6px;"></div>
+                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                        <button type="button" class="sec" id="readBtn">读取提供商信息</button>
+                        <span class="hint" style="margin:0;">只读提供商的 /models，不发任何试探请求</span>
+                    </div>
+                    <div class="help" id="readResult"></div>
+                    <div class="help">
+                        类型只能来自提供商元数据或你在这里的声明；<b>读不到就留空，不会替你猜</b> ——
+                        猜成对话模型会让向量 / 生图模型被误用（能绑到域、却当不了向量模型）。
                     </div>
                 </div>
 
@@ -169,8 +179,7 @@ Console.renderSidebar('models');
     var PFEPS = [];
     var PFIN = [];
     var PFOUT = [];
-    var PFCAPS = [];
-    var PFKNOWN = false;
+    var PFCAPS = [];                /* 四项都是"声明"：来自元数据或用户点选，空 = 未声明 */
     /* 端点族 → 该端点下要展示的配置组。以后加音频 / 视频，就在这里加一条即可 */
     var EP_FIELDS = { chat: ['rowTempTokens'], embedding: ['fDimensions'] };
     /* 展示用的中文名 */
@@ -262,11 +271,47 @@ Console.renderSidebar('models');
         return n > 1 ? '<span class="mbadge mono">#' + n + '</span>' : '';
     }
 
-    /* 配置框按探测结果自适应：端点族与配置组都等探测之后才出现 */
-    function applyProbeFields() {
-        show('pfTypeLabel', PFKNOWN);
+    /* ---------- 声明区：类型 / 模态 / 能力 都靠点选 ----------
+       类型只能来自提供商元数据或用户声明，所以这里必须是<b>可编辑</b>的，
+       不能像以前那样只回显探测结果。 */
+
+    /* 可选的取值。刻意把每一类都列全（而不是"探到什么列什么"），
+       因为提供商元数据经常只说一部分，剩下的必须由人补。 */
+    var EP_KEYS = ['chat', 'embedding', 'rerank', 'images', 'tts', 'asr', 'video'];
+    var CAP_KEYS = ['streaming', 'tools'];
+    var MOD_IN_KEYS = ['text', 'image', 'audio', 'video', 'file'];
+    var MOD_OUT_KEYS = ['text', 'image', 'audio', 'video', 'embedding'];
+
+    function toggleKey(list, key) {
+        var out = (list || []).slice();
+        var i = out.indexOf(key);
+        if (i >= 0) { out.splice(i, 1); } else { out.push(key); }
+        return out;
+    }
+
+    /* 并集：元数据读到的补进来，用户已点选的不动 —— 提供商只给一部分信息是常态 */
+    function unionKeys(a, b) {
+        var out = (a || []).slice();
+        (b || []).forEach(function (k) { if (out.indexOf(k) < 0) { out.push(k); } });
+        return out;
+    }
+
+    function chips(elId, keys, labelMap, selected, onToggle) {
+        var box = pfEl(elId);
+        box.innerHTML = keys.map(function (k) {
+            var on = (selected || []).indexOf(k) >= 0;
+            return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-key="'
+                + Console.escapeHtml(k) + '">' + Console.escapeHtml(labelMap[k] || k) + '</button>';
+        }).join('');
+        box.querySelectorAll('.chip').forEach(function (b) {
+            b.addEventListener('click', function () { onToggle(b.getAttribute('data-key')); });
+        });
+    }
+
+    /* 配置组按声明出来的端点族自适应：对话 → 温度 / 上限 token，向量 → 维度 */
+    function applyTypeGroups() {
         var groups = [];
-        PFEPS.forEach(function (ep) {
+        (PFEPS || []).forEach(function (ep) {
             (EP_FIELDS[ep] || []).forEach(function (g) {
                 if (groups.indexOf(g) < 0) { groups.push(g); }
             });
@@ -274,9 +319,21 @@ Console.renderSidebar('models');
         ['rowTempTokens', 'fDimensions'].forEach(function (id) {
             show(id, groups.indexOf(id) >= 0);
         });
-        pfEl('pfTypeLabel').innerHTML = tagList(PFEPS, EP_LABEL)
-            + tagList(PFKNOWN ? PFIN : [], MOD_LABEL)
-            + tagList(PFCAPS, CAP_LABEL);
+    }
+
+    function renderDeclared() {
+        chips('chipsEndpoints', EP_KEYS, EP_LABEL, PFEPS, function (k) {
+            PFEPS = toggleKey(PFEPS, k); renderDeclared(); applyTypeGroups();
+        });
+        chips('chipsInput', MOD_IN_KEYS, MOD_LABEL, PFIN, function (k) {
+            PFIN = toggleKey(PFIN, k); renderDeclared();
+        });
+        chips('chipsOutput', MOD_OUT_KEYS, MOD_LABEL, PFOUT, function (k) {
+            PFOUT = toggleKey(PFOUT, k); renderDeclared();
+        });
+        chips('chipsCaps', CAP_KEYS, CAP_LABEL, PFCAPS, function (k) {
+            PFCAPS = toggleKey(PFCAPS, k); renderDeclared();
+        });
     }
 
     /* ============ 分段一：向量模型 ============ */
@@ -327,7 +384,7 @@ Console.renderSidebar('models');
             : '<span class="mbadge ' + (ready ? 'ok' : 'off') + '">'
                 + (ready ? '已就绪' : '不可用') + '</span>';
         var actions = alias
-            ? '<button class="ghost" data-test="' + Console.escapeHtml(alias) + '">测试</button>'
+            ? '<button class="ghost" data-test="' + Console.escapeHtml(alias) + '">读取</button>'
                 + '<button class="ghost" data-del="' + Console.escapeHtml(alias) + '">删除</button>'
             : '';
 
@@ -381,7 +438,7 @@ Console.renderSidebar('models');
 
         var test = box.querySelector('[data-test]');
         if (test) {
-            test.addEventListener('click', function () { testProfile(test.getAttribute('data-test'), test); });
+            test.addEventListener('click', function () { rereadSaved(test.getAttribute('data-test'), test); });
         }
         var del = box.querySelector('[data-del]');
         if (del) {
@@ -466,6 +523,10 @@ Console.renderSidebar('models');
         } else {
             box.innerHTML = models.map(function (p) {
                 var chat = isChatProfile(p);
+                /* 类型未声明要显眼：这种档案绑不了域、也当不了向量模型。
+                   以前"空端点族"被默认补成 chat，于是它看着像对话模型却永远调不通。 */
+                var noType = !(p.endpoints || []).length
+                    ? '<span class="mbadge off">未声明类型</span>' : '';
                 /* 域绑定只对对话模型有意义（绑定接口会拒绝非对话档案），这里如实说明，
                    免得用户以为生图 / 语音模型也能绑到域上 */
                 var used = !chat
@@ -480,10 +541,11 @@ Console.renderSidebar('models');
                     +   '<span class="model-dot"></span>'
                     +   '<h2>' + modelTitle(p.modelName || p.alias) + '</h2>'
                     +   dupBadge(p)
+                    +   noType
                     +   cardTags(p)
                     +   '<span class="spacer"></span>'
                     +   '<button class="ghost" data-edit="' + Console.escapeHtml(p.alias) + '">编辑</button>'
-                    +   '<button class="ghost" data-test="' + Console.escapeHtml(p.alias) + '">测试</button>'
+                    +   '<button class="ghost" data-test="' + Console.escapeHtml(p.alias) + '">读取</button>'
                     +   '<button class="ghost" data-del="' + Console.escapeHtml(p.alias) + '">删除</button>'
                     + '</header>'
                     + '<div class="model-meta">'
@@ -506,7 +568,7 @@ Console.renderSidebar('models');
             b.addEventListener('click', function () { openProfileEdit(b.getAttribute('data-edit')); });
         });
         box.querySelectorAll('button[data-test]').forEach(function (b) {
-            b.addEventListener('click', function () { testProfile(b.getAttribute('data-test'), b); });
+            b.addEventListener('click', function () { rereadSaved(b.getAttribute('data-test'), b); });
         });
         box.querySelectorAll('button[data-del]').forEach(function (b) {
             b.addEventListener('click', function () { deleteProfile(b.getAttribute('data-del')); });
@@ -523,10 +585,11 @@ Console.renderSidebar('models');
     function openModal(title) {
         MODE = 'profile';
         pfEl('profileModalTitle').textContent = title;
-        pfEl('modalHint').textContent = '测试会真实调用一次服务商接口；保存后立即生效，无需重启。';
+        pfEl('modalHint').textContent = '保存后立即生效，无需重启；类型与模态由提供商元数据 + 你的声明共同决定。';
         combo.items = [];
         comboClose();
-        applyProbeFields();
+        renderDeclared();
+        applyTypeGroups();
         pfEl('profileModal').hidden = false;
         document.body.style.overflow = 'hidden';
     }
@@ -543,9 +606,9 @@ Console.renderSidebar('models');
         box.textContent = '';
         box.className = 'result';
         box.style.color = '';
-        var probeBox = pfEl('probeResult');
-        probeBox.textContent = '';
-        probeBox.style.color = '';
+        var readBox = pfEl('readResult');
+        readBox.textContent = '';
+        readBox.style.color = '';
     }
 
     /* ---------- 模型名下拉：从服务商拉候选（POST /admin/models） ---------- */
@@ -662,43 +725,46 @@ Console.renderSidebar('models');
         });
     })();
 
-    /* ---------- 探测类型：实测判定 chat / embedding（顺带得维度与能力） ---------- */
-    function probeSay(ok, text) {
-        var el = pfEl('probeResult');
+    /* ---------- 读取提供商信息：只读 /models，不发任何试探请求 ---------- */
+    function readSay(ok, text) {
+        var el = pfEl('readResult');
         el.textContent = text;
         el.style.color = ok ? '' : 'var(--red)';
     }
-    function runProbe() {
+    function readProviderInfo() {
         var baseUrl = (pfEl('pfBaseUrl').value || '').trim();
         var modelName = (pfEl('pfModelName').value || '').trim();
-        if (!baseUrl || !modelName) { probeSay(false, '请先填写服务商地址与模型名'); return; }
-        if (!val('pfApiKey')) { probeSay(false, '探测需要一个 API Key：请在左侧填写（编辑时也要重填）'); return; }
-        var btn = pfEl('probeBtn');
+        if (!baseUrl || !modelName) { readSay(false, '请先填写服务商地址与模型名'); return; }
+        if (!val('pfApiKey')) { readSay(false, '读取需要 API Key：请在上面填写（编辑时也要重填）'); return; }
+        var btn = pfEl('readBtn');
         btn.disabled = true;
-        probeSay(true, '探测中…（会发几次极短请求）');
-        Console.jsonRequest('/admin/model-profiles/probe', 'POST',
+        readSay(true, '读取中…');
+        Console.jsonRequest('/admin/model-profiles/inspect', 'POST',
                             { baseUrl: baseUrl, apiKey: val('pfApiKey'), modelName: modelName })
             .then(function (r) {
                 if (!r || r.code !== 0 || !r.success) {
-                    throw new Error(Console.sanitizeError((r && (r.detail || r.error)) || '探测失败'));
+                    throw new Error(Console.sanitizeError((r && (r.detail || r.error)) || '读取失败'));
                 }
-                PFEPS = r.endpoints || [];
-                PFIN = r.input || [];
-                PFOUT = r.output || [];
-                PFCAPS = r.capabilities || [];
-                PFKNOWN = true;
+                /* 并集填入：读到的补进来，你已经点选的不动。提供商只给一部分是常态，
+                   整体覆盖会把手工声明冲掉。 */
+                PFEPS = unionKeys(PFEPS, r.endpoints);
+                PFIN = unionKeys(PFIN, r.input);
+                PFOUT = unionKeys(PFOUT, r.output);
+                PFCAPS = unionKeys(PFCAPS, r.capabilities);
                 if (r.dimension != null && !pfEl('pfDimensions').value) {
                     pfEl('pfDimensions').value = r.dimension;
                 }
-                applyProbeFields();
-                probeSay(true, '');      /* 结果已由「模型类型 / 模型能力」呈现，不再附加解释 */
+                renderDeclared();
+                applyTypeGroups();
+                /* 把"读到了什么 / 为什么读不到"如实展示 —— 读不到时用户得知道要自己声明 */
+                readSay(true, r.message || '已读取');
             })
-            .catch(function (e) { probeSay(false, e.message); })
+            .catch(function (e) { readSay(false, e.message); })
             .then(function () { btn.disabled = false; });
     }
 
-    /* 添加：kind 只是给标题/预置用（点分段里的按钮进来），
-       真正的归类一律以探测结果为准 —— 探测出 embedding 就归向量段。
+    /* 添加：kind 只影响标题与预置（点哪个分段的按钮进来）。类型不再由探测决定 ——
+       它来自「读取提供商信息」读到的元数据，或用户在声明区点选。
        MODE 恒为 profile：不管从哪个分段进来，存的都是同一份档案。 */
     function openAdd(kind) {
         resetForm();
@@ -708,7 +774,6 @@ Console.renderSidebar('models');
         PFIN = [];
         PFOUT = [];
         PFCAPS = [];
-        PFKNOWN = false;
         openModal(kind === 'embedding' ? '添加向量模型'
                  : (kind === 'chat' ? '添加对话模型' : '添加模型'));
         pfEl('pfBaseUrl').focus();
@@ -723,7 +788,6 @@ Console.renderSidebar('models');
         PFIN = p.input || [];
         PFOUT = p.output || [];
         PFCAPS = p.capabilities || [];
-        PFKNOWN = true;
         pfEl('pfBaseUrl').value = p.baseUrl || '';
         pfEl('pfModelName').value = p.modelName || '';
         pfEl('pfTemperature').value = (p.temperature == null ? '' : p.temperature);
@@ -761,13 +825,14 @@ Console.renderSidebar('models');
         if (!val('pfApiKey')) { showResult(false, '请填写 API Key'); return; }
         var modelName = pfEl('pfModelName').value.trim();
         if (!modelName) { showResult(false, '请先填写模型名'); return; }
-        /* 没探测就保存 = 端点族为空，而 ModelProfile 把「空端点族」按 chat 兜底 ——
-           于是向量模型会被静默存成对话模型：它不进向量段、也不能被选为向量模型，
-           而且全程没有任何报错。归类只能来自实测，所以在这里就拦住。 */
-        if (!PFKNOWN) {
-            showResult(false, '请先点「探测」：档案的端点族（对话 / 向量）由实测结果决定，'
-                + '不探测会把向量模型错存成对话模型。');
-            return;
+        /* 端点族为空是允许的 —— 表示"类型未声明"，卡片上会明示，不会替用户猜成对话模型。
+           但类型不问自明是有用的：提醒一句，避免存下一份绑不了域也用不上的档案。 */
+        if (!PFEPS.length) {
+            var ok = window.confirm('还没有声明任何类型（对话 / 向量 / 生图 …）。\n\n'
+                + '该档案将无法绑到域上，也不能被选为向量模型，只能先存着。\n'
+                + '若这是某提供商的模型，可先点「读取提供商信息」试试能否自动读到。\n\n'
+                + '仍要保存吗？');
+            if (!ok) { return; }
         }
         /* 别名已从表单移除：编辑沿用原别名，新建按模型名派生 */
         var alias = EDIT_ALIAS || deriveAlias(modelName);
@@ -813,31 +878,31 @@ Console.renderSidebar('models');
             + (r.dimension == null ? '' : '\n向量维度：' + r.dimension);
     }
 
-    /* ---------- 测试 ---------- */
-    /* 卡片上的「测试」= 用档案里已存的配置重新探测，结果写回档案 → 卡片标签随之刷新。
+    /* ---------- 卡片上的「读取」----------
+       用档案里已存的配置重新读一次提供商元数据，读到的部分写回档案 → 卡片标签随之刷新。
+       服务端只覆盖「读到了」的字段，读不到的保留原有声明，所以手工声明不会被冲掉。
 
        别名必须走查询串而不是路径段：别名由模型名派生，模型名常含 `/`
        （如 nvidia/nemotron-3-embed-1b:free）。编码成 %2F 放进路径时，Tomcat 默认
-       ALLOW_ENCODED_SLASH=false 会在解码阶段直接回 400 HTML，请求到不了后端 ——
-       表现就是"探测失败：返回 400 且不是 JSON"。
+       ALLOW_ENCODED_SLASH=false 会在解码阶段直接回 400 HTML，请求到不了后端。
 
-       成功与失败都必须有可见反馈：探测可能耗时数秒，没有"探测中…"会让人以为没点上；
+       成功与失败都必须有可见反馈：读取可能耗时数秒，没有"读取中…"会让人以为没点上；
        成功了不回显结果，又会让人以为按钮没反应。 */
-    function testProfile(alias, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = '探测中…'; }
-        Console.jsonRequest('/admin/model-profiles/probe-saved?alias=' + encodeURIComponent(alias), 'POST')
+    function rereadSaved(alias, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = '读取中…'; }
+        Console.jsonRequest('/admin/model-profiles/inspect-saved?alias=' + encodeURIComponent(alias), 'POST')
             .then(function (r) {
-                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '探测失败'); }
+                if (r && r.code && r.code !== 0) { throw new Error(Console.sanitizeError(r.detail || r.error) || '读取失败'); }
                 /* 带上 r 往后传：卡片刷完之后还要用它回显结果 */
                 return loadProfiles().then(function () { return r; });
             })
             .then(function (r) {
-                alert('档案 ' + alias + ' 探测完成\n\n' + probeSummary(r));
+                alert('档案 ' + alias + ' 读取完成\n\n' + probeSummary(r) + '\n\n' + (r.message || ''));
             })
-            .catch(function (e) { alert('探测失败：' + e.message); })
+            .catch(function (e) { alert('读取失败：' + e.message); })
             /* 被刷新掉的旧按钮已经脱离文档，这里恢复不到也无妨（新卡片上的按钮本就是可用的）；
                真正需要它的是失败路径 —— 那时不会重渲染，不恢复就再也点不动了。 */
-            .then(function () { if (btn) { btn.disabled = false; btn.textContent = '测试'; } });
+            .then(function () { if (btn) { btn.disabled = false; btn.textContent = '读取'; } });
     }
 
     /* 删除向量档案就是删档案本身（与对话档案同一条路径）；
@@ -873,7 +938,7 @@ Console.renderSidebar('models');
     pfEl('addModelBtn').addEventListener('click', function () { openAdd(); });
     pfEl('addEmbeddingBtn').addEventListener('click', function () { openAdd('embedding'); });
     pfEl('addChatBtn').addEventListener('click', function () { openAdd(); });
-    pfEl('probeBtn').addEventListener('click', runProbe);
+    pfEl('readBtn').addEventListener('click', readProviderInfo);
     pfEl('saveProfileBtn').addEventListener('click', save);
     pfEl('resetProfileFormBtn').addEventListener('click', resetForm);
     pfEl('profileModalClose').addEventListener('click', closeModal);

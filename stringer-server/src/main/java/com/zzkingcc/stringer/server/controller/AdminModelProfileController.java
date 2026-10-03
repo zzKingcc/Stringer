@@ -5,7 +5,7 @@ import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
 import com.zzkingcc.stringer.server.knowledge.KnowledgeBaseService;
-import com.zzkingcc.stringer.server.model.ModelProbe;
+import com.zzkingcc.stringer.server.model.ModelCatalog;
 import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import com.zzkingcc.stringer.server.model.ModelProfileSettings;
@@ -56,7 +56,7 @@ public class AdminModelProfileController {
     private final ModelProfileRegistry registry;
     private final ModelProfileStore store;
     private final LlmModelHolder holder;
-    private final ModelProbe probe;
+    private final ModelCatalog catalog;
     /** 域注册表：绑定只能指向已登记的域（否则绑定会变成永远不生效的孤儿） */
     private final DomainRegistry domainRegistry;
     /** 知识库：换向量模型时用它保留原文重灌，或按用户选择清空 */
@@ -65,13 +65,13 @@ public class AdminModelProfileController {
     public AdminModelProfileController(ModelProfileRegistry registry,
                                        ModelProfileStore store,
                                        LlmModelHolder holder,
-                                       ModelProbe probe,
+                                       ModelCatalog catalog,
                                        DomainRegistry domainRegistry,
                                        KnowledgeBaseService knowledgeBaseService) {
         this.registry = registry;
         this.store = store;
         this.holder = holder;
-        this.probe = probe;
+        this.catalog = catalog;
         this.domainRegistry = domainRegistry;
         this.knowledgeBaseService = knowledgeBaseService;
     }
@@ -153,63 +153,77 @@ public class AdminModelProfileController {
     }
 
     /**
-     * 探测：用<b>实测</b>判定一个模型的能力画像（端点族 / 输入模态 / 输出模态 / 布尔能力）。
+     * 读取提供商元数据，判定一个模型的端点族 / 输入模态 / 输出模态 / 布尔能力。
      *
-     * <p>与「测试连接」的区别：测试是"这个<b>已保存</b>的档案能不能用"，探测是"这个<b>模型是什么</b>"。</p>
+     * <p><b>不发任何试探请求</b>：只读 {@code GET {baseUrl}/models}。读不到就如实留空，
+     * 由用户在表单里手工声明 —— 猜类型会让向量模型被当成对话模型。</p>
      */
-    @PostMapping("/model-profiles/probe")
-    public Map<String, Object> probeModel(@RequestBody(required = false) ProfileBody body) {
+    @PostMapping("/model-profiles/inspect")
+    public Map<String, Object> inspectModel(@RequestBody(required = false) ProfileBody body) {
         if (body == null) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, "请求体不能为空");
         }
-        return probeBody(runProbe(body.getBaseUrl(), body.getApiKey(), body.getModelName()));
+        return inspectBody(runInspect(body.getBaseUrl(), body.getApiKey(), body.getModelName()));
     }
 
     /**
-     * 对<b>已保存</b>的档案重新探测：用档案里存的 Key 探，并把结果<b>写回档案</b>。
+     * 对<b>已保存</b>的档案重新读取元数据，并把读到的部分<b>写回档案</b>。
      *
-     * <p>管控台卡片上的「测试」走这里 —— 探完卡片上的标签即刷新。</p>
+     * <p>管控台卡片上的「读取」走这里 —— 读完卡片上的标签即刷新。</p>
+     *
+     * <p><b>读不到的字段一律保留档案里原有的声明</b>：类型判定现在由"提供商元数据 + 手工声明"
+     * 共同决定，若用空值覆盖，一次「读取」就会把用户手选的端点族 / 模态 / 能力全部抹掉。</p>
      *
      * <p><b>别名走查询参数，不做路径变量</b>：别名由模型名派生，而模型名常含 {@code /}
      * （如 OpenRouter 的 {@code nvidia/nemotron-3-embed-1b:free}）。前端把这种别名放进路径段
      * 只能编码成 {@code %2F}，而 Tomcat 默认 {@code ALLOW_ENCODED_SLASH=false}，会在 URI 解码
-     * 阶段直接回 <b>400</b> —— 且返回的是 Tomcat 自己的 HTML 错误页，请求压根到不了这里，
-     * 表现为"探测失败：返回 400 且不是 JSON"。查询串不受该限制。</p>
+     * 阶段直接回 <b>400</b> —— 且返回的是 Tomcat 自己的 HTML 错误页，请求压根到不了这里。
+     * 查询串不受该限制。</p>
      */
-    @PostMapping("/model-profiles/probe-saved")
-    public Map<String, Object> probeSaved(@RequestParam("alias") String alias) {
+    @PostMapping("/model-profiles/inspect-saved")
+    public Map<String, Object> inspectSaved(@RequestParam("alias") String alias) {
         ModelProfile existing = registry.profile(alias)
                 .orElseThrow(() -> new BaseException(ErrorCode.INVALID_PARAMETER, "档案不存在：" + alias));
 
-        ModelProbe.Result probed = runProbe(existing.baseUrl(), existing.apiKey(), existing.modelName());
+        ModelCatalog.Result read = runInspect(existing.baseUrl(), existing.apiKey(), existing.modelName());
 
-        ModelProfile updated = new ModelProfile(existing.alias(), probed.endpoints(), probed.input(),
-                probed.output(), existing.baseUrl(), existing.apiKey(), existing.modelName(),
+        ModelProfile updated = new ModelProfile(existing.alias(),
+                prefer(read.endpoints(), existing.endpoints()),
+                prefer(read.input(), existing.input()),
+                prefer(read.output(), existing.output()),
+                existing.baseUrl(), existing.apiKey(), existing.modelName(),
                 existing.temperature(), existing.maxTokens(),
-                probed.dimension() != null ? probed.dimension() : existing.dimensions(),
-                probed.capabilities(), existing.fallbacks());
+                read.dimension() != null ? read.dimension() : existing.dimensions(),
+                prefer(read.capabilities(), existing.capabilities()),
+                existing.fallbacks());
         String failure = registry.save(updated);
         if (failure != null) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
         }
 
-        Map<String, Object> out = probeBody(probed);
+        Map<String, Object> out = inspectBody(read);
         out.put("alias", alias);
         out.put("profile", profileView(updated));
         return out;
     }
 
-    private ModelProbe.Result runProbe(String baseUrl, String apiKey, String modelName) {
+    /** 元数据读到了就用它；读不到（空）就保留档案里原有的声明 */
+    private static <T> List<T> prefer(List<T> fromMetadata, List<T> declared) {
+        return fromMetadata == null || fromMetadata.isEmpty() ? declared : fromMetadata;
+    }
+
+    private ModelCatalog.Result runInspect(String baseUrl, String apiKey, String modelName) {
         try {
-            return probe.probe(baseUrl, apiKey, modelName);
+            return catalog.inspect(baseUrl, apiKey, modelName);
         } catch (IllegalStateException e) {
-            throw new BaseException(ErrorCode.LLM_UNAVAILABLE, "探测失败：" + e.getMessage());
+            throw new BaseException(ErrorCode.LLM_UNAVAILABLE, "读取提供商信息失败：" + e.getMessage());
         } catch (Exception e) {
-            throw new BaseException(ErrorCode.LLM_UNAVAILABLE, "探测失败：" + LlmFailureDescriber.describe(e));
+            throw new BaseException(ErrorCode.LLM_UNAVAILABLE,
+                    "读取提供商信息失败：" + LlmFailureDescriber.describe(e));
         }
     }
 
-    private static Map<String, Object> probeBody(ModelProbe.Result result) {
+    private static Map<String, Object> inspectBody(ModelCatalog.Result result) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("code", 0);
         out.put("success", true);
@@ -228,7 +242,7 @@ public class AdminModelProfileController {
      * <p>被清掉绑定的域立即进入"无可调用"状态，由管控台「域空间」页提示 ——
      * 删除不会被"仍被引用"拦在半路。</p>
      *
-     * <p>别名走查询参数的原因同 {@link #probeSaved}：别名可含 {@code /}，放进路径段会被
+     * <p>别名走查询参数的原因同 {@link #inspectSaved}：别名可含 {@code /}，放进路径段会被
      * Tomcat 以 400 拒收。</p>
      */
     @DeleteMapping("/model-profiles")
@@ -255,7 +269,7 @@ public class AdminModelProfileController {
     /**
      * 连通性测试：复用「模型设置」页同一套探测逻辑（只发一条极短请求，避免浪费额度）。
      *
-     * <p>别名走查询参数的原因同 {@link #probeSaved}。</p>
+     * <p>别名走查询参数的原因同 {@link #inspectSaved}。</p>
      */
     @PostMapping("/model-profiles/test")
     public Map<String, Object> test(@RequestParam("alias") String alias) {

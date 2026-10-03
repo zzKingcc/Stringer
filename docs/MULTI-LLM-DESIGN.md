@@ -48,9 +48,9 @@
     "customer-service": ["smart", "local-qwen"],
     "contract-review": ["smart"]
   },
-  "profiles": {                       // 别名 → 档案（对话 / 向量都在这里，靠 endpoints 区分）
+  "profiles": {                       // 别名 →【非向量】档案（对话 / 生图 / 语音…）
     "smart": {
-      "endpoints": ["chat"],          // 端点族：是否对话看是否含 "chat"
+      "endpoints": ["chat"],          // 端点族：是否对话看是否含 "chat"；空 = 未声明
       "input": ["text"],
       "output": ["text"],
       "baseUrl": "https://api.example.com/v1",
@@ -58,7 +58,7 @@
       "modelName": "gpt-4o",
       "temperature": 0.3,
       "maxTokens": 4096,
-      "capabilities": ["streaming", "tools"],   // 布尔能力声明（见 2.3）；无 "vision"
+      "capabilities": ["streaming", "tools"],   // 布尔能力声明（见 2.3）
       "fallbacks": ["local-qwen"]               // 降级链：本档案失败后依次尝试同列表其它别名
     },
     "local-qwen": {
@@ -70,28 +70,36 @@
       "maxTokens": 2048,
       "capabilities": ["streaming", "tools"],
       "fallbacks": []
-    },
+    }
+  },
+  "embeddingProfiles": {              // 别名 →【纯向量】档案：单独存放，与 profiles 彻底分开
     "emb-bge": {
       "endpoints": ["embedding"],     // 向量：是否向量看是否含 "embedding"
       "baseUrl": "https://api.example.com/v1",
       "apiKey": "******",
       "modelName": "bge-m3",
-      "dimensions": 1024              // 留空＝按实测
+      "dimensions": 1024              // 元数据不提供维度；留空则由实际模型兜底
     }
-  }
+  },
+  "embeddingAlias": "emb-bge"         // 全局单选的向量档案别名；null = 未配置
 }
 ```
 
-- `profiles` 只包含用户自建的档案，**没有保留别名**，也不由 `llm-settings.json` 自动合成。
+- `profiles` 只含用户自建的**非向量**档案；**纯向量**档案单独放在 `embeddingProfiles` ——
+  向量模型是全局唯一单选、不参与域绑定，与"可绑到域按需调用"的对话 / 生图那类是两种东西。
+  旧布局把两者混在 `profiles` 里（只靠 `endpoints` 区分），读盘时自动归一并写回文件。
+- `embeddingAlias` 是**全局单选**：向量模型只有这一个，全部域共用，不进 `domainBindings`。
 - 落盘结构**无 `type` 字段**；删除档案会级联摘掉所有域绑定（见第 7 节）。
 - 新建档案**不自动绑定任何域**：绑定只能由管控台显式指定。
+- `endpoints` 为空 = **未声明**（**不再默认补成 `chat`**）：类型只能来自提供商元数据或用户声明，
+  猜成 chat 会让向量 / 生图模型被当成对话模型 —— 能绑到域、却当不了向量模型，且全程无报错。
 
 ### 2.2 端点族与用途的关系
 
 | 档案 `endpoints` 含 | 用途 | 说明 |
 | --- | --- | --- |
 | `chat` | 对话链路（当前只做 chat） | 一个档案可服务多用途，靠 `endpoints` 声明它支持哪些端点族 |
-| `embedding` | 向量（**只被知识空间引用**，见第 6 节；实际仍走 `llm-settings.json` 的单一向量配置） | 不与对话链路混用 |
+| `embedding` | 向量（**只被知识空间引用**，见第 6 节；由 `embeddingAlias` **全局单选**、全部域共用） | 单独存放在 `embeddingProfiles`，不进域绑定 |
 | `rerank` / `images` / `tts` / `asr` / `video` | 其它端点族（规划中） | 多模态按 `endpoints` 扩展，可多选 |
 
 > 档案**没有 `type` 字段**，`isChat()` = `endpoints.contains("chat")`。
@@ -238,8 +246,8 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | --- | --- | --- |
 | GET | `/admin/model-profiles` | 档案列表（Key 脱敏，含 `endpoints` / `input` / `output` / `capabilities` / `usedByDomains`）+ `domainBindings`（域→别名列表） |
 | POST | `/admin/model-profiles` | 创建/更新档案（`alias` 为键；字段为 `endpoints` / `input` / `output` / `baseUrl` / `apiKey` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`，**无 `type`**） |
-| POST | `/admin/model-profiles/probe` | 实测一个模型的端点族 / 模态 / 能力 / 维度（不落盘） |
-| POST | `/admin/model-profiles/probe-saved` | 用档案已存配置重新探测并写回档案（`alias` 走**查询参数**，别名可含 `/`，放进路径段会被 Tomcat 以 400 拒收） |
+| POST | `/admin/model-profiles/inspect` | <b>只读</b>提供商的 `GET /models` 判定端点族 / 模态 / 能力（不落盘、不发试探请求）；读不到的字段留空 |
+| POST | `/admin/model-profiles/inspect-saved` | 用档案已存配置重新读取并写回档案（读不到的字段保留原声明；`alias` 走**查询参数**，别名可含 `/`，放进路径段会被 Tomcat 以 400 拒收） |
 | POST | `/admin/model-profiles/test` | 测试连接（返回实测可用性 + 模型名；`alias` 同样走查询参数） |
 | DELETE | `/admin/model-profiles` | 删除档案并**级联清理**所有域绑定（`alias` 走查询参数）；返回结果带出被摘掉绑定的域清单（这些域立即进入"无可调用"状态，由管控台明确提示） |
 | PUT | `/admin/model-bindings/{domain}` | 设置域的可调用别名列表（整体覆盖，顺序即优先级；空＝解绑），返回 `sourceDomain` 标明生效绑定来自链上哪个域 |
@@ -273,7 +281,7 @@ embedding 维度 → ES 索引的 dense_vector dims（建索引时定死，改�
 | 位置 | 内容 |
 | --- | --- |
 | `stringer-runtime` `runtime/model/` | `ModelResolver` 接口；内核可选 resolver + `resolveModel()` |
-| `stringer-server` `model/` | `ModelProfile`（3 维 schema：`endpoints` / `input` / `output` + `capabilities` + `dimensions`；`isChat()`＝`endpoints` 含 `chat`；含 `fingerprint()` / `supportsTools()` / `capabilityHint()`）、`ModelProfileSettings`（落盘结构 + `resolveAlong`）、`ModelProfileStore`（`config/models.json`）、`ModelProfileRegistry`（唯一真相，含后设覆盖与级联清绑定）、`ModelClientFactory`（按指纹缓存，每个别名只留当前指纹）、`DefaultModelResolver`（只认自建档案，未绑定 / 不可用抛 `NotConfiguredException`，无内置默认旁路）、`ModelProbe` |
+| `stringer-server` `model/` | `ModelProfile`（3 维 schema：`endpoints` / `input` / `output` + `capabilities` + `dimensions`；`isChat()`＝`endpoints` 含 `chat`；含 `fingerprint()` / `supportsTools()` / `capabilityHint()`）、`ModelProfileSettings`（落盘结构 + `resolveAlong`）、`ModelProfileStore`（`config/models.json`）、`ModelProfileRegistry`（唯一真相，含后设覆盖与级联清绑定）、`ModelClientFactory`（按指纹缓存，每个别名只留当前指纹）、`DefaultModelResolver`（只认自建档案，未绑定 / 不可用抛 `NotConfiguredException`，无内置默认旁路）、`ModelCatalog`（只读提供商元数据判定类型 / 模态 / 能力，读不到留空不猜） |
 | `stringer-server` | `config/ModelProfileConfiguration`；`AdminModelProfileController`（`/admin/model-profiles*`、`/admin/model-bindings/{domain}`） |
 | 管控台 | `console/models.html`：「模型档案」卡（列表 + 编辑 + 测试 + 删除）与「域 → 模型绑定」卡（域清单 × 当前绑定 × 下拉设置），规则文案写进页面 |
 

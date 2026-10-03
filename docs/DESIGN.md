@@ -326,7 +326,8 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | 项 | 规定 |
 | --- | --- |
 | 单元 | `ModelProfile`：一个 OpenAI 兼容端点的<b>一份</b>配置（别名 `alias` 唯一；同一模型可配多份档案，域绑的是档案而非模型名） |
-| 字段（落盘 `ProfileData`） | `alias`、`endpoints`(端点族 List，可多选，空＝`["chat"]`)、`input` / `output`(输入 / 输出模态 List)、`baseUrl`、`apiKey`、`modelName`、`temperature`(Double，可空)、`maxTokens`(Integer，可空)、`dimensions`(Integer，仅 embedding 用，可空)、`capabilities`(布尔能力 List：`streaming` / `tools`)、`fallbacks`(降级链，暂只存不生效) |
+| 字段（落盘 `ProfileData`） | `alias`、`endpoints`(端点族 List，可多选，<b>空 = 未声明</b>)、`input` / `output`(输入 / 输出模态 List)、`baseUrl`、`apiKey`、`modelName`、`temperature`(Double，可空)、`maxTokens`(Integer，可空)、`dimensions`(Integer，仅 embedding 用，可空)、`capabilities`(布尔能力 List：`streaming` / `tools`)、`fallbacks`(降级链，暂只存不生效) |
+| 类型从哪来 | <b>只读提供商元数据，不发试探请求</b>：OpenRouter 的 `GET /models` 带 `architecture`（输入 / 输出模态）与 `supported_parameters`（`tools`）；硅基流动式支持 `?sub_type=` 过滤反推端点族；标准 OpenAI 规范只有 `id`，那就<b>留空由用户声明</b>。读不到绝不猜 |
 | 是否对话模型 | 无 `type` 字段；用 `isChat()` = `endpoints.contains("chat")` 判定；向量档案靠 `endpoints.contains("embedding")` |
 | 必填 | `baseUrl` / `apiKey` / `modelName` 三者齐备才 `isUsable()`；缺失则拒绝保存 |
 | 能力声明 | `capabilities` 由使用者显式写出；未声明 `tools` → 该域模型<b>不会调用任何工具</b>（只告警不拒绝）；缺失能力时 `capabilityHint()` 提示 |
@@ -535,7 +536,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 | --- | --- | --- |
 | `config/accounts.json` | `AccountStore` | `username`、`passwordHash`、`signingKey`、`createdAt`、`lastLoginAt`、`lastLoginFrom` |
 | `config/llm-settings.json` | `LlmSettingsStore` | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions` |
-| `config/models.json` | `ModelProfileStore` | `domainBindings`（域→别名<b>列表</b>，有序；空＝该域无可调用）、`profiles`（别名→ `ProfileData{endpoints, input, output, baseUrl, apiKey, modelName, temperature, maxTokens, dimensions, capabilities, fallbacks}`；无 `type` 字段，`isChat()`＝`endpoints` 含 `chat`） |
+| `config/models.json` | `ModelProfileStore` | `domainBindings`（域→别名<b>列表</b>，有序；空＝该域无可调用）、`profiles`（别名→ `ProfileData{endpoints, input, output, baseUrl, apiKey, modelName, temperature, maxTokens, dimensions, capabilities, fallbacks}`；无 `type` 字段，`isChat()`＝`endpoints` 含 `chat`）、<b>`embeddingProfiles`</b>（<b>纯向量</b>档案单独一处存放，与 `profiles` 分开）、`embeddingAlias`（全局单选的向量档案别名）。旧布局把向量档案混在 `profiles` 里，读盘时自动归一并写回 |
 | `config/infra-settings.json` | `InfraSettingsStore` | `es{host,port,scheme,username,password,connectTimeout,socketTimeout}`、`redis{host,port,password,database}` |
 | `config/prompts.json` | `DomainSettingsStore` | `base`、`prompts`（域名 → 提示词） |
 | `config/domains.json` | `DomainStore` | `manualDomains`（人工创建的域标识清单） |

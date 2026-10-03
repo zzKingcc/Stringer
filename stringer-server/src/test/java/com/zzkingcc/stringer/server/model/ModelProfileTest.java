@@ -26,11 +26,14 @@ class ModelProfileTest {
     }
 
     @Test
-    void 端点族为空时默认按对话处理() {
+    void 端点族为空时保持未声明且不猜成对话模型() {
         ModelProfile p = profile(null, null, null, null, null);
-        assert p.endpoints().equals(List.of(ModelProfile.EP_CHAT))
-                : "端点族为空应默认 chat，实际 " + p.endpoints();
-        assert p.isChat() : "默认应当能走对话端点";
+        assert p.endpoints().isEmpty()
+                : "端点族为空应保持未声明，不该默认补 chat，实际 " + p.endpoints();
+        assert !p.isChat()
+                : "未声明类型时不能当对话模型 —— 否则向量 / 生图模型会被误当成对话模型，"
+                        + "能绑到域却当不了向量模型，而且全程没有报错";
+        assert !p.isEmbedding() : "未声明类型时也不能当向量模型";
     }
 
     @Test

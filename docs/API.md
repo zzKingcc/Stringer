@@ -278,14 +278,14 @@
 | --- | --- | --- | --- |
 | GET | `/admin/model-profiles` | — | `code`、`profiles[]`（每项含 `alias`、`endpoints`、`input`、`output`、`baseUrl`、`modelName`、`apiKeyMasked`、`temperature`、`maxTokens`、`dimensions`、`capabilities`、`fallbacks`、`capabilityHint`、`usedByDomains`）、`domainBindings`（域→别名列表）、`settingsFile` |
 | POST | `/admin/model-profiles` | body `ModelProfile`（`alias` / `apiKey` 必填，另含 `endpoints` / `input` / `output` / `baseUrl` / `modelName` / `temperature` / `maxTokens` / `dimensions` / `capabilities` / `fallbacks`） | `code`、`action`、`target`、`settingsFile`；`alias` 已存在则整体覆盖 |
-| POST | `/admin/model-profiles/probe` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：实测一个模型的端点族 / 模态 / 能力 / 维度 |
-| POST | `/admin/model-profiles/probe-saved` | query `alias` | 用档案已存配置重新探测并<b>写回档案</b>；返回同上 + `alias` + `profile` |
+| POST | `/admin/model-profiles/inspect` | body `{baseUrl, apiKey, modelName}` | `code`、`success`、`endpoints`、`input`、`output`、`capabilities`、`dimension`、`message`：<b>只读</b>提供商的 `GET /models` 判定端点族 / 模态 / 能力，<b>不发任何试探请求</b>；读不到的字段留空（不猜），由用户在管控台声明 |
+| POST | `/admin/model-profiles/inspect-saved` | query `alias` | 用档案已存配置重新读取并<b>写回档案</b>（读不到的字段保留档案里原有的声明，不覆盖手工声明）；返回同上 + `alias` + `profile` |
 | POST | `/admin/model-profiles/test` | query `alias` | `code`、`alias`、`success`、`reply`：用档案配置发一条极短请求验证连通 |
 | DELETE | `/admin/model-profiles` | query `alias` | <b>级联清理</b>：删除档案并把它从所有域绑定里摘掉（摘空的域绑定一并移除）；返回 `code`、`action`、`target`、`settingsFile` |
 | PUT | `/admin/model-bindings/{domain}` | path `domain`；body `{aliases:[...]}`（可空＝解绑） | `code`、`action`（`bound` / `unbound`）、`target`、`aliases`（解绑后该域当前生效列表）、`sourceDomain`（生效来源：本域自绑还是从哪个祖先继承）、`domainBindings`、`settingsFile`；`aliases` 整体覆盖，顺序即优先级；`default` 不能作为别名绑定；域未登记 → `40000 INVALID_PARAMETER` |
 
 约定：
-- 档案的 `endpoints` 可多选（空＝`["chat"]`）；是否对话模型看 `endpoints` 是否含 `chat`（`isChat()`），向量看 `embedding`。**落盘结构无 `type` 字段**。
+- 档案的 `endpoints` 可多选；<b>空 = 未声明</b>（历史上会被默认补成 `["chat"]`，现已取消 —— 猜成对话模型会让向量 / 生图模型被误用）。是否对话模型看 `endpoints` 是否含 `chat`（`isChat()`），向量看 `embedding`。**落盘结构无 `type` 字段**。
 - `bind` 的 `aliases` 为空 / 全空白＝解绑，该域进入"无可调用"状态；列表首个为当前使用的对话模型，其余留给多 agent / 降级。
 - `GET /admin/model-profiles` 的响应中不含 `builtinAlias` / `defaultAlias` / `builtinChat`。
 - `chatConfigured`（`/admin/settings`）＝ `llm-settings` 的 chat 已配置 **或** 任一可用对话档案存在（`registry.hasChatModel()`）。

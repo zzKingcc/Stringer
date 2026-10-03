@@ -407,6 +407,20 @@ tbody tr:hover { background: #fcfcfd; }
 .tag.public { background: #ecfdf5; color: var(--green); }
 .perm-none { color: var(--muted); }
 
+/* 可点选的声明 chip：与 .tag 同一套视觉，但「未选 / 已选」必须一眼分得开 ——
+   模型类型与模态现在由用户声明，看不清"哪些选了"就等于没声明。 */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip {
+    padding: 3px 10px; border-radius: 10px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border); background: #fff; color: var(--muted);
+    font-family: inherit; line-height: 1.6;
+}
+.chip:hover { border-color: var(--primary); color: var(--primary); }
+.chip.on {
+    background: var(--primary-dim); border-color: var(--primary);
+    color: var(--primary); font-weight: 600;
+}
+
 /* ===== 非同源访问警示（见 console.js warnIfCrossOrigin） =====
    页面不在服务端地址上打开时，登录 Cookie 存不下也带不上，受保护接口会一律 401。
    在页面上说清，避免只留一行服务端日志导致误判为鉴权逻辑 bug。 */

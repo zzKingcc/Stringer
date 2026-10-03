@@ -22,7 +22,7 @@ import java.util.Locale;
  * </ul>
  *
  * @param alias        别名（唯一键，如 {@code default} / {@code smart}）
- * @param endpoints    端点族（可多选；空 = 按 {@code chat}）
+ * @param endpoints    端点族（可多选；<b>空 = 未声明</b>，不再默认按 chat 处理）
  * @param input        输入模态（可多选）
  * @param output       输出模态（可多选）
  * @param baseUrl      服务商地址（OpenAI 兼容，通常带 {@code /v1}）
@@ -82,7 +82,10 @@ public record ModelProfile(String alias,
     public static final String CAP_TOOLS = "tools";
 
     public ModelProfile {
-        endpoints = endpoints == null || endpoints.isEmpty() ? List.of(EP_CHAT) : List.copyOf(endpoints);
+        /* 端点族为空<b>不再默认补 chat</b>：类型只能来自提供商元数据或用户声明。
+           猜成 chat 会让向量 / 生图模型被当成对话模型 —— 能绑到域、却当不了向量模型，
+           而且全程没有任何报错。空就是"未声明"，由 isChat() / isEmbedding() 如实返回 false。 */
+        endpoints = endpoints == null ? List.of() : List.copyOf(endpoints);
         input = input == null ? List.of() : List.copyOf(input);
         output = output == null ? List.of() : List.copyOf(output);
         capabilities = capabilities == null ? List.of() : List.copyOf(capabilities);

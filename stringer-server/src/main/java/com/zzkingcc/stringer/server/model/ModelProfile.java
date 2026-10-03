@@ -89,9 +89,19 @@ public record ModelProfile(String alias,
         fallbacks = fallbacks == null ? List.of() : List.copyOf(fallbacks);
     }
 
-    /** 能不能走对话端点 —— 模型档案解析链（域 → 档案）只认这个 */
+    /**
+     * 能不能走对话端点 —— 模型档案解析链（域 → 档案）只认这个
+     *
+     * <p>域绑定只认对话档案：向量档案即使被绑进 {@code domainBindings} 也不会被解析链取到，
+     * 向量模型走 {@code ModelProfileSettings.embeddingAlias} 那一条全局单选。</p>
+     */
     public boolean isChat() {
         return endpoints.contains(EP_CHAT);
+    }
+
+    /** 能不能走向量端点 —— 只有这类档案能被选为全局向量模型 */
+    public boolean isEmbedding() {
+        return endpoints.contains(EP_EMBEDDING);
     }
 
     /** 必填项是否齐备 */

@@ -15,7 +15,9 @@ import java.util.Map;
  *   <li><b>档案不自动绑定任何域</b> —— {@code domainBindings} 只能由管控台手工填写；</li>
  *   <li><b>一个域可绑一组模型</b> —— {@code domainBindings} 是 {@code 域 → 别名列表} 的<b>有序</b>映射，
  *       整体覆盖；列表首个是当前使用的模型，其余留给多 agent / 降级；空列表即解绑；</li>
- *   <li><b>向量模型只有一个</b> —— 不在本文件里，沿用「模型设置」页那唯一一套向量配置。</li>
+ *   <li><b>向量模型全局只有一个</b> —— {@link #embeddingAlias} 是<b>单选</b>，不参与域绑定
+ *       （{@code domainBindings} 只管对话模型）。向量检索是"全树共用一套向量空间"，
+ *       让它按域切换会导致同一索引里混入不同模型的向量，维度对不上、检索结果无意义。</li>
  * </ul>
  *
  * @author zzkingcc
@@ -23,11 +25,19 @@ import java.util.Map;
 @Data
 public class ModelProfileSettings {
 
-    /** 域 → 可调用模型别名列表（有序；首个为当前使用；空 = 未绑定 / 无可调用） */
+    /** 域 → 可调用<b>对话</b>模型别名列表（有序；首个为当前使用；空 = 未绑定 / 无可调用） */
     private Map<String, java.util.List<String>> domainBindings = new LinkedHashMap<>();
 
-    /** 别名 → 档案（对话 / 向量都在这里，靠 {@link ProfileData#getType()} 区分） */
+    /** 别名 → 档案（对话 / 向量都在这里，靠 {@link ProfileData#getEndpoints()} 区分） */
     private Map<String, ProfileData> profiles = new LinkedHashMap<>();
+
+    /**
+     * 当前启用的<b>向量</b>模型档案别名（全局唯一，不参与域绑定）。
+     *
+     * <p>为空 = 未配置向量模型，知识库的灌库与向量检索不可用（BM25 通道仍可用）。
+     * 换向量模型会让已灌库的向量全部失效，必须先做二次确认（见管理面接口）。</p>
+     */
+    private String embeddingAlias;
 
     /**
      * 沿链解析结果

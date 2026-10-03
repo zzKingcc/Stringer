@@ -2,6 +2,8 @@ package com.zzkingcc.stringer.server.settings;
 
 import com.zzkingcc.stringer.common.exception.NotConfiguredException;
 import com.zzkingcc.stringer.server.config.AiProperties;
+import com.zzkingcc.stringer.server.model.ModelProfile;
+import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.ModelProvider;
@@ -26,6 +28,19 @@ import java.util.List;
 
 /**
  * 模型持有者 —— 支持运行时热替换
+ *
+ * <p><b>向量模型的来源有两条，按显式程度排序</b>：</p>
+ * <ol>
+ *   <li>「模型设置」页里被<b>选中为向量模型</b>的那个档案（{@code ModelProfileSettings.embeddingAlias}）；
+ *       向量模型全局只有一个，所有域共用；</li>
+ *   <li>都没选时，回落到部署 yaml（{@code stringer.ai.embedding.*}）—— 这是部署期兜底，
+ *       不是界面上的第二套配置。</li>
+ * </ol>
+ *
+ * <p>关键：<b>选中过档案、但该档案已不可用时，绝不静默回落到 yaml</b>。回落会让用户
+ * 以为"已经换成新模型了"，实际检索用的还是老向量 —— 表现是灌库成功、检索结果莫名其妙，
+ * 且没有任何报错。这里宁可当成未配置，让调用点显式报错。</p>
+ *
  * @author zzkingcc
  */
 @Slf4j
@@ -34,6 +49,8 @@ public class LlmModelHolder {
 
     private final AiProperties yamlProps;
     private final LlmSettingsStore store;
+    /** 向量模型档案注册表；为空（单测）时只看 yaml 兜底 */
+    private final ModelProfileRegistry profileRegistry;
 
     /** 当前生效的设置（yaml 与界面配置合并后的结果） */
     private volatile LlmSettings settings;
@@ -41,6 +58,8 @@ public class LlmModelHolder {
     private volatile ChatModel chatModel;
     private volatile StreamingChatModel streamingChatModel;
     private volatile EmbeddingModel embeddingModel;
+    /** 实际生效的向量模型描述（档案别名或 "yaml"），仅供日志与排障 */
+    private volatile String embeddingSource;
 
     /**
      * "尚未配置"的统一文案
@@ -48,12 +67,23 @@ public class LlmModelHolder {
     private static final String NOT_CONFIGURED_CHAT =
             "对话模型尚未配置：请先在管控台「模型设置」页填写服务商地址与 API Key（保存后立即生效）";
     private static final String NOT_CONFIGURED_EMBEDDING =
-            "向量模型尚未配置：请先在管控台「模型设置」页填写服务商地址与 API Key（保存后立即生效）";
+            "向量模型尚未配置：请先在管控台「模型设置」页选一个向量模型（保存后立即生效）";
 
     public LlmModelHolder(AiProperties yamlProps, LlmSettingsStore store) {
+        this(yamlProps, store, null);
+    }
+
+    public LlmModelHolder(AiProperties yamlProps, LlmSettingsStore store,
+                          ModelProfileRegistry profileRegistry) {
         this.yamlProps = yamlProps;
         this.store = store;
+        this.profileRegistry = profileRegistry;
         reload();
+    }
+
+    /** 当前生效的向量模型来源：档案别名 / {@code yaml} / {@code null}（未配置） */
+    public String embeddingSource() {
+        return embeddingSource;
     }
 
     // ===== 对外暴露的"稳定代理" =====
@@ -99,15 +129,30 @@ public class LlmModelHolder {
 
     /** 向量能力是否可用 */
     public boolean isEmbeddingConfigured() {
-        return settings != null && settings.isEmbeddingUsable();
+        return embeddingModel != null;
     }
 
     /**
      * 当前应当用于 ES 索引的向量维度。
      *
-     * @throws IllegalStateException 向量模型未配置
+     * <p>取自<b>实际生效的那个向量模型</b>：选中档案时用档案声明的维度（可为空 → 回落实测），
+     * 用 yaml 兜底时同理。维度是索引 mapping 的不可变参数，两条来源不能各说各话。</p>
+     *
+     * @throws NotConfiguredException 向量模型未配置
      */
     public int effectiveEmbeddingDimension() {
+        ModelProfile selected = selectedEmbeddingProfile();
+        if (selected != null) {
+            if (selected.dimensions() != null) {
+                return selected.dimensions();
+            }
+            EmbeddingModel m = embeddingModel;
+            if (m == null) {
+                throw new NotConfiguredException(
+                        "向量模型档案 " + selected.alias() + " 未声明维度，且当前无法实测（模型未装配）");
+            }
+            return m.dimension();
+        }
         LlmSettings s = settings;
         if (s != null && s.getEmbeddingDimensions() != null) {
             return s.getEmbeddingDimensions();
@@ -115,9 +160,41 @@ public class LlmModelHolder {
         EmbeddingModel m = embeddingModel;
         if (m == null) {
             throw new NotConfiguredException("向量模型尚未配置，无法确定索引维度"
-                    + "（请先在管控台「模型设置」页填写服务商地址与 API Key）");
+                    + "（请先在管控台「模型设置」页选一个向量模型）");
         }
         return m.dimension();
+    }
+
+    /**
+     * 界面上被<b>选中</b>的向量档案；没选则返回 {@code null}。
+     *
+     * <p>与 {@code embeddingProfile()} 的区别：这里<b>不</b>做可用性过滤。
+     * "选中过一个档案"这件事本身必须被看见 —— 哪怕它此刻已不可用，也要如实反映成
+     * "选了但坏了"，而不是悄悄显示成"没配置"或回落 yaml。</p>
+     */
+    private ModelProfile selectedEmbeddingProfile() {
+        if (profileRegistry == null) {
+            return null;
+        }
+        String alias = profileRegistry.embeddingAlias();
+        if (alias == null || alias.isBlank()) {
+            return null;
+        }
+        return profileRegistry.profile(alias).orElse(null);
+    }
+
+    /**
+     * 生效中的向量档案：只有<b>已选中且此刻可用</b>才算。
+     *
+     * <p>选中但不可用时返回 {@code null}，而 {@link #selectedEmbeddingProfile()} 仍非空 ——
+     * 两者不一致正是"选了档案但它坏了"的判据，{@link #rebuild} 据此拒绝回落 yaml。</p>
+     */
+    private ModelProfile usableEmbeddingProfile() {
+        ModelProfile selected = selectedEmbeddingProfile();
+        if (selected == null) {
+            return null;
+        }
+        return selected.isEmbedding() && selected.isUsable() ? selected : null;
     }
 
     // ===== 装配 =====
@@ -137,6 +214,16 @@ public class LlmModelHolder {
         LlmSettings merged = merge(incoming);
         this.settings = merged;
         rebuild(merged);
+    }
+
+    /**
+     * 向量档案被切换 / 删除后重新装配向量模型。
+     *
+     * <p>不复用 {@link #apply}：向量模型的落盘位置是 {@code models.json} 的 {@code embeddingAlias}，
+     * 不在 {@code llm-settings.json} 里，走 apply 会把对话侧的配置无谓重写一遍。</p>
+     */
+    public synchronized void refreshEmbedding() {
+        rebuildEmbedding();
     }
 
     /**
@@ -179,11 +266,12 @@ public class LlmModelHolder {
         if (!s.isUsable()) {
             // 不抛异常：未配置是合法状态（首次部署、还没配服务商）——按项目日志原则够不上 WARN，
             // 只记 INFO 陈述状态；真正的失败在调用点由委派代理抛 NotConfiguredException。
+            // 注意此处只清对话侧：向量模型可以配在另一家服务商上，与对话模型是否可用无关。
             log.info("[模型设置] 对话模型未配置（缺 baseUrl / apiKey / modelName），"
                     + "到管控台 http://localhost:9527/admin.html 的「模型设置」页填写后立即生效");
             this.chatModel = null;
             this.streamingChatModel = null;
-            this.embeddingModel = null;
+            rebuildEmbedding();
             return;
         }
 
@@ -207,7 +295,48 @@ public class LlmModelHolder {
 
         log.info("[模型设置] 已生效：对话模型 baseUrl={} model={}", s.getChatBaseUrl(), s.getChatModelName());
 
-        if (s.isEmbeddingUsable()) {
+        rebuildEmbedding();
+    }
+
+    /**
+     * 按「选中的向量档案 → yaml 兜底」的顺序重建向量模型。
+     *
+     * <p>刻意<b>不复用对话模型的就绪判据</b>：向量模型现在完全独立于对话模型，
+     * 对话模型没配不该把向量也判成未配置（两者可以是不同服务商、不同模型）。</p>
+     */
+    private void rebuildEmbedding() {
+        ModelProfile selected = selectedEmbeddingProfile();
+        if (selected != null) {
+            ModelProfile usable = usableEmbeddingProfile();
+            if (usable == null) {
+                // 选了档案但它不能用：拒绝回落 yaml，宁可未配置也不要静默用错的向量
+                this.embeddingModel = null;
+                this.embeddingSource = null;
+                log.error("[模型设置] 已选中的向量模型档案 {} 当前不可用（模型名={}，embedding 端点={}），"
+                                + "向量检索与灌库已停用。不会回落到 yaml 兜底 —— 否则会在你不知情时用上别的向量。"
+                                + "请到「模型设置」页重新选用一个向量模型。",
+                        selected.alias(), selected.modelName(), selected.isEmbedding());
+                return;
+            }
+            var builder = OpenAiEmbeddingModel.builder()
+                    .baseUrl(usable.baseUrl())
+                    .apiKey(usable.apiKey())
+                    .modelName(usable.modelName());
+            if (usable.dimensions() != null) {
+                builder.dimensions(usable.dimensions());
+            }
+            this.embeddingModel = builder.build();
+            this.embeddingSource = usable.alias();
+            log.info("[模型设置] 已生效：向量模型来自档案 {}（model={}，baseUrl={}，dimensions={}）"
+                            + "—— 全域共享，不参与域绑定",
+                    usable.alias(), usable.modelName(), usable.baseUrl(),
+                    usable.dimensions() == null ? "(未声明，用模型默认)" : usable.dimensions());
+            return;
+        }
+
+        // 没选档案 → 回落部署 yaml
+        LlmSettings s = settings;
+        if (s != null && s.isEmbeddingUsable()) {
             // 维度是一项"契约"：填了就随请求下发，让服务商按该维度返回；
             // 留空则不下发，用服务商默认维度（此时 ES 索引维度取实测值）
             var embBuilder = OpenAiEmbeddingModel.builder()
@@ -218,13 +347,15 @@ public class LlmModelHolder {
                 embBuilder.dimensions(s.getEmbeddingDimensions());
             }
             this.embeddingModel = embBuilder.build();
-            log.info("[模型设置] 已生效：向量模型 baseUrl={} model={} dimensions={}",
+            this.embeddingSource = "yaml";
+            log.info("[模型设置] 向量模型未选用档案，回落到部署配置 baseUrl={} model={} dimensions={}",
                     s.effectiveEmbeddingBaseUrl(), s.getEmbeddingModelName(),
                     s.getEmbeddingDimensions() == null ? "(未指定，用服务商默认)" : s.getEmbeddingDimensions());
         } else {
             this.embeddingModel = null;
-            log.info("[模型设置] 向量模型未配置，知识库检索与灌库暂不可用"
-                    + "（到管控台「模型设置」页填写后立即生效）");
+            this.embeddingSource = null;
+            log.info("[模型设置] 向量模型未配置（既未选用档案，部署配置也不完整），"
+                    + "知识库检索与灌库暂不可用（到管控台「模型设置」页选一个向量模型后立即生效）");
         }
     }
 

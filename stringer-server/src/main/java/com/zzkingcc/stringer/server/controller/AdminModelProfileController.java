@@ -4,6 +4,7 @@ import com.zzkingcc.stringer.api.agent.Domains;
 import com.zzkingcc.stringer.api.code.ErrorCode;
 import com.zzkingcc.stringer.common.exception.BaseException;
 import com.zzkingcc.stringer.runtime.domain.DomainRegistry;
+import com.zzkingcc.stringer.server.knowledge.KnowledgeBaseService;
 import com.zzkingcc.stringer.server.model.ModelProbe;
 import com.zzkingcc.stringer.server.model.ModelProfile;
 import com.zzkingcc.stringer.server.model.ModelProfileRegistry;
@@ -57,17 +58,21 @@ public class AdminModelProfileController {
     private final ModelProbe probe;
     /** 域注册表：绑定只能指向已登记的域（否则绑定会变成永远不生效的孤儿） */
     private final DomainRegistry domainRegistry;
+    /** 知识库：换向量模型时用它保留原文重灌，或按用户选择清空 */
+    private final KnowledgeBaseService knowledgeBaseService;
 
     public AdminModelProfileController(ModelProfileRegistry registry,
                                        ModelProfileStore store,
                                        LlmModelHolder holder,
                                        ModelProbe probe,
-                                       DomainRegistry domainRegistry) {
+                                       DomainRegistry domainRegistry,
+                                       KnowledgeBaseService knowledgeBaseService) {
         this.registry = registry;
         this.store = store;
         this.holder = holder;
         this.probe = probe;
         this.domainRegistry = domainRegistry;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     /**
@@ -84,8 +89,30 @@ public class AdminModelProfileController {
         body.put("code", 0);
         body.put("profiles", profiles);
         body.put("domainBindings", registry.domainBindings());
+        /* 向量模型是全局单选：当前选中哪个、是否可用、以及有哪些档案可选（都带在向量段里） */
+        ModelProfile selected = registry.embeddingProfile().orElse(null);
+        body.put("embeddingAlias", registry.embeddingAlias());
+        body.put("embeddingConfigured", holder.isEmbeddingConfigured());
+        body.put("embeddingModelName", selected == null ? null : selected.modelName());
+        body.put("embeddingDimensions", selected == null ? null : selected.dimensions());
+        body.put("embeddingSource", holder.embeddingSource());
+        body.put("embeddingCandidates", embeddingCandidates());
         body.put("settingsFile", store.filePath());
         return body;
+    }
+
+    /** 可选作向量模型的档案（必须是向量档案且必填齐备），供页面直接渲染单选列表 */
+    private List<Map<String, Object>> embeddingCandidates() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ModelProfile p : registry.profiles()) {
+            if (!p.isEmbedding() || !p.isUsable()) {
+                continue;
+            }
+            Map<String, Object> item = profileView(p);
+            item.put("dimensionsKnown", p.dimensions() != null);
+            out.add(item);
+        }
+        return out;
     }
 
     /**
@@ -191,7 +218,19 @@ public class AdminModelProfileController {
         if (!deleted.deleted()) {
             throw new BaseException(ErrorCode.INVALID_PARAMETER, deleted.reason());
         }
-        return result("deleted", alias);
+        /* 若删掉的正是当前向量模型，单选已被级联撤销，必须立刻重装配：
+           否则 embeddingModel 还指着已删除的档案，灌库会继续用一个用户以为已经删掉的模型。 */
+        if (deleted.wasEmbedding()) {
+            holder.refreshEmbedding();
+        }
+        Map<String, Object> out = result("deleted", alias);
+        out.put("usedByDomains", deleted.usedByDomains());
+        out.put("wasEmbedding", deleted.wasEmbedding());
+        out.put("embeddingConfigured", holder.isEmbeddingConfigured());
+        out.put("message", deleted.wasEmbedding()
+                ? "已删除档案 " + alias + "（它正是当前向量模型），向量配置一并取消：知识库检索与灌库已停用"
+                : "已删除档案 " + alias);
+        return out;
     }
 
     /**
@@ -255,6 +294,188 @@ public class AdminModelProfileController {
         return result;
     }
 
+    // ==================== 向量模型：全局单选 ====================
+
+    /**
+     * 选用向量模型（<b>全局唯一，全部域共享</b>）。
+     *
+     * <p><b>换向量模型会让已灌库的向量全部失效</b>，所以只要知识库里已有内容，就必须先由
+     * 管控台弹二次确认，并用 {@code mode} 明确用户选了哪条路：</p>
+     * <ul>
+     *   <li>{@code rebuild} —— <b>保留原文重灌</b>：删索引按新维度重建后，用新模型把
+     *       原有切片重新向量化写回。用户不需要重新上传任何文档；</li>
+     *   <li>{@code purge} —— <b>丢弃旧内容</b>：删掉全部知识库索引，之后自行重新上传。</li>
+     * </ul>
+     *
+     * <p><b>触发条件是「换了模型或维度任一变化」</b>，不是只看维度。两个不同模型即使维度相同，
+     * 向量空间也完全不一样，旧向量检索出来是噪声 —— 而这种错配不会报错，只会让检索质量
+     * 静默下降，比维度不符更难发现。</p>
+     */
+    @PutMapping("/embedding-model")
+    public Map<String, Object> selectEmbeddingModel(@RequestBody(required = false) EmbeddingBody body) {
+        String alias = body == null ? null : body.getAlias();
+        String mode = body == null || body.getMode() == null ? "" : body.getMode().trim();
+
+        String previousAlias = registry.embeddingAlias();
+        ModelProfile previous = previousAlias == null ? null : registry.profile(previousAlias).orElse(null);
+        // 先校验目标档案（非向量档案 / 必填不齐 / 不存在）—— 不该让用户在确认弹窗之后才被拒绝
+        String failure = registry.setEmbeddingAlias(alias);
+        if (failure != null) {
+            throw new BaseException(ErrorCode.INVALID_PARAMETER, failure);
+        }
+
+        ModelProfile selected = alias == null || alias.isBlank()
+                ? null : registry.profile(alias.trim()).orElse(null);
+        boolean changed = !java.util.Objects.equals(previousAlias, registry.embeddingAlias());
+
+        // 知识库里已有内容 → 旧向量即将作废，必须让用户明确表态
+        int affectedIndices = existingIndexCount();
+        boolean hasVectors = affectedIndices > 0 && hasAnyIndexedContent();
+        if (changed && hasVectors) {
+            if (!"rebuild".equals(mode) && !"purge".equals(mode)) {
+                // 撤销刚才的单选：没有用户确认就不该留下"已切换"的状态
+                registry.setEmbeddingAlias(previousAlias);
+                Map<String, Object> ask = new LinkedHashMap<>();
+                ask.put("code", ErrorCode.INVALID_PARAMETER.getCode());
+                ask.put("requiresConfirmation", true);
+                ask.put("previousAlias", previousAlias);
+                ask.put("previousModelName", previous == null ? null : previous.modelName());
+                ask.put("previousDimensions", previous == null ? null : previous.dimensions());
+                ask.put("nextModelName", selected == null ? null : selected.modelName());
+                ask.put("nextDimensions", selected == null ? null : selected.dimensions());
+                ask.put("affectedIndices", affectedIndices);
+                ask.put("documentCount", countIndexedDocuments());
+                ask.put("message", describeSwitchImpact(previous, selected, affectedIndices));
+                return ask;
+            }
+        }
+
+        // 装配新向量模型（必须在重灌之前：重灌要用它算向量）
+        holder.refreshEmbedding();
+
+        // 用户已确认 → 真正执行所选的那条路。放在 refreshEmbedding 之后：
+        // 重灌要用刚装配好的新模型算向量，顺序反了会拿老模型重算一遍
+        Map<String, Integer> reindexed = null;
+        List<String> purged = null;
+        if (changed && hasVectors) {
+            if ("purge".equals(mode)) {
+                purged = knowledgeBaseService.purgeAll();
+            } else {
+                reindexed = knowledgeBaseService.rebuildPreservingText(holder.effectiveEmbeddingDimension());
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("code", 0);
+        out.put("success", true);
+        out.put("embeddingAlias", registry.embeddingAlias());
+        out.put("embeddingSource", holder.embeddingSource());
+        out.put("embeddingConfigured", holder.isEmbeddingConfigured());
+        out.put("modelName", selected == null ? null : selected.modelName());
+        out.put("dimensions", selected == null ? null : selected.dimensions());
+        out.put("reindexed", reindexed);
+        out.put("removedIndices", purged);
+        out.put("message", describeResult(changed, previous, selected, mode, hasVectors));
+        out.put("settingsFile", store.filePath());
+        return out;
+    }
+
+    /**
+     * 用新向量模型重建全部知识库索引，<b>保留原文</b>（不丢文档）。
+     *
+     * <p>供「切换时选重构」与知识库页的「按当前向量模型重灌」共用一条路径。</p>
+     */
+    @PostMapping("/embedding-model/rebuild")
+    public Map<String, Object> rebuildKnowledge() {
+        if (!holder.isEmbeddingConfigured()) {
+            throw new BaseException(ErrorCode.DEPENDENCY_NOT_CONFIGURED,
+                    "向量模型尚未配置：先在「模型设置」页选一个向量模型，再重建知识库");
+        }
+        int dims = holder.effectiveEmbeddingDimension();
+        Map<String, Integer> reindexed = knowledgeBaseService.rebuildPreservingText(dims);
+        int total = reindexed.values().stream().mapToInt(Integer::intValue).sum();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("code", 0);
+        out.put("success", true);
+        out.put("dimensions", dims);
+        out.put("reindexed", reindexed);
+        out.put("totalChunks", total);
+        out.put("message", total == 0
+                ? "当前没有已灌库的内容，无需重建"
+                : "已按向量维度 " + dims + " 重灌 " + reindexed.size() + " 个索引共 " + total + " 条切片（原文保留）");
+        return out;
+    }
+
+    /**
+     * 丢弃全部知识库内容（换向量模型时用户明确选择"不要旧知识"的那条路）。
+     */
+    @PostMapping("/embedding-model/purge")
+    public Map<String, Object> purgeKnowledge() {
+        List<String> removed = knowledgeBaseService.purgeAll();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("code", 0);
+        out.put("success", true);
+        out.put("removedIndices", removed);
+        out.put("message", removed.isEmpty()
+                ? "当前没有知识库索引，无需清空"
+                : "已丢弃 " + removed.size() + " 个知识库索引的全部内容（原文与切片均已删除，需重新上传）");
+        return out;
+    }
+
+    private int existingIndexCount() {
+        try {
+            return knowledgeBaseService.existingIndices().size();
+        } catch (Exception e) {
+            log.warn("[管控] 读取知识库索引失败，切换向量模型时按「无已存内容」处理: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 索引里是否真的有文档（空索引不算）。
+     *
+     * <p>一域都没建索引、或者索引建了但没灌过内容时，换向量模型是<b>零风险</b>的，
+     * 不该弹二次确认 —— 那道确认框是为了防止"用户辛苦攒的知识库被清空"，
+     * 对着空库弹只会让人养成无脑点确认的习惯。</p>
+     */
+    private boolean hasAnyIndexedContent() {
+        return countIndexedDocuments() > 0;
+    }
+
+    private long countIndexedDocuments() {
+        try {
+            return knowledgeBaseService.totalIndexedDocuments();
+        } catch (Exception e) {
+            log.warn("[管控] 统计知识库文档数失败: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    private static String describeSwitchImpact(ModelProfile from, ModelProfile to, int indices) {
+        String oldName = from == null ? "（未配置）" : from.modelName();
+        String newName = to == null ? "（取消配置）" : to.modelName();
+        return "向量模型将由 " + oldName + " 变为 " + newName + "，知识库中已灌库的向量会全部作废。\n\n"
+                + "当前有 " + indices + " 个知识库索引存有内容。换模型后有两种处理方式：\n"
+                + "· 用新向量重灌 —— 原文保留，不需要重新上传文档（耗时与文档量成正比）\n"
+                + "· 直接丢弃 —— 全部知识库内容删除，之后需自行重新上传";
+    }
+
+    private static String describeResult(boolean changed, ModelProfile previous, ModelProfile selected,
+                                         String mode, boolean hadContent) {
+        if (!changed) {
+            return "向量模型没有变化";
+        }
+        String oldName = previous == null ? "（未配置）" : previous.modelName();
+        String newName = selected == null ? "（已取消配置）" : selected.modelName();
+        if (!hadContent) {
+            return "向量模型已由 " + oldName + " 切换为 " + newName + "（知识库暂无内容，直接生效）";
+        }
+        if ("purge".equals(mode)) {
+            return "向量模型已切换为 " + newName + "，并已按你的选择丢弃全部知识库内容";
+        }
+        return "向量模型已切换为 " + newName + "，知识库原文已按新向量重灌（文档无需重新上传）";
+    }
+
     // ==================== 视图 ====================
 
     private Map<String, Object> profileView(ModelProfile profile) {
@@ -310,5 +531,18 @@ public class AdminModelProfileController {
     @Data
     public static class BindBody {
         private List<String> aliases;
+    }
+
+    /**
+     * 选用向量模型的请求体。
+     *
+     * @param alias 目标档案别名；空 = 取消向量模型配置
+     * @param mode  已灌库内容时的处理方式：{@code rebuild}（保留原文重灌）/ {@code purge}（丢弃）。
+     *              缺省表示用户尚未表态，接口会回"需要确认"而不真正切换。
+     */
+    @Data
+    public static class EmbeddingBody {
+        private String alias;
+        private String mode;
     }
 }

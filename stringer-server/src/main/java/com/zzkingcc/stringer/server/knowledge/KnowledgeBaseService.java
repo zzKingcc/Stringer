@@ -11,6 +11,7 @@ import com.zzkingcc.stringer.common.constant.ChunkMetadataKeys;
 import com.zzkingcc.stringer.common.exception.KnowledgeBaseException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsAccessException;
 import com.zzkingcc.stringer.infrastructure.elasticsearch.EsIndexManager;
+import com.zzkingcc.stringer.infrastructure.elasticsearch.VectorReindexer;
 import com.zzkingcc.stringer.infrastructure.ingestion.DocumentIngestor;
 import com.zzkingcc.stringer.infrastructure.ingestion.IngestDocument;
 import com.zzkingcc.stringer.infrastructure.ingestion.processor.DocumentProcessStrategy;
@@ -201,6 +202,25 @@ public class KnowledgeBaseService {
     }
 
     /**
+     * 全部知识库索引里的文档（切片）总数。
+     *
+     * <p>用来判"有没有已灌库的内容"：索引存在不等于有内容，一排空索引不该触发换模型的二次确认。</p>
+     *
+     * <p>读不到就返回 0（宁可少问一次确认，也不该因为一次统计失败就挡住正常切换）。</p>
+     */
+    public long totalIndexedDocuments() {
+        long total = 0;
+        for (String index : existingIndices()) {
+            try {
+                total += esClient.count(c -> c.index(index)).count();
+            } catch (Exception e) {
+                log.warn("[知识库] 统计索引[{}]文档数失败: {}", index, e.getMessage());
+            }
+        }
+        return total;
+    }
+
+    /**
      * 删除若干<b>域</b>各自的知识库索引（供删域时清理，先清索引再删域）。
      *
      * <p><b>fail-closed</b>：任何一个域的索引删不掉（ES 不可达 / 删除失败），立即抛异常中止，
@@ -306,6 +326,88 @@ public class KnowledgeBaseService {
         }
         storeCache.clear();
         log.info("[知识库] 索引重建完成：{}", targets);
+        return targets;
+    }
+
+    /**
+     * 换向量模型时<b>保留原文</b>地重建全部知识库索引。
+     *
+     * <p>与 {@link #rebuildAll(int)} 的差别就是"保不保留文档"：后者删索引了事，
+     * 用户得把每个文档重新上传；而索引里{@code text} 与 {@code metadata} 本来就还在，
+     * 切片是服务端算出来的，只需要用新模型把向量重算一遍即可。
+     * 因此换向量模型走这条，<b>不需要用户重新上传任何东西</b>。</p>
+     *
+     * <p>顺序刻意是「<b>全部捞完 → 才开始删</b>」：逐个索引"捞→删→重灌"的话，
+     * 中途失败会留下部分索引已换新向量、部分还是老向量的混合状态 ——
+     * 维度相同的两个向量模型混在一个索引里，检索不会报错，只会静默失真。</p>
+     *
+     * @param dimensions 新索引的向量维度（取"三处同源"的公共取值点）
+     * @return 各索引重灌入的切片条数
+     */
+    public Map<String, Integer> rebuildPreservingText(int dimensions) {
+        assertElasticsearchReachable();
+        List<String> targets = existingIndices();
+        if (targets.isEmpty()) {
+            log.info("[向量重建] 当前没有任何知识库索引，无需重灌");
+            return Map.of();
+        }
+        log.info("[向量重建] 开始：{} 个索引，新维度 {}，向量模型来自 {}",
+                targets.size(), dimensions, modelHolder.embeddingSource());
+
+        // ① 先全部捞回原文。失败在这里炸，一个索引都还没删。
+        Map<String, List<VectorReindexer.PreservedChunk>> preserved =
+                VectorReindexer.preserveAll(esClient, targets);
+        int totalChunks = preserved.values().stream().mapToInt(List::size).sum();
+        log.info("[向量重建] 已保留 {} 个索引共 {} 条切片原文，开始删索引重建", targets.size(), totalChunks);
+
+        // ② 删索引 + 按新维度重建 mapping。删不掉必须停：往下走只会撞上"已存在且维度一致 → 跳过"，
+        //    于是用户看到"重建成功"而维度仍是旧的。
+        for (String index : targets) {
+            EsIndexManager.deleteIndex(esClient, index);
+            EsIndexManager.createIndexWithIkMapping(esClient, index, dimensions);
+        }
+        storeCache.clear();
+
+        // ③ 用新向量模型把原文重新向量化写回
+        VectorReindexer.Result result = VectorReindexer.reindex(
+                esClient, embeddingModel, preserved, this::storeFor);
+
+        // 写回数必须与捞回数逐项相等：不等就说明有切片丢了向量，而在向量检索里
+        // "没向量"等于这条知识凭空消失 —— 比维度不符更难被发现，必须当场炸。
+        for (Map.Entry<String, Integer> e : result.preserved().entrySet()) {
+            int written = result.reindexed().getOrDefault(e.getKey(), 0);
+            if (written != e.getValue()) {
+                throw new IllegalStateException("索引[" + e.getKey() + "]重灌不完整：捞回 "
+                        + e.getValue() + " 条、只写回 " + written + " 条，其余切片将无法被向量检索命中");
+            }
+        }
+
+        log.info("[向量重建] 完成：{}", result.reindexed());
+        return result.reindexed();
+    }
+
+    /**
+     * 删掉<b>全部</b>知识库索引（换向量模型时的另一个选项：不要旧内容）。
+     *
+     * <p>与 {@link #rebuildAll(int)} 的区别是不再重建空索引 —— 用户既然选择"丢掉旧知识"，
+     * 留一堆空索引没有意义，只会在知识库页显示成一排空域。</p>
+     *
+     * @return 被删除的索引名
+     */
+    public List<String> purgeAll() {
+        assertElasticsearchReachable();
+        List<String> targets = existingIndices();
+        if (targets.isEmpty()) {
+            return List.of();
+        }
+        log.info("[向量重建] 按用户选择丢弃全部知识库内容：{} 个索引", targets.size());
+        for (String index : targets) {
+            // 预览 txt 里是完整文档全文，索引删了它就成孤儿，必须一起清
+            deleteExportFiles(index);
+            EsIndexManager.deleteIndex(esClient, index);
+            storeCache.remove(index);
+        }
+        log.info("[向量重建] 已清空 {} 个知识库索引", targets.size());
         return targets;
     }
 

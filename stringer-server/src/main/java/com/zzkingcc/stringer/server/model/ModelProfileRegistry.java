@@ -83,6 +83,65 @@ public class ModelProfileRegistry {
         return profiles().stream().anyMatch(p -> p.isChat() && p.isUsable());
     }
 
+    /** 是否存在任意可用的向量档案（仅供管控台提示"有档案可选"，不代表已启用） */
+    public boolean hasEmbeddingProfile() {
+        return profiles().stream().anyMatch(p -> p.isEmbedding() && p.isUsable());
+    }
+
+    // ==================== 向量模型：全局单选 ====================
+
+    /**
+     * 当前启用的向量档案；未配置返回 {@link Optional#empty()}。
+     *
+     * <p><b>只在档案真是向量档案且必填项齐备时才返回</b> —— 落盘可能被手工改坏，
+     * 解析期就该把"选中了一个不能用的档案"暴露成"未配置"，而不是留一个 null
+     * 让灌库链路在几层之后才炸。</p>
+     */
+    public Optional<ModelProfile> embeddingProfile() {
+        String alias = settings.getEmbeddingAlias();
+        if (!hasText(alias)) {
+            return Optional.empty();
+        }
+        return profile(alias).filter(ModelProfile::isEmbedding).filter(ModelProfile::isUsable);
+    }
+
+    /** 当前启用的向量档案别名（未配置为 {@code null}；不校验档案是否仍可用，用于展示"选中了什么"） */
+    public String embeddingAlias() {
+        return hasText(settings.getEmbeddingAlias()) ? settings.getEmbeddingAlias().trim() : null;
+    }
+
+    /**
+     * 切换向量模型（全局单选）。{@code alias} 传空表示取消配置。
+     *
+     * @return 失败原因；{@code null} 表示成功
+     */
+    public synchronized String setEmbeddingAlias(String alias) {
+        String key = hasText(alias) ? alias.trim() : null;
+        if (key != null) {
+            ModelProfileSettings.ProfileData data = settings.getProfiles().get(key);
+            if (data == null) {
+                return "档案不存在：" + key + "（请先到「模型设置」创建该档案）";
+            }
+            ModelProfile profile = data.toProfile(key);
+            if (!profile.isEmbedding()) {
+                return "档案 " + key + "（" + profile.modelName() + "）不是向量模型："
+                        + "探测结果里没有 embedding 端点，不能用作向量模型";
+            }
+            if (!profile.isUsable()) {
+                return "档案 " + key + " 缺少服务商地址 / API Key / 模型名，不能启用";
+            }
+        }
+        String previous = embeddingAlias();
+        if (java.util.Objects.equals(previous, key)) {
+            return null;
+        }
+        ModelProfileSettings next = copyOf(settings);
+        next.setEmbeddingAlias(key);
+        persist(next);
+        log.info("[模型档案] 向量模型由 {} 改为 {}（全局单选，立即影响全树的知识库检索）", previous, key);
+        return null;
+    }
+
     /** 域 → 别名列表 的绑定视图（不可变副本，保序） */
     public Map<String, List<String>> domainBindings() {
         Map<String, List<String>> copy = new LinkedHashMap<>();
@@ -124,11 +183,11 @@ public class ModelProfileRegistry {
      */
     public synchronized DeleteResult delete(String alias) {
         if (!hasText(alias)) {
-            return new DeleteResult(false, "别名不能为空", List.of());
+            return new DeleteResult(false, "别名不能为空", List.of(), false);
         }
         String key = alias.trim();
         if (!settings.getProfiles().containsKey(key)) {
-            return new DeleteResult(false, "档案不存在：" + key, List.of());
+            return new DeleteResult(false, "档案不存在：" + key, List.of(), false);
         }
 
         /* 级联：先把该别名从所有域的绑定里摘掉，再删档案。
@@ -142,11 +201,19 @@ public class ModelProfileRegistry {
         });
         /* 摘空了的域绑定直接移除，保持落盘干净 */
         next.getDomainBindings().entrySet().removeIf(e -> e.getValue() == null || e.getValue().isEmpty());
+        /* 被删档案若正是当前向量模型，单选一并撤销 —— 否则会留下一个指向不存在档案的向量模型，
+           表现是灌库时报"未配置"却查不出是哪个档案没了。 */
+        boolean wasEmbedding = key.equals(next.getEmbeddingAlias());
+        if (wasEmbedding) {
+            next.setEmbeddingAlias(null);
+        }
         next.getProfiles().remove(key);
         persist(next);
-        log.info("[模型档案] 已删除档案 {}；级联清理了 {} 个域的绑定：{}",
-                key, affected.size(), affected);
-        return new DeleteResult(true, null, List.copyOf(affected));
+        log.info("[模型档案] 已删除档案 {}{}；级联清理了 {} 个域的绑定：{}",
+                key, wasEmbedding ? "（它正是当前向量模型，已一并取消向量配置）" : "",
+                affected.size(), affected);
+        DeleteResult result = new DeleteResult(true, null, List.copyOf(affected), wasEmbedding);
+        return result;
     }
 
     /**
@@ -182,8 +249,15 @@ public class ModelProfileRegistry {
             if (Domains.DEFAULT.equals(target)) {
                 return "default 已不再作为可绑定的模型别名，请选择自建模型档案";
             }
-            if (!settings.getProfiles().containsKey(target)) {
+            ModelProfileSettings.ProfileData data = settings.getProfiles().get(target);
+            if (data == null) {
                 return "档案不存在：" + target + "（请先到「模型设置」创建该档案）";
+            }
+            /* 域绑定只管对话模型。向量模型是全局单选（embeddingAlias），不参与域绑定 ——
+               否则同一个索引里会混入不同模型的向量，维度对不上，检索结果没有意义。 */
+            if (!data.toProfile(target).isChat()) {
+                return "档案 " + target + "（" + data.toProfile(target).modelName()
+                        + "）不是对话模型，不能绑到域上。向量模型请在页面上单独选用（全局唯一）";
             }
         }
         List<String> previous = next.getDomainBindings().put(key, cleaned);
@@ -232,8 +306,13 @@ public class ModelProfileRegistry {
         return out;
     }
 
-    /** 删除档案时的结果 */
-    public record DeleteResult(boolean deleted, String reason, List<String> usedByDomains) {
+    /**
+     * 删除档案时的结果。
+     *
+     * @param wasEmbedding 该档案是否正是删除前的向量模型（已随删除一并取消配置）
+     */
+    public record DeleteResult(boolean deleted, String reason, List<String> usedByDomains,
+                               boolean wasEmbedding) {
     }
 
     // ==================== 内部 ====================
@@ -262,6 +341,7 @@ public class ModelProfileRegistry {
         source.getProfiles().forEach((alias, data) -> profiles.put(alias,
                 ModelProfileSettings.ProfileData.from(data.toProfile(alias))));
         copy.setProfiles(profiles);
+        copy.setEmbeddingAlias(source.getEmbeddingAlias());
         return copy;
     }
 

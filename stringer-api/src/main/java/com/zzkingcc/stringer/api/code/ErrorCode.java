@@ -47,6 +47,8 @@ public enum ErrorCode {
     TYPE_MISMATCH(40002, "参数类型不匹配", 400, false, "检查参数类型"),
     INPUT_REJECTED(40003, "输入内容不安全，已被拦截", 400, false, "提示用户换一种说法"),
     CLIENT_CANCELLED(40004, "用户已中断请求", 499, false, "无需处理"),
+    INPUT_TOO_LONG(40005, "输入内容超长", 400, false,
+            "缩短输入后重发（服务端不做截断：截断后的回答基于残缺输入，而调用方收不到任何信号）"),
     RESOURCE_NOT_FOUND(40400, "请求的资源不存在", 404, false, "检查请求路径"),
 
     // ===== 50xxx 系统 / 通用 =====

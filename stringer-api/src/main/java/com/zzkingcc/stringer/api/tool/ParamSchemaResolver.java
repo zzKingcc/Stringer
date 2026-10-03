@@ -77,9 +77,19 @@ public final class ParamSchemaResolver {
         for (int i = 0; i < parameters.length; i++) {
             Parameter parameter = parameters[i];
             ToolParam annotation = parameter.getAnnotation(ToolParam.class);
-            String name = annotation != null && !annotation.name().isBlank()
-                    ? annotation.name().trim()
-                    : fallbackParamName(parameter, i);
+            String name;
+            if (annotation != null && !annotation.name().isBlank()) {
+                name = annotation.name().trim();
+            } else {
+                try {
+                    name = fallbackParamName(parameter, i);
+                } catch (IllegalArgumentException e) {
+                    // 补上方法标识：光说"第 N 个参数"没人知道是哪个工具
+                    throw new IllegalArgumentException(e.getMessage()
+                            + "（方法 " + method.getDeclaringClass().getSimpleName()
+                            + "#" + method.getName() + "）", e);
+                }
+            }
             // Optional<T> 天然可选；其余按注解，缺省必填
             boolean required = (annotation == null || annotation.required())
                     && parameter.getType() != Optional.class;
@@ -313,14 +323,31 @@ public final class ParamSchemaResolver {
         return node;
     }
 
+    /**
+     * 没写 {@code @ToolParam("名称")} 时的参数名兜底：只认编译期元数据。
+     *
+     * <p>取不到就<b>直接失败</b>，不编造名字：
+     * 未开启 {@code -parameters} 时反射拿到的是 {@code arg0} / {@code arg1}，编个 {@code param1}
+     * 出去，模型就会拿着错误的 key 调参 —— 这种错在联调时极难定位。
+     * 工具实例侧（{@code toolprovider} 的 {@code binding}）本来就是这么做的，两侧口径必须一致；
+     * {@code INSTANCE.md} 描述的也是这条。</p>
+     *
+     * <p>早前的判据是 {@code startsWith("arg")}，把 {@code argName} / {@code argument} /
+     * {@code args} 这些完全正常的业务参数名也误伤了 —— 判据只该匹配占位形态本身。</p>
+     */
     private static String fallbackParamName(Parameter parameter, int index) {
         String reflected = parameter.getName();
-        // 未开启 -parameters 编译参数时形参名会是 arg0 / arg1
-        if (reflected == null || reflected.isBlank() || reflected.startsWith("arg")) {
-            return "param" + (index + 1);
+        if (reflected == null || reflected.isBlank() || ARG_PLACEHOLDER.matcher(reflected).matches()) {
+            throw new IllegalArgumentException("无法解析第 " + (index + 1) + " 个参数的名称（类型 "
+                    + parameter.getType().getSimpleName() + "）。请用 @ToolParam(\"名称\") 显式命名，"
+                    + "或给编译器加 -parameters（Spring Boot 父 pom 默认已开启，普通 Maven 工程需自行配置）");
         }
         return reflected;
     }
+
+    /** 形参名占位形态：{@code arg} + 数字（{@code -parameters} 未开启时的反射产物） */
+    private static final java.util.regex.Pattern ARG_PLACEHOLDER =
+            java.util.regex.Pattern.compile("arg\\d+");
 
     private static List<String> enumValues(Class<?> type) {
         return Arrays.stream(type.getEnumConstants()).map(Object::toString).toList();

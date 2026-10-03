@@ -37,6 +37,27 @@ public record ToolDescriptor(
         String source) {
 
     /**
+     * <b>域被撤销后写入的哨兵</b>：{@code <revoked>} 里的尖括号不在 {@link Domains} 的
+     * 域段字符集 {@code [A-Za-z0-9_-]} 内，因此它既过不了 {@link Domains#validatePath}，
+     * 也永远不会出现在任何域的祖先链上 —— 写进去等于这个工具对任何域都不可见。
+     *
+     * <p><b>不能用空串或纯空白</b>：{@link #declaredDomains()} 会把空白项过滤掉，
+     * 过滤完又是空列表，又会回落根域 —— 那正是本哨兵要防的那个 bug。
+     * {@code <revoked>} 既非空白（{@code isBlank} 为 false）也不会被 {@code trim} 改动，可安全作哨兵。
+     *
+     * <p><b>为什么需要它</b>：删域时 {@code ToolRegistry.forgetProfiles} 会把被删的域从工具声明里
+     * 剥掉。若工具恰好只声明了被删的那一个域，剥完就是<b>空列表</b> —— 而空列表按累加语义
+     * 表示"挂在根域上"，根域在每个域的祖先链里，于是这个工具会对<b>所有域可见</b>。
+     * 删域本意是撤销授权，实际效果却是把授权<b>放大到全域</b>。
+     *
+     * <p>用哨兵而不是就地移除条目：移除会让该工具在管控台上彻底消失，排障时看不出
+     * 这里原本有个工具。保留条目 + 标记为不可见，既维持可观测性，又能在作者改完代码
+     * 重新注册（本地工具重启 / 远程工具下一次心跳带新声明）时自动恢复
+     * —— {@code refreshReplica} 会用新声明覆盖这个哨兵。
+     */
+    public static final String REVOKED_DOMAIN = "<revoked>";
+
+    /**
      * 本工具是否对指定域可见 —— <b>授权判定</b>，不是过滤偏好。
      *
      * <p>判定按<b>累加</b>语义：声明命中该域，或命中它的任一祖先，即视为可见。
@@ -60,6 +81,10 @@ public record ToolDescriptor(
 
     /**
      * 声明的可用域；留空视为只挂根域 {@link Domains#DEFAULT}。
+     *
+     * <p><b>含 {@link #REVOKED_DOMAIN} 时直接返回它自己</b>，不回落根域：
+     * 回落意味着全树可见，那会让「删域撤销授权」变成「删域放开授权」。
+     * 部分撤销（还剩别的域）时把哨兵滤掉、只留真实域。
      */
     public List<String> declaredDomains() {
         if (domains == null || domains.isEmpty()) {
@@ -67,9 +92,14 @@ public record ToolDescriptor(
         }
         List<String> out = new ArrayList<>(domains.size());
         for (String declared : domains) {
-            if (declared != null && !declared.isBlank()) {
-                out.add(Domains.normalize(declared));
+            if (declared == null || declared.isBlank()) {
+                continue;
             }
+            String normalized = Domains.normalize(declared);
+            if (REVOKED_DOMAIN.equals(normalized)) {
+                return List.of(REVOKED_DOMAIN);
+            }
+            out.add(normalized);
         }
         return out.isEmpty() ? List.of(Domains.DEFAULT) : List.copyOf(out);
     }
